@@ -1204,8 +1204,10 @@ def test_run_pr_scan_job_uses_persistent_checkout_and_unchanged_cache_for_head(
 ):
     # Proves run_pr_scan_job actually wires the persistent-checkout +
     # incremental-scan-cache path for the HEAD scan specifically (not
-    # base, which stays an ephemeral clone - see _build_unchanged_scan_cache's
-    # module docstring for why only head feeds the durable code graph).
+    # base, which is a throwaway checkout that borrows the persistent
+    # one's objects - see _prepare_base_checkout, and
+    # _build_unchanged_scan_cache's module docstring for why only head
+    # feeds the durable code graph).
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -1261,6 +1263,57 @@ def test_run_pr_scan_job_uses_persistent_checkout_and_unchanged_cache_for_head(
     assert len(cache_calls) == 1
     assert cache_calls[0][0] == 1  # installation_id
     assert cache_calls[0][4] == head_sha  # current_sha
+
+
+def test_run_pr_scan_job_takes_the_base_checkout_from_the_persistent_checkout(
+    bare_repo_with_two_commits, monkeypatch, tmp_path
+):
+    # The base commit used to be fetched over the network into an empty directory on every PR scan. The persistent
+    # checkout already holds it, so it must be borrowed from there: no second fetch of the repo's history.
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("ALETHEORE_REPO_CHECKOUT_ROOT", str(tmp_path / "checkouts"))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._build_unchanged_scan_cache", lambda *a, **k: None)
+
+    from scan_worker import jobs as jobs_module
+
+    real_prepare_base_checkout = jobs_module._prepare_base_checkout
+    base_calls = []
+
+    def spy_prepare_base_checkout(clone_url, base_sha_arg, base_dir, persistent_dir):
+        base_calls.append(persistent_dir)
+        return real_prepare_base_checkout(clone_url, base_sha_arg, base_dir, persistent_dir)
+
+    def no_second_fetch(*args, **kwargs):
+        raise AssertionError("the base commit must come from the persistent checkout, not a second fetch")
+
+    monkeypatch.setattr("scan_worker.jobs._prepare_base_checkout", spy_prepare_base_checkout)
+    monkeypatch.setattr("scan_worker.jobs._clone_ref", no_second_fetch)
+
+    run_pr_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        pr_number=7,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert len(base_calls) == 1
+    assert base_calls[0] is not None and (base_calls[0] / ".git").is_dir()
 
 
 def test_run_pr_scan_job_never_syncs_the_pr_head_checkout_into_the_persistent_git_graph(
@@ -9724,7 +9777,7 @@ def test_run_pr_scan_job_enqueues_live_wiki_and_docs_update_jobs(bare_repo_with_
     # this closes.
     assert wiki_job["history_id"] == 42
     assert wiki_job["job_timeout"] == LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS
-    assert wiki_job["job_timeout"] > 300  # strictly more headroom than the scan job's own budget
+    assert wiki_job["job_timeout"] > 300  # its own budget, separate from the scan job's (SCAN_JOB_TIMEOUT_SECONDS)
 
     docs_job = next(e for e in fake_queue.enqueued if "live_docs_incremental" in e["func_name"])
     assert docs_job["func_name"] == "scan_worker.jobs.run_live_docs_incremental_update_job"
@@ -11158,6 +11211,13 @@ def test_run_installation_repo_enumeration_retry_job_enqueues_initial_scan_per_r
     assert calls == {(558, "octocat/repo1"), (558, "octocat/repo2")}
     assert all(
         call.args[0] == "scan_worker.jobs.run_initial_scan_job"
+        for call in fake_queue.enqueue.call_args_list
+    )
+    # Same budget as the webhook that normally enqueues these (see app_server.job_timeouts).
+    from app_server.job_timeouts import SCAN_JOB_TIMEOUT_SECONDS
+
+    assert all(
+        call.kwargs["job_timeout"] == SCAN_JOB_TIMEOUT_SECONDS
         for call in fake_queue.enqueue.call_args_list
     )
 

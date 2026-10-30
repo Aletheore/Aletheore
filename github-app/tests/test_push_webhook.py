@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from app_server.db import hide_repo, upsert_installation
+from app_server.job_timeouts import SCAN_JOB_TIMEOUT_SECONDS
 from app_server.webhooks.push import handle_push_event
 
 
@@ -36,7 +37,8 @@ async def test_push_to_default_branch_enqueues_scan_job(pool):
     assert kwargs["repo_full_name"] == "octocat/hello-world"
     assert kwargs["head_sha"] == "head123"
     assert kwargs["changed_files"] == ["app.py", "new.py", "old.py"]
-    assert kwargs["job_timeout"] > 0
+    # A cal.com push scan took ~260s against the old 300s limit and one timed out (2026-10-30).
+    assert kwargs["job_timeout"] == SCAN_JOB_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ from app_server.error_alerts import send_error_alert
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.github_pagination import fetch_paginated_github_collection
 from app_server.http_client import get_github_api_client
+from app_server.job_timeouts import SCAN_JOB_TIMEOUT_SECONDS
 from app_server.paddle_client import PaddleAPIError, PaddleAPINotConfigured
 from app_server.paddle_client import cancel_subscription as cancel_paddle_subscription
 
@@ -218,7 +219,7 @@ async def handle_installation_event(
         for repo_full_name in repo_full_names:
             scans_queue.enqueue(
                 "scan_worker.jobs.run_initial_scan_job",
-                job_timeout=300,
+                job_timeout=SCAN_JOB_TIMEOUT_SECONDS,
                 installation_id=installation_id,
                 repo_full_name=repo_full_name,
             )

@@ -5,6 +5,7 @@ from app_server.config import get_settings
 from app_server.db import is_repo_hidden
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.http_client import get_github_api_client
+from app_server.job_timeouts import SCAN_JOB_TIMEOUT_SECONDS
 from scan_worker.github_api import fetch_default_branch_head_sha, fetch_pr_changed_files
 
 logger = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ ENQUEUE_ACTIONS = ("opened", "reopened", "synchronize")
 # deterministic scan already ran on every push to the draft, and the head has not changed since.
 REVIEW_ONLY_ACTIONS = ("ready_for_review",)
 
-PR_SCAN_JOB_TIMEOUT_SECONDS = 300
+PR_SCAN_JOB_TIMEOUT_SECONDS = SCAN_JOB_TIMEOUT_SECONDS
 # Flash review makes a real LLM call plus several sequential GitHub API
 # fetches (diff, changed files, per-symbol source) - a real run against a
 # ~10-file diff measured at 5m50s in production. The previous 180s value
@@ -26,7 +27,7 @@ PR_SCAN_JOB_TIMEOUT_SECONDS = 300
 # observed worst case, not the common case.
 FLASH_REVIEW_JOB_TIMEOUT_SECONDS = 900
 
-PUSH_SCAN_JOB_TIMEOUT_SECONDS = 300
+PUSH_SCAN_JOB_TIMEOUT_SECONDS = SCAN_JOB_TIMEOUT_SECONDS
 
 # Authors whose pull requests get no Flash Review. These are automated dependency and formatting
 # updaters: a version bump has nothing for a code review to find, and a review is an LLM call charged

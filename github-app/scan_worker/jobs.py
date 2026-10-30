@@ -47,6 +47,7 @@ from app_server.error_alerts import send_error_alert
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.github_pagination import fetch_paginated_github_collection
 from app_server.http_client import get_github_api_client
+from app_server.job_timeouts import SCAN_JOB_TIMEOUT_SECONDS
 from app_server.llm_cost import (
     base_cap_for_plan,
     base_credit_for_plan,
@@ -224,7 +225,8 @@ FLASH_REVIEW_MARKER = "<!-- aletheore-flash-review -->"
 LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS = 1800
 # Real production incidents (Aug 2026) showed the incremental update - real
 # LLM calls, with retries, riding along inside run_pr_scan_job/
-# run_push_scan_job's own 300s job_timeout - getting killed mid-flight on a
+# run_push_scan_job's own job_timeout (300s when this was written, now
+# SCAN_JOB_TIMEOUT_SECONDS) - getting killed mid-flight on a
 # large repo, losing the whole update with no partial result. This constant
 # existed but was never actually wired to its own job/enqueue call until
 # that was fixed - twice the old shared budget, dedicated solely to this
@@ -630,6 +632,28 @@ def _fetch_and_checkout(dest: Path, sha: str, pr_number: int | None) -> None:
 
 
 @contextmanager
+def _timed_phase(scan_job: str, phase: str):
+    """Logs how long one phase of a scan job (checkout, scan, ...) took, success or failure. A job killed by
+    its time limit only logs that it timed out; without these lines nothing says whether the checkout or the
+    scan used the time."""
+    started = time.monotonic()
+    ok = False
+    try:
+        yield
+        ok = True
+    finally:
+        logging.getLogger("scan_worker.jobs").info(
+            "scan phase finished",
+            extra={
+                "scan_job": scan_job,
+                "phase": phase,
+                "phase_duration_s": round(time.monotonic() - started, 2),
+                "phase_ok": ok,
+            },
+        )
+
+
+@contextmanager
 def _scrub_remote_url_after(checkout_dir: Path, credential_free_url: str):
     """Wraps work done against a checkout whose origin URL carries a live token, then puts the
     credential-free URL back (see _clone_ref for why the token must not stay on disk).
@@ -879,6 +903,51 @@ def _prepare_head_checkout(
         )
         _clone_ref(clone_url, head_sha, fallback_dir, pr_number=pr_number)
         return fallback_dir
+
+
+def _checkout_from_local_objects(source_repo: Path, sha: str, dest: Path) -> bool:
+    """Checks `sha` out into `dest` by borrowing `source_repo`'s object store (git alternates) instead of
+    fetching it again. Returns False, leaving nothing behind, when `source_repo` does not have the commit
+    or anything goes wrong, so the caller can fall back to a normal fetch.
+
+    Borrows objects, not refs: `dest` is a fresh repo detached at `sha`, so history walks over it (ownership,
+    secrets in history) see exactly that commit's ancestry, as the single-ref fetch this replaces did. A
+    `git clone --shared` would also carry every branch and newer commit of the source and silently change
+    the base evidence. There is no remote either, so there is no URL a token could be written into.
+
+    Safe only while nothing prunes `source_repo`'s objects underneath `dest`: callers hold the per-repo
+    checkout lock for the whole scan, and that checkout is only ever fetched, checked out and cleaned.
+    """
+    probe = subprocess.run(  # nosec B603 - absolute git from _git_path(), fixed argv, no shell
+        [_git_path(), "cat-file", "-e", f"{sha}^{{commit}}"], cwd=source_repo, capture_output=True
+    )
+    if probe.returncode != 0:
+        return False
+    try:
+        _run_git(["git", "init", "-q", str(dest)])
+        alternates = dest / ".git" / "objects" / "info" / "alternates"
+        alternates.parent.mkdir(parents=True, exist_ok=True)
+        alternates.write_text(f"{source_repo / '.git' / 'objects'}\n")
+        _run_git(["git", "checkout", "-q", sha], cwd=dest)
+    except Exception:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "could not check out %s from local objects; falling back to a fetch", sha[:12], exc_info=True
+        )
+        shutil.rmtree(dest, ignore_errors=True)
+        return False
+    return True
+
+
+def _prepare_base_checkout(clone_url: str, base_sha: str, base_dir: Path, persistent_dir: Path | None) -> None:
+    """The base-commit checkout of a PR scan. Every PR scan used to fetch the base commit's full history over
+    the network into an empty directory (the scan walks all of it, so it cannot go shallow), then check it
+    out - on a large monorepo that is most of what the checkout costs. The head side already keeps a
+    persistent checkout that has fetched the repo's branches, so reuse its objects when it has the commit,
+    and fall back to the fetch when there is no persistent checkout or it lacks the commit (for example the
+    base branch was force-pushed since the PR was opened)."""
+    if persistent_dir is not None and _checkout_from_local_objects(persistent_dir, base_sha, base_dir):
+        return
+    _clone_ref(clone_url, base_sha, base_dir)
 
 
 def _build_unchanged_scan_cache(
@@ -1616,7 +1685,6 @@ def run_pr_scan_job(
 
         clone_url = _clone_url(repo_full_name, token)
         base_dir = job_dir / "base"
-        _clone_ref(clone_url, base_sha, base_dir)
 
         # Locked for the whole checkout-through-scan span, not just the
         # checkout call: _ensure_persistent_checkout has no filesystem
@@ -1640,9 +1708,17 @@ def run_pr_scan_job(
         # and _sync_code_graph's docstrings) - correct for describing this
         # one scan, just not persisted or incremental.
         with repo_checkout_lock(settings.database_url, installation_id, repo_full_name):
-            head_dir = _prepare_head_checkout(
-                clone_url, head_sha, installation_id, repo_full_name, job_dir / "head", pr_number=pr_number
-            )
+            with _timed_phase("run_pr_scan_job", "head_checkout"):
+                head_dir = _prepare_head_checkout(
+                    clone_url, head_sha, installation_id, repo_full_name, job_dir / "head", pr_number=pr_number
+                )
+            # Made here, inside the lock and after the head checkout, so it can borrow the persistent checkout's
+            # objects (see _prepare_base_checkout). head_dir is the ephemeral fallback when persistent storage
+            # was unavailable, and that has nothing worth borrowing.
+            with _timed_phase("run_pr_scan_job", "base_checkout"):
+                _prepare_base_checkout(
+                    clone_url, base_sha, base_dir, persistent_dir=None if head_dir == job_dir / "head" else head_dir
+                )
 
             try:
                 previous_sha = CodeGraphStore(
@@ -1655,8 +1731,10 @@ def run_pr_scan_job(
                 job_dir / "unchanged-scan-cache.json",
             )
 
-            base_evidence_path = _run_scan(base_dir)
-            head_evidence_path = _run_scan(head_dir, unchanged_scan_cache_path=unchanged_scan_cache_path)
+            with _timed_phase("run_pr_scan_job", "base_scan"):
+                base_evidence_path = _run_scan(base_dir)
+            with _timed_phase("run_pr_scan_job", "head_scan"):
+                head_evidence_path = _run_scan(head_dir, unchanged_scan_cache_path=unchanged_scan_cache_path)
             old = json.loads(base_evidence_path.read_text(encoding="utf-8"))
             new = json.loads(head_evidence_path.read_text(encoding="utf-8"))
             # Fetched here, ahead of compute_diff, so a pure rename's
@@ -1808,7 +1886,8 @@ def run_pr_scan_job(
             # Enqueued as their own jobs rather than called inline - see
             # run_live_wiki_incremental_update_job's docstring for why: real
             # LLM calls here could push total time past this scan job's own
-            # 300s job_timeout on a large repo, and RQ would kill this whole
+            # job_timeout (300s then, SCAN_JOB_TIMEOUT_SECONDS now) on a
+            # large repo, and RQ would kill this whole
             # job mid-flight when that happened, losing the update with no
             # partial result. The PR diff comment above (this job's primary
             # deliverable) is already posted by this point regardless.
@@ -1954,7 +2033,7 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
         # a long series of LLM calls and get LIVE_WIKI_FULL_BUILD_JOB_
         # TIMEOUT_SECONDS everywhere else they run (the Paddle trigger's
         # per-repo fan-out, the catch-up sweeps), but this job's own
-        # enqueue timeout is 300s - an inline build on a larger repo hit
+        # enqueue timeout was 300s then (SCAN_JOB_TIMEOUT_SECONDS now) - an inline build on a larger repo hit
         # that limit mid LLM call and failed the whole initial scan job
         # (Sentry ALETHEORE-5), which the ops monitor then escalated.
         if installation is not None and installation["plan"] == "air":
@@ -2029,7 +2108,7 @@ def run_installation_repo_enumeration_retry_job(installation_id: int) -> None:
     for repo in repositories:
         queue.enqueue(
             "scan_worker.jobs.run_initial_scan_job",
-            job_timeout=300,
+            job_timeout=SCAN_JOB_TIMEOUT_SECONDS,
             installation_id=installation_id,
             repo_full_name=repo["full_name"],
         )
@@ -2075,14 +2154,18 @@ def run_push_scan_job(
         # of it (a push landing while run_initial_scan_job is still mid-sync
         # for the same repo, or two pushes racing each other).
         with repo_checkout_lock(settings.database_url, installation_id, repo_full_name):
-            repo_dir = _prepare_head_checkout(
-                clone_url, head_sha, installation_id, repo_full_name, job_dir / "repo"
-            )
+            with _timed_phase("run_push_scan_job", "head_checkout"):
+                repo_dir = _prepare_head_checkout(
+                    clone_url, head_sha, installation_id, repo_full_name, job_dir / "repo"
+                )
 
-            evidence_path = _run_scan(repo_dir)
+            with _timed_phase("run_push_scan_job", "scan"):
+                evidence_path = _run_scan(repo_dir)
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-            evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
-            _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
+            with _timed_phase("run_push_scan_job", "git_graph_sync"):
+                evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
+            with _timed_phase("run_push_scan_job", "code_graph_sync"):
+                _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
         history_id = _insert_history(installation_id, repo_full_name, evidence, head_sha=head_sha)
 
         # AIR-exclusive - see the identical note on run_initial_scan_job's
@@ -7504,8 +7587,8 @@ def run_live_wiki_incremental_update_job(
 
     Real production incidents traced a class of "Work-horse terminated
     unexpectedly" scan-job failures to this exact call: AIRview's real LLM
-    calls (with retries) riding along inside the scan job's own 300s
-    job_timeout could push total time past that budget on a large repo,
+    calls (with retries) riding along inside the scan job's own
+    job_timeout (300s then, SCAN_JOB_TIMEOUT_SECONDS now) could push total time past that budget on a large repo,
     and RQ kills the whole scan job mid-flight when that happens - losing
     the wiki update entirely, with no partial result and no signal to the
     customer about why. The scan job's own primary deliverable (the PR diff
