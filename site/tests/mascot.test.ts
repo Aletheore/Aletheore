@@ -88,6 +88,15 @@ it.each(Object.keys(MASCOT_POSE_COORDINATES))("renders the requested %s pose lit
   expect(html).toContain('aria-label="Aletheore"');
 });
 
+it("shows visitors production wording in live mode, never developer or demo labels", () => {
+  const html = renderToStaticMarkup(createElement(WebsiteCompanion, { live: true }));
+  expect(html).toContain("ANSWERS FROM OUR PUBLIC DOCS");
+  expect(html).toContain("Hi! I&#x27;m Theo.");
+  for (const developerWording of ["LOCAL", "TEST", "DEMO", "Preview only", "being prepared", "AVAILABLE YET", "Aletheore</span>", "ALETHEORE"]) {
+    expect(html, developerWording).not.toContain(developerWording);
+  }
+});
+
 it("renders one accessible corner-companion trigger with its chat initially closed", () => {
   const html = renderToStaticMarkup(createElement(WebsiteCompanion));
   expect(html).toContain('aria-label="Chat with Theo"');
