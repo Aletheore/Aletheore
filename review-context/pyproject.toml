@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "review-context"
+version = "0.2.0"
+description = "Revision-pinned dependency documentation and evidence packets for code review"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+review-context = "review_context.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["review_context*"]
