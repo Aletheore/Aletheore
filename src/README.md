@@ -573,14 +573,19 @@ for Windows' `sh` runs it).
 
 **Speed.** The guard lists the change once per run (three Git calls) and parses only the dependency
 manifests in folders where a manifest changed; the base side of each manifest folder is parsed once and
-cached by its files' Git blob ids in `<git dir>/aletheore-shield/pins-cache.json`. Its time budget
-(1.5 s after an edit, 6 s at turn end, session end and commit) covers every step, not only registry
-lookups: a step that would start with no time left is listed as `time budget reached; ... skipped`, and
-manifest additions that could not be compared with the base in time are listed as not checked, never as
-new. Measured on a 9,400-file copy of this repository (macOS, median of 5 runs, registry lookups off):
-`pre-edit` 0.6 s (the checkpoint walks and stats the whole working tree, so this one grows with the
-repository), `post-edit` 0.55-0.6 s with or without a manifest change, `turn-end` and `pre-commit`
-0.6 s, `session-end` 1.3 s.
+cached by its files' Git blob ids (and the Aletheore version) in `<git dir>/aletheore-shield/pins-cache.json`.
+Its time budget (1.5 s after an edit, 6 s at turn end, session end and commit) is checked before every
+step and bounds every Git call, not only registry lookups, which run last so a slow registry cannot cost
+the local checks. A step that would start with no time left is listed as `time budget reached; ...
+skipped`, and manifest additions that could not be compared with the base in time are listed as not
+checked, never as new. A step already running is not interrupted: parsing one manifest folder, loading
+`.aletheore/air.json`, and reading the repository's `package.json`, `pyproject.toml` and similar files
+for local package names finish once started, so a run can end slightly after its budget (the hook's
+hard limit still applies). Measured with registry lookups off, median of 5 runs, macOS, on a
+9,400-file copy of this repository / a generated 9,350-file repository: `pre-edit` 0.66 / 0.47 s for
+the first edit of a session and 0.60 / 0.47 s later (the checkpoint walks and stats the whole working
+tree, so this one grows with the repository), `post-edit` 0.56-0.61 / 0.75-0.8 s with or without a
+manifest change, `turn-end` 0.62 / 0.78 s, `pre-commit` 0.59 / 0.57 s, `session-end` 1.3 / 1.2 s.
 
 The hooks act on the session's own repository (the one Claude Code runs in). An edit in another
 repository, such as a nested repository, submodule or sibling folder, is checkpointed and guarded only
