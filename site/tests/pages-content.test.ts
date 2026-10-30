@@ -25,6 +25,7 @@ describe("ported policy pages", () => {
     expect(html).toContain("for 90 days");
     expect(html).toContain("do not store your questions");
     expect(html).toContain("keyed hash");
+    expect(html).toContain("IndieRouter does not retain prompts or use them to train models");
   });
   it("keep the dated headers and the 14-day refund window", () => {
     expect(legal.privacy.updated).toBe("Last updated: October 2026");
