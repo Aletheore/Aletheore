@@ -1,4 +1,27 @@
+import logging
+
 from scan_worker.worker import queue_names_from_env
+
+
+def test_a_mistyped_queue_name_is_dropped_with_a_warning(monkeypatch, caplog):
+    # RQ happily listens to a queue nobody enqueues to, so a typo would start a worker that heartbeats, reports
+    # healthy and never receives a job. Drop the unknown name loudly and keep serving the real ones.
+    monkeypatch.setenv("SCAN_WORKER_QUEUES", "scan,builds")
+
+    with caplog.at_level(logging.WARNING, logger="scan_worker.worker"):
+        assert queue_names_from_env() == ["builds"]
+
+    assert "SCAN_WORKER_QUEUES" in caplog.text and "'scan'" in caplog.text
+
+
+def test_a_setting_with_no_real_queue_falls_back_to_the_default_and_warns(monkeypatch, caplog):
+    # A wrong delimiter yields one unknown name, not two real ones.
+    monkeypatch.setenv("SCAN_WORKER_QUEUES", "scans;builds")
+
+    with caplog.at_level(logging.WARNING, logger="scan_worker.worker"):
+        assert queue_names_from_env() == ["scans", "builds"]
+
+    assert "scans;builds" in caplog.text
 
 
 def test_a_worker_serves_scans_then_builds_by_default(monkeypatch):

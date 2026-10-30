@@ -69,7 +69,9 @@ There are two scan-worker replicas plus a health worker. Settings that matter wh
 - **Queues.** Long AIRview and Docs builds run on a `builds` queue, apart from `scans` (PR scans and
   reviews), so a pair of 30-minute builds can never occupy every worker. `SCAN_WORKER_QUEUES` lists the
   queues a worker serves, in priority order. `scan-worker` serves `scans,builds`; `scan-worker-2` serves
-  `scans` only. The scheduler skips a housekeeping job that is already queued or running.
+  `scans` only. A name that is not a real queue is ignored with a warning (and an empty result falls back
+  to the default), since RQ would otherwise listen to a typo forever. The scheduler skips a housekeeping job
+  that is already queued or running.
 - **Scratch space.** Per-job checkouts live under `ALETHEORE_JOBS_ROOT` on a disk volume, one directory
   per replica, because large repos overflow a 1 GB tmpfs. Before the first deploy that includes it:
   `mkdir -p job-scratch/scan-worker job-scratch/scan-worker-2 && chown -R <uid>:<gid> job-scratch`, where
@@ -85,7 +87,9 @@ There are two scan-worker replicas plus a health worker. Settings that matter wh
   `shadow` the base is still scanned and the comment is unchanged, and each PR logs a
   `base evidence reuse shadow comparison` line saying whether the diff from the stored evidence would
   have been identical. Switch to `on` only once those lines show a good hit rate and no differences.
-  Stored evidence is reused only if it is for exactly the base commit and under 12 hours old.
+  Stored evidence is reused only if it is for exactly the base commit, under 12 hours old, and was scanned
+  with the same scan settings (every stored scan records them; today that is the semgrep switch), so
+  turning a setting on later cannot make its new findings read as introduced by a PR.
 - **Job time limit.** Scan jobs get `SCAN_JOB_TIMEOUT_SECONDS` (`app_server/job_timeouts.py`), shared by
   the PR, push and initial-scan paths. Each scan logs per-phase timings (`scan phase finished`).
 

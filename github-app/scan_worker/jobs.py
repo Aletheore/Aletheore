@@ -214,9 +214,12 @@ from scan_worker.slack import (
 
 _JOBS_ROOT_ENV = "ALETHEORE_JOBS_ROOT"
 JOBS_ROOT = Path(os.environ.get(_JOBS_ROOT_ENV, "/tmp/aletheore-jobs"))
-# The longest job that uses a checkout times out at 900s. This used to be 6 hours, which was fine while the
-# directory was memory-backed scratch space that vanished on restart; on a disk-backed volume (large repos
-# overflow a 1 GB tmpfs) a leftover checkout, which may still hold a token in .git/config, must not linger.
+# The longest jobs that use a checkout are the scans (SCAN_JOB_TIMEOUT_SECONDS, 1200s) and the reviews (900s).
+# This must stay well above both, or the sweeper could delete a live job's checkout out from under it
+# (tests/test_job_scratch.py checks for a 2x margin against the timeouts themselves). It used to be 6 hours,
+# which was fine while the directory was memory-backed scratch space that vanished on restart; on a
+# disk-backed volume (large repos overflow a 1 GB tmpfs) a leftover checkout, which may still hold a token
+# in .git/config, must not linger.
 JOB_TEMP_DIR_MAX_AGE_SECONDS = 3600
 AUDIT_COMMENT_MARKER = "<!-- aletheore-audit -->"
 FLASH_REVIEW_MARKER = "<!-- aletheore-flash-review -->"
@@ -1012,6 +1015,11 @@ def _reusable_base_evidence_with_reason(
         return None, "not_stored"
     if evidence.get("_scan_head_sha") != base_sha:
         return None, "other_commit"
+    stored_config = evidence.get("_scan_config")
+    if stored_config is None:
+        return None, "scan_config_unknown"
+    if stored_config != _scan_config_fingerprint():
+        return None, "scan_config_changed"
     age = _evidence_age_seconds(evidence)
     if age is None:
         return None, "no_scan_time"
@@ -1156,6 +1164,14 @@ def _operator_opt_in(env_name: str, stays_off: str) -> bool:
 def _hosted_semgrep_enabled() -> bool:
     """Operator opt-in for semgrep in hosted scans (off by default, see _run_scan)."""
     return _operator_opt_in(_HOSTED_SEMGREP_ENV, "semgrep stays disabled for hosted scans")
+
+
+def _scan_config_fingerprint() -> dict:
+    """The operator settings that change WHAT a hosted scan reports (not just how fast it runs). Recorded with
+    every stored scan and compared before stored evidence stands in for a base scan: switching one of these on
+    after the base was stored would make every finding it adds read as introduced by the PR. Parallel scanning
+    is deliberately not part of it, since it must not change the result (shadow mode would show if it did)."""
+    return {"semgrep": _hosted_semgrep_enabled()}
 
 
 def _hosted_parallel_scan_enabled() -> bool:
@@ -1313,7 +1329,9 @@ def _insert_history(
         installation_id,
         repo_full_name,
         datetime.now(timezone.utc),
-        evidence,
+        # Recorded so stored evidence can later be reused as a base only if it was scanned the same way (see
+        # _reusable_base_evidence_with_reason).
+        {**evidence, "_scan_config": _scan_config_fingerprint()},
         head_sha=head_sha,
     )
 

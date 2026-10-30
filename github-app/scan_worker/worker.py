@@ -1,3 +1,4 @@
+import logging
 import os
 
 from redis import Redis
@@ -11,6 +12,8 @@ from app_server.sentry_config import init_sentry
 
 _QUEUES_ENV = "SCAN_WORKER_QUEUES"
 _DEFAULT_QUEUES = ["scans", "builds"]
+# The queues this worker image consumes jobs from; "health" and "email" belong to the health worker.
+_KNOWN_QUEUES = frozenset(_DEFAULT_QUEUES)
 
 
 def queue_names_from_env() -> list[str]:
@@ -19,9 +22,21 @@ def queue_names_from_env() -> list[str]:
 
     One replica can be restricted to "scans" so a pair of 30-minute AIRview/Docs builds can never occupy
     every worker and starve PR reviews (2026-10-30). A blank setting falls back to the default rather than
-    leaving a worker that listens to nothing.
+    leaving a worker that listens to nothing. So does a name that is not a real queue: RQ will happily
+    listen to any name, so a typo (or a wrong delimiter) would otherwise start a worker that heartbeats and
+    reports healthy while never receiving a job. Unknown names are dropped with a warning.
     """
-    names = [name.strip() for name in os.environ.get(_QUEUES_ENV, "").split(",") if name.strip()]
+    requested = [name.strip() for name in os.environ.get(_QUEUES_ENV, "").split(",") if name.strip()]
+    names = [name for name in requested if name in _KNOWN_QUEUES]
+    unknown = [name for name in requested if name not in _KNOWN_QUEUES]
+    if unknown:
+        logging.getLogger("scan_worker.worker").warning(
+            "%s names unknown queue(s) %s (valid: %s); ignoring them%s",
+            _QUEUES_ENV,
+            ", ".join(repr(name) for name in unknown),
+            ", ".join(sorted(_KNOWN_QUEUES)),
+            "" if names else f" and serving the default {_DEFAULT_QUEUES}",
+        )
     return names or list(_DEFAULT_QUEUES)
 
 

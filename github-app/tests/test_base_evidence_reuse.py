@@ -18,7 +18,10 @@ from scan_worker.jobs import (
     BASE_EVIDENCE_MAX_AGE_SECONDS,
     _base_evidence_reuse_mode,
     _diff_sections_that_differ,
+    _insert_history,
     _reusable_base_evidence,
+    _reusable_base_evidence_with_reason,
+    _scan_config_fingerprint,
     run_pr_scan_job,
 )
 
@@ -30,6 +33,7 @@ def _stored(age: timedelta = timedelta(hours=1), **overrides) -> dict:
         "_scan_head_sha": BASE_SHA,
         "scanned_at": (datetime.now(timezone.utc) - age).isoformat(),
         "aletheore_version": "x",
+        "_scan_config": _scan_config_fingerprint(),
     }
     evidence.update(overrides)
     return evidence
@@ -91,6 +95,43 @@ def test_evidence_with_no_usable_scan_time_is_not_reused(monkeypatch, scanned_at
 def test_evidence_tagged_with_a_different_commit_is_not_reused(monkeypatch):
     _lookup_returns(monkeypatch, _stored(_scan_head_sha="b" * 40))
     assert _reusable_base_evidence(1, "o/r", BASE_SHA) is None
+
+
+def test_evidence_scanned_under_a_different_scan_configuration_is_not_reused(monkeypatch):
+    # Switching an operator setting that changes what a scan reports (semgrep) after the base was stored would
+    # make every finding the new setting adds read as introduced by the PR: the stored base has none of them.
+    # No version bump marks that, so the configuration a scan ran with is recorded and compared.
+    _lookup_returns(monkeypatch, _stored(_scan_config={"semgrep": True}))
+    evidence, reason = _reusable_base_evidence_with_reason(1, "o/r", BASE_SHA)
+    assert evidence is None and reason == "scan_config_changed"
+
+
+def test_evidence_with_no_recorded_scan_configuration_is_not_reused(monkeypatch):
+    # Stored before the configuration was recorded: there is no way to tell whether it still matches.
+    stored = _stored()
+    del stored["_scan_config"]
+    _lookup_returns(monkeypatch, stored)
+    evidence, reason = _reusable_base_evidence_with_reason(1, "o/r", BASE_SHA)
+    assert evidence is None and reason == "scan_config_unknown"
+
+
+def test_the_scan_configuration_follows_the_semgrep_operator_setting(monkeypatch):
+    monkeypatch.delenv("ALETHEORE_HOSTED_ENABLE_SEMGREP", raising=False)
+    assert _scan_config_fingerprint() == {"semgrep": False}
+    monkeypatch.setenv("ALETHEORE_HOSTED_ENABLE_SEMGREP", "1")
+    assert _scan_config_fingerprint() == {"semgrep": True}
+
+
+def test_every_stored_scan_records_the_configuration_it_ran_under(monkeypatch):
+    stored = []
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.insert_repo_history", lambda *a, **k: stored.append(a[4]) or 1)
+    original = {"aletheore_version": "x"}
+
+    _insert_history(1, "o/r", original, head_sha=BASE_SHA)
+
+    assert stored[0]["_scan_config"] == _scan_config_fingerprint()
+    assert "_scan_config" not in original, "the caller's evidence is not modified"
 
 
 def test_a_failing_lookup_means_a_fresh_scan_not_a_failed_job(monkeypatch):
@@ -187,6 +228,7 @@ def _fresh_base_evidence(bare_repo_with_two_commits, monkeypatch, tmp_path):
     stored = dict(spies.diffs[0]["old"])
     stored["_scan_head_sha"] = base_sha
     stored["scanned_at"] = datetime.now(timezone.utc).isoformat()
+    stored["_scan_config"] = _scan_config_fingerprint()
     return stored, spies.diffs[0]["result"]
 
 

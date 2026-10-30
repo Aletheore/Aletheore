@@ -38,6 +38,17 @@ def test_job_temp_dir_falls_back_to_tmp_when_the_scratch_volume_is_not_writable(
     assert "falling back" in caplog.text
 
 
+def test_the_sweep_age_leaves_a_wide_margin_over_the_longest_checkout_job():
+    # The sweeper deletes any job directory older than this, token-bearing .git/config included. If a job
+    # timeout is ever raised past it, the sweeper could delete a live job's checkout out from under it, so the
+    # margin is checked against the timeouts themselves instead of resting on a comment.
+    from app_server.job_timeouts import SCAN_JOB_TIMEOUT_SECONDS
+    from app_server.webhooks.pull_request import FLASH_REVIEW_JOB_TIMEOUT_SECONDS
+    from scan_worker.jobs import JOB_TEMP_DIR_MAX_AGE_SECONDS
+
+    assert JOB_TEMP_DIR_MAX_AGE_SECONDS >= 2 * max(SCAN_JOB_TIMEOUT_SECONDS, FLASH_REVIEW_JOB_TIMEOUT_SECONDS)
+
+
 def test_job_temp_dirs_are_swept_after_an_hour_not_six(tmp_path, monkeypatch):
     # The longest job that uses a checkout times out at 900s, so an hour is generous. Six hours was fine
     # for memory-backed scratch space that vanished on restart; on disk a leftover would linger that long.
