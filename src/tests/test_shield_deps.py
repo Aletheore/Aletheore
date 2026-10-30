@@ -354,6 +354,26 @@ def test_pins_cache_stays_bounded(tmp_path, monkeypatch):
     assert len(data["units"]) == 3
 
 
+def _cache_file(repo):
+    return repo / ".git" / "aletheore-shield" / _deps.PINS_CACHE_NAME
+
+
+def test_pins_parsed_by_another_aletheore_version_are_never_served(tmp_path, parsed):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n", "a/requirements.txt": "x==1\n"})
+    _write(repo, "a/requirements.txt", "x==1\ny==1\n")
+    added_dependencies(repo)  # fills the cache
+    data = json.loads(_cache_file(repo).read_text(encoding="utf-8"))
+    # Pins as a different parser version might have read them: every base folder "declares" fastjsonx.
+    data["units"] = {key: [["fastjsonx", "1.0", "PyPI"]] for key in data["units"]}
+    data["parser"] = "0.0.1-other"
+    _cache_file(repo).write_text(json.dumps(data), encoding="utf-8")
+    _write(repo, "requirements.txt", "requests==2.0\nfastjsonx==1.0\n")
+    parsed.clear()
+    refs, _ = added_dependencies(repo)
+    assert DepRef("PyPI", "fastjsonx", "manifest", "requirements.txt") in refs
+    assert len(parsed) == 2 + 2  # both base folders parsed again, then both changed folders
+
+
 def test_dependency_config_change_alone_parses_no_pins_but_still_marks_the_index_private(tmp_path, monkeypatch):
     repo = _init(tmp_path / "r", {"package.json": json.dumps({"name": "p"}), "a.js": "x\n"})
     monkeypatch.setattr(_deps, "pins_in_directory", _no_pins)

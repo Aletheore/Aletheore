@@ -143,9 +143,17 @@ def _unit_key(files: dict[str, str]) -> str:
     return hashlib.sha256(text.encode("utf-8", "surrogateescape")).hexdigest()
 
 
+def _parser_version() -> str:
+    """Stored with the cache: pins parsed by another Aletheore version are never served (its parsers may differ)."""
+    from aletheore import __version__
+
+    return str(__version__)
+
+
 class _PinCache:
-    """{unit key: pins} in <git dir>/aletheore-shield/pins-cache.json. Entries never go stale (the key is the content),
-    so the only rules are: a corrupt or oversized file is ignored, writes are atomic, and the file is bounded (units
+    """{unit key: pins} in <git dir>/aletheore-shield/pins-cache.json. An entry never goes stale while the parsers stay
+    the same (the key is the content), and the file records the Aletheore version that parsed it: a file from another
+    version, or a corrupt or oversized one, is ignored, writes are atomic, and the file is bounded (units
     used by this run are kept first, then the most recent others, up to PINS_CACHE_MAX_UNITS)."""
 
     def __init__(self, git_dir: Path | None) -> None:
@@ -159,7 +167,8 @@ class _PinCache:
             if self.path.stat().st_size > PINS_CACHE_MAX_BYTES:
                 return
             data = json.loads(self.path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict) or data.get("v") != _PINS_CACHE_VERSION or not isinstance(data.get("units"), dict):
+            if not isinstance(data, dict) or data.get("v") != _PINS_CACHE_VERSION \
+                    or data.get("parser") != _parser_version() or not isinstance(data.get("units"), dict):
                 return
             for key, pins in data["units"].items():
                 if isinstance(key, str) and isinstance(pins, list) and all(
@@ -189,7 +198,7 @@ class _PinCache:
             if key not in keep:
                 keep.append(key)
         units = {key: [list(p) for p in self.units[key]] for key in keep[:PINS_CACHE_MAX_UNITS]}
-        text = json.dumps({"v": _PINS_CACHE_VERSION, "units": units}, separators=(",", ":"))
+        text = json.dumps({"v": _PINS_CACHE_VERSION, "parser": _parser_version(), "units": units}, separators=(",", ":"))
         if len(text) > PINS_CACHE_MAX_BYTES:
             return
         temporary = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
