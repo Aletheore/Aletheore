@@ -143,12 +143,12 @@ export function WebsiteCompanion({ live = false }: { live?: boolean }) {
     <div className="website-companion" data-open={open}>
       <dialog ref={panel} id={bubbleId} className="companion-chat" aria-labelledby={titleId} onCancel={(event) => { event.preventDefault(); dismiss(); }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dismiss(); } }}>
         <header className="companion-chat__header">
-          <div><span className="companion-spark" aria-hidden="true">✦</span> <span id={titleId}>ALETHEORE</span><small>YOUR PRODUCT GUIDE</small></div>
+          <div><span className="companion-spark" aria-hidden="true">✦</span> <span id={titleId}>THEO</span><small>YOUR PRODUCT GUIDE</small></div>
           <button type="button" className="companion-close" onClick={dismiss} aria-label="Close chat">×</button>
         </header>
         <div className="companion-chat__mode">{live ? "LIVE LOCAL TEST · ANSWERS FROM APPROVED DOCS" : DEMO ? "LOCAL DEMO · EXAMPLE ANSWERS · NO AI CONNECTION" : "CHAT ISN'T AVAILABLE YET"}</div>
         <div ref={log} className="companion-chat__log" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions text" onScroll={() => { const el = log.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50; }}>
-          <div className="companion-chat__welcome"><span className="companion-chat__eyebrow">A LITTLE HELP, RIGHT HERE.</span><h2>Hi! I&apos;m Aletheore.</h2><p>Ask me about the product or getting started.</p></div>
+          <div className="companion-chat__welcome"><span className="companion-chat__eyebrow">A LITTLE HELP, RIGHT HERE.</span><h2>Hi! I&apos;m Theo.</h2><p>Ask me about the product or getting started.</p></div>
           <div className="companion-chat__starters">
             {COMPANION_STARTERS.map((question) => <button type="button" key={question} disabled={pending || !enabled || turns.length >= MAX_TURNS} onClick={() => send(question)}>{question}<span aria-hidden="true"> ↗</span></button>)}
             <button type="button" onClick={() => composer.current?.focus()} disabled={!enabled}>Ask a question<span aria-hidden="true"> ↗</span></button>
@@ -156,7 +156,7 @@ export function WebsiteCompanion({ live = false }: { live?: boolean }) {
           {!enabled && <p>Live chat is still being prepared. <Link onClick={dismiss} href="/developers">Open the developer guide →</Link></p>}
           {turns.map((turn) => <div className="companion-chat__turn" key={turn.id}>
             <div className="companion-chat__question"><small>YOU</small><p>{turn.question}</p></div>
-            {turn.answer && <div className="companion-chat__answer"><small>{live ? "ALETHEORE · DOCUMENTATION" : "ALETHEORE · DEMO"}</small><p>{turn.answer.text}</p>{turn.answer.command && <div className="companion-chat__command"><code>{turn.answer.command}</code><button type="button" onClick={() => copy(turn.answer!.command!)} aria-label="Copy command">Copy</button></div>}<nav aria-label="Answer sources">{turn.answer.sources.map((source) => <Link key={source.href} onClick={dismiss} href={source.href}>{source.label} ↗</Link>)}</nav></div>}
+            {turn.answer && <div className="companion-chat__answer"><small>{live ? "THEO · DOCUMENTATION" : "THEO · DEMO"}</small><p>{turn.answer.text}</p>{turn.answer.command && <div className="companion-chat__command"><code>{turn.answer.command}</code><button type="button" onClick={() => copy(turn.answer!.command!)} aria-label="Copy command">Copy</button></div>}<nav aria-label="Answer sources">{turn.answer.sources.map((source) => <Link key={source.href} onClick={dismiss} href={source.href}>{source.label} ↗</Link>)}</nav></div>}
             {turn.error && <div className="companion-chat__error"><p>{turn.error}</p><button type="button" disabled={pending} onClick={() => send(turn.question, turn.id)}>Retry</button> <Link onClick={dismiss} href="/developers">Developer guide ↗</Link></div>}
           </div>)}
           {pending && <p className="companion-chat__loading">Finding a little help… <button type="button" onClick={stop}>Stop</button></p>}
@@ -176,10 +176,10 @@ export function WebsiteCompanion({ live = false }: { live?: boolean }) {
         </footer>
         <span className="companion-bubble__tail" aria-hidden="true" />
       </dialog>
-      <button ref={trigger} type="button" className="companion-trigger" aria-label="Chat with Aletheore" aria-expanded={open} aria-controls={bubbleId} aria-haspopup="dialog" onPointerEnter={(event) => { if (event.pointerType !== "touch") setHovered(true); }} onPointerLeave={() => setHovered(false)} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onClick={() => { if (open) dismiss(); else setOpen(true); }}>
+      <button ref={trigger} type="button" className="companion-trigger" aria-label="Chat with Theo" aria-expanded={open} aria-controls={bubbleId} aria-haspopup="dialog" onPointerEnter={(event) => { if (event.pointerType !== "touch") setHovered(true); }} onPointerLeave={() => setHovered(false)} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onClick={() => { if (open) dismiss(); else setOpen(true); }}>
         <span className="companion-character"><AletheoreMascot pose={pending ? "typing" : open ? "waving" : hovered || focused ? "curious" : "neutral"} motion={pending ? "typing" : "none"} size={104} /></span>
         <span className="companion-ground" aria-hidden="true" />
-        <span className="companion-label" aria-hidden="true">{pending ? "One moment…" : open ? "Here to help" : "Ask Aletheore ↗"}</span>
+        <span className="companion-label" aria-hidden="true">{pending ? "One moment…" : open ? "Here to help" : "Ask Theo ↗"}</span>
       </button>
     </div>
   );

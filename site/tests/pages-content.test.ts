@@ -15,7 +15,8 @@ describe("ported policy pages", () => {
   });
   it("state the website assistant's data handling, with retention matching the limiter's real TTLs", () => {
     const html = legal.privacy.html;
-    expect(html).toContain("<h2>The website assistant</h2>");
+    expect(html).toContain("<h2>Theo, the website assistant</h2>");
+    expect(html).not.toContain("The website assistant</h2>");
     // The policy must say what the Redis scripts actually do: the per-network hash key lives 48 hours and the
     // per-question cost record 90 days. If a TTL changes, this fails until the copy is updated too.
     // Tolerant of quote style, spacing and multi-digit key indexes, so a cosmetic reformat of the script cannot hide the TTLs.

@@ -90,7 +90,7 @@ it.each(Object.keys(MASCOT_POSE_COORDINATES))("renders the requested %s pose lit
 
 it("renders one accessible corner-companion trigger with its chat initially closed", () => {
   const html = renderToStaticMarkup(createElement(WebsiteCompanion));
-  expect(html).toContain('aria-label="Chat with Aletheore"');
+  expect(html).toContain('aria-label="Chat with Theo"');
   expect(html).toContain('aria-expanded="false"');
   expect(html).toContain('class="companion-chat"');
   expect(html).not.toContain('<dialog open');
