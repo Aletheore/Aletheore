@@ -393,3 +393,17 @@ def test_a_receipt_that_fails_to_build_says_why_instead_of_looking_like_nothing_
     # Nothing to report is still None, not an error.
     monkeypatch.setattr(receipt, "list_checkpoints", lambda *a, **k: [])
     assert receipt.build_receipt(repo, "s1", now=T0, lookups=False) is None
+
+
+def test_receipts_a_little_ahead_of_the_clock_are_kept_and_only_far_future_ones_pruned(tmp_path):
+    # Another machine's clock, or this one's before an NTP step back, can stamp real receipts minutes or hours ahead.
+    repo = tmp_path / "r"
+    repo.mkdir()
+    ahead = [
+        receipt.write_receipt(repo, receipt.Receipt(f"ahead{i}", T0 + delta, (), _empty_report(), None))
+        for i, delta in enumerate((timedelta(minutes=10), timedelta(hours=2), timedelta(hours=23)))
+    ]
+    far = _forge(repo, (T0 + timedelta(days=3)).strftime("%Y%m%dT%H%M%SZ") + "-far.md")
+    receipt.write_receipt(repo, receipt.Receipt("now", T0, (), _empty_report(), None))
+    assert all(p.exists() for p in ahead)
+    assert not far.exists()

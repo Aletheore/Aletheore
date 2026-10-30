@@ -22,8 +22,11 @@ _STAMP = "%Y%m%dT%H%M%SZ"
 _RECEIPT_NAME = re.compile(r"(\d{8}T\d{6}Z)-(.+)\.md")
 _NAME_CAP = 300
 # A receipt stamped later than "now" by more than this is forged or from a skewed clock: it is ignored when
-# finding the previous receipt and is pruned on the next write.
+# finding the previous receipt.
 _FUTURE_TOLERANCE = timedelta(minutes=5)
+# Pruning deletes, so it is far more patient: a receipt stamped up to a day ahead (another machine's clock, or this one
+# before an NTP step back) is a real receipt, ranked and aged like any other; only one stamped later is removed.
+_PRUNE_FUTURE_TOLERANCE = timedelta(days=1)
 
 
 class ReceiptError(Exception):
@@ -229,13 +232,13 @@ def render_markdown(receipt: Receipt) -> str:
 
 def _prune(directory: Path, repo: Path, now: datetime, keep_name: str) -> None:
     cutoff = now - timedelta(days=KEEP_DAYS)
-    future = now + _FUTURE_TOLERANCE
+    future = now + _PRUNE_FUTURE_TOLERANCE
     rank = 0
     for stamp, name, path in _receipt_files(repo):
         if name == keep_name:
             rank += 1
             continue
-        if stamp > future:  # forged or clock-skewed: never counts toward the kept receipts
+        if stamp > future:  # forged, or a clock more than a day ahead: never counts toward the kept receipts
             pass
         else:
             rank += 1
