@@ -146,7 +146,7 @@ export function WebsiteCompanion({ live = false }: { live?: boolean }) {
           <div><span className="companion-spark" aria-hidden="true">✦</span> <span id={titleId}>THEO</span><small>YOUR PRODUCT GUIDE</small></div>
           <button type="button" className="companion-close" onClick={dismiss} aria-label="Close chat">×</button>
         </header>
-        <div className="companion-chat__mode">{live ? "LIVE LOCAL TEST · ANSWERS FROM APPROVED DOCS" : DEMO ? "LOCAL DEMO · EXAMPLE ANSWERS · NO AI CONNECTION" : "CHAT ISN'T AVAILABLE YET"}</div>
+        <div className="companion-chat__mode">{live ? "ANSWERS FROM OUR PUBLIC DOCS" : DEMO ? "LOCAL DEMO · EXAMPLE ANSWERS · NO AI CONNECTION" : "CHAT ISN'T AVAILABLE YET"}</div>
         <div ref={log} className="companion-chat__log" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions text" onScroll={() => { const el = log.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50; }}>
           <div className="companion-chat__welcome"><span className="companion-chat__eyebrow">A LITTLE HELP, RIGHT HERE.</span><h2>Hi! I&apos;m Theo.</h2><p>Ask me about the product or getting started.</p></div>
           <div className="companion-chat__starters">
