@@ -97,6 +97,18 @@ def test_first_run_lists_changes_and_no_changes_on_no(repo):
     assert _snapshot(repo) == before
 
 
+def test_plan_diff_of_a_crlf_settings_file_shows_the_carriage_returns(repo):
+    settings = repo / ".claude" / "settings.local.json"
+    settings.parent.mkdir()
+    settings.write_bytes(b'{\r\n  "model": "x"\r\n}\r\n')
+    r = runner.invoke(app, ["shield", "--path", str(repo)], input="no\n")
+    assert r.exit_code == 0, r.output
+    diff = [line.strip() for line in r.output.splitlines() if line.strip().startswith(("-", "+", " "))]
+    assert '-"model":"x"\\x0d' in [line.replace(" ", "") for line in diff], r.output
+    assert any(line.startswith("+") and line.endswith("\\x0d") for line in diff), r.output
+    assert "\r" not in r.output
+
+
 def test_first_run_states_the_network_disclosure(repo, monkeypatch):
     monkeypatch.delenv("ALETHEORE_SHIELD_OFFLINE")
     r = runner.invoke(app, ["shield", "--path", str(repo)], input="no\n")
