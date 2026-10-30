@@ -18,7 +18,9 @@ describe("ported policy pages", () => {
     expect(html).toContain("<h2>The website assistant</h2>");
     // The policy must say what the Redis scripts actually do: the per-network hash key lives 48 hours and the
     // per-question cost record 90 days. If a TTL changes, this fails until the copy is updated too.
-    const ttls = [...scripts.RESERVE_SCRIPT.matchAll(/'EXPIRE', KEYS\[(\d)\], (\d+)\)/g)].map((m) => Number(m[2]));
+    // Tolerant of quote style, spacing and multi-digit key indexes, so a cosmetic reformat of the script cannot hide the TTLs.
+    const ttls = [...scripts.RESERVE_SCRIPT.matchAll(/["']EXPIRE["']\s*,\s*KEYS\[\d+\]\s*,\s*(\d+)/g)].map((m) => Number(m[1]));
+    expect(ttls.length, "no EXPIRE calls found in the reserve script; update this test's parser, not the policy").toBeGreaterThan(0);
     expect(ttls).toContain(48 * 60 * 60);
     expect(ttls).toContain(90 * 24 * 60 * 60);
     expect(html).toContain("up to 48 hours");
