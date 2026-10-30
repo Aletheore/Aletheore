@@ -11,7 +11,9 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
   risks; keeps checkpoints of the working tree as Git refs that `aletheore shield undo` restores;
   and writes a receipt per session. It makes no model call and never blocks a commit or an
   agent turn. Package names, and nothing else, go to PyPI and npm for dependency checks; turn
-  that off with `ALETHEORE_SHIELD_OFFLINE=1`. `aletheore shield off` removes it.
+  that off with `ALETHEORE_SHIELD_OFFLINE=1`. `aletheore shield setup` shows every change before
+  making it, `aletheore shield status` shows what is on, `aletheore shield check` runs the guard
+  on demand, and `aletheore shield off` removes it.
 - Dashboard panels now distinguish checks that did not run from completed checks with
   no findings, including overview counts, secret-history coverage and limited scans.
 - The local demo now guides a pricing change through source, callers, import dependents,

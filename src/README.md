@@ -560,7 +560,11 @@ a hard time limit. The four Claude Code entries use the executable-plus-argument
 the interpreter, `args` the rest), so no shell parses them and paths with spaces or backslashes need
 no quoting on any platform. Earlier Shield versions wrote each entry as one shell-command string;
 `aletheore shield status` notes such entries, and `aletheore shield setup` shows them as an edit that
-replaces each one in place. `aletheore shield off` removes either form. The Git `pre-commit` block is a
+replaces each one in place, keeping any other fields (such as a `timeout`) you added to it.
+`aletheore shield off` removes either form. Only the exact shapes Shield writes count as its own: an
+interpreter with `-X utf8 -m aletheore.shield.hooks <event>` as `args`, or the old four-word string
+`<python> -m aletheore.shield.hooks <event>`. A hook of yours that runs the module any other way (a
+wrapper, extra flags, a chained command) is left alone. The Git `pre-commit` block is a
 `sh` script, so it quotes the interpreter path for `sh` (with forward slashes on Windows, where Git
 for Windows' `sh` runs it).
 
@@ -650,7 +654,8 @@ The setup screen prints the active network plan.
 - Tools that generate Git hooks (pre-commit, lefthook, husky) can overwrite Shield's block in the
   `pre-commit` hook; `aletheore shield status` then notes that the Git hook is not installed, and
   `aletheore shield setup` puts the block back.
-- Shield is designed for macOS, Linux and Windows. The CI jobs for all three run the unit tests;
+- Shield is designed for macOS, Linux and Windows. The CI jobs for all three run the unit tests and a
+  CLI smoke test that sets Shield up, runs its four hook entries without a shell and turns it off;
   hooks have not been exercised against a real Claude Code session on Windows.
 
 ### `aletheore query <kind> [target]`

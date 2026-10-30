@@ -224,8 +224,8 @@ would, following your line-ending and filter settings.
 `aletheore shield off` removes the hooks, config and marked blocks and keeps checkpoints and
 receipts; `--purge` deletes those too. Scan evidence in `.aletheore/` stays, and so does a
 one-line git exclude for it until you delete `.aletheore/` and run `off` again.
-Shield targets macOS, Linux and Windows; CI runs the unit tests on all three, and
-that is the extent of the Windows coverage. See the
+Shield targets macOS, Linux and Windows; CI runs the unit tests and a CLI smoke test of setup, the
+four hooks and `off` on all three. It has not been run against a real Claude Code session on Windows. See the
 [command reference](src/README.md#aletheore-shield) for options, limits and exit codes.
 
 ## What you can use
