@@ -229,9 +229,11 @@ FILE_PAGE_WRITING_SYSTEM_PROMPT = (
 You are given the file's path, its key functions/classes with line numbers, the subsystem it
 belongs to, the files it imports and is imported by, and - in `related_symbols` - a few named
 functions/classes with line numbers from those related files. You may also be given
-`repo_context`: repo-wide facts from other scanners (database schema, API endpoints, dependency
-vulnerabilities/licenses, dead code, infrastructure, environment variables) - see the "How it
-works"/"Gotchas" guidance below for when to use it. Respond with ONLY a JSON object:
+`repo_context`: facts from other scanners (database schema, API endpoints, dependency
+vulnerabilities/licenses, dead code, infrastructure, environment variables), which may be narrowed
+to entries about this file and the files it imports or is imported by - an entry missing from it does
+not mean the repository has none. See the "How it works"/"Gotchas" guidance below for when to use
+it. Respond with ONLY a JSON object:
 {"detail": "<markdown, 250-400 words>"}
 
 Structure the markdown with these headings, in order:
@@ -1639,9 +1641,11 @@ key in your response - never invent your own id), the file's path, its key funct
 line numbers, the subsystem it belongs to, the files it imports and is imported by, and - in
 `related_symbols` - a few named functions/classes with line numbers from those related files.
 
-"repo_context", when present, is repo-wide facts from other scanners - the same value applies to
-every item, not just one. Use it in an item's own page only when genuinely relevant to THAT item's
-file - never force it in, and never use it to write content for a different item. Exactly three
+"repo_context", when present, is facts from other scanners, which may be narrowed to entries about
+the files in this request and the files they import or are imported by - an entry missing from it
+does not mean the repository has none. The same value applies to every item, not just one. Use it in
+an item's own page only when genuinely relevant to THAT item's file - never force it in, and never
+use it to write content for a different item. Exactly three
 kinds of entry inside it carry a real, citable `file`/`line` and may be cited the same as any other
 citation: `database_schema.tables` (where the table itself was created), `database_schema.relations`
 (each foreign-key relation), and `api_endpoints` (each HTTP route). Every other field -
@@ -1774,7 +1778,8 @@ def _trim_file_page_repo_context(repo_context: dict | None, request_items: list[
 
     relevant: set[str] = set()
     for item in request_items:
-        relevant.add(item["path"])
+        if item.get("path"):
+            relevant.add(item["path"])
         relevant.update(item.get("imports") or [])
         relevant.update(item.get("imported_by") or [])
 
@@ -1784,14 +1789,34 @@ def _trim_file_page_repo_context(repo_context: dict | None, request_items: list[
         ref = entry.get("file")
         return ref is None or ref in relevant
 
+    # build_repo_context omits a field rather than sending it empty, so a
+    # section whose entries were ALL trimmed away is dropped the same way,
+    # instead of reaching the model as `[]` or as orphaned totals.
+    dropped = object()
+
     def trim(value):
         if isinstance(value, list):
-            return [trim(v) for v in value if keep(v)]
+            kept = [trim(v) for v in value if keep(v)]
+            return dropped if value and not kept else kept
         if isinstance(value, dict):
-            return {k: trim(v) for k, v in value.items()}
+            out, dropped_keys = {}, []
+            for k, v in value.items():
+                trimmed = trim(v)
+                if trimmed is dropped:
+                    dropped_keys.append(k)
+                else:
+                    out[k] = trimmed
+            # build_repo_context names a truncated list's real total
+            # `<list>_total_count`; with the list gone the total is an orphan.
+            for k in dropped_keys:
+                out.pop(f"{k}_total_count", None)
+            if dropped_keys and not any(isinstance(v, (list, dict)) and v for v in out.values()):
+                return dropped
+            return out
         return value
 
-    return trim(repo_context) or None
+    trimmed_context = trim(repo_context)
+    return None if trimmed_context is dropped else (trimmed_context or None)
 
 
 def _write_file_page_batch(

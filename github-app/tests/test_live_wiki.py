@@ -1155,7 +1155,6 @@ def test_file_page_repo_context_trim_keeps_entries_without_a_file_pointer(monkey
     from scan_worker.live_wiki import _trim_file_page_repo_context
 
     context = {
-        "database_schema": {"tables": [{"name": "t", "file": "far/away.py"}], "tables_total_count": 40},
         "api_endpoints": [
             {"method": "GET", "path": "/no-file", "file": None},
             {"method": "GET", "path": "/pkg0/mod.py", "file": "far/away.py"},
@@ -1166,12 +1165,105 @@ def test_file_page_repo_context_trim_keeps_entries_without_a_file_pointer(monkey
 
     trimmed = _trim_file_page_repo_context(context, [{"path": "pkg0/mod.py", "imports": [], "imported_by": []}])
 
-    assert trimmed["database_schema"] == {"tables": [], "tables_total_count": 40}
     # An endpoint's "path" is a URL route: it must never be matched against source files.
     assert trimmed["api_endpoints"] == [{"method": "GET", "path": "/no-file", "file": None}]
     # Plain strings carry no file pointer, so they are left alone.
     assert trimmed["environment_variables"] == ["API_KEY"]
     assert trimmed["dead_code"] == {"unreachable_modules": ["far/away.py"]}
+
+
+def test_file_page_repo_context_trim_drops_sections_that_trim_away_entirely(monkeypatch):
+    monkeypatch.delenv("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", raising=False)
+    from scan_worker.live_wiki import _trim_file_page_repo_context
+
+    context = {
+        "database_schema": {
+            "tables": [{"name": "t", "file": "far/away.py"}],
+            "relations": [{"from_table": "t", "file": "far/away.py"}],
+            "tables_total_count": 40,
+        },
+        "api_endpoints": [{"method": "GET", "path": "/x", "file": "far/away.py"}],
+        "environment_variables": ["API_KEY"],
+    }
+
+    trimmed = _trim_file_page_repo_context(context, [{"path": "pkg0/mod.py", "imports": [], "imported_by": []}])
+
+    # Nothing left in these two sections is about this batch: they are omitted
+    # (as build_repo_context omits empty fields), not sent as `[]` or as a
+    # `tables_total_count` with no tables next to it.
+    assert trimmed == {"environment_variables": ["API_KEY"]}
+
+
+def test_file_page_repo_context_trim_keeps_a_section_that_still_has_a_relevant_entry(monkeypatch):
+    monkeypatch.delenv("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", raising=False)
+    from scan_worker.live_wiki import _trim_file_page_repo_context
+
+    context = {
+        "database_schema": {
+            "tables": [{"name": "mine", "file": "pkg0/mod.py"}, {"name": "far", "file": "far/away.py"}],
+            "relations": [{"from_table": "far", "file": "far/away.py"}],
+            "tables_total_count": 40,
+        },
+    }
+
+    trimmed = _trim_file_page_repo_context(context, [{"path": "pkg0/mod.py", "imports": [], "imported_by": []}])
+
+    assert trimmed == {
+        "database_schema": {"tables": [{"name": "mine", "file": "pkg0/mod.py"}], "tables_total_count": 40}
+    }
+
+
+def test_file_page_repo_context_trim_drops_the_total_of_a_list_it_trimmed_away(monkeypatch):
+    monkeypatch.delenv("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", raising=False)
+    from scan_worker.live_wiki import _trim_file_page_repo_context
+
+    context = {
+        "database_schema": {
+            "tables": [{"name": "far", "file": "far/away.py"}],
+            "relations": [{"from_table": "mine", "file": "pkg0/mod.py"}],
+            "tables_total_count": 40,
+            "relations_total_count": 12,
+        },
+    }
+
+    trimmed = _trim_file_page_repo_context(context, [{"path": "pkg0/mod.py", "imports": [], "imported_by": []}])
+
+    # The tables are gone, so their total must not be left behind describing nothing.
+    assert trimmed == {
+        "database_schema": {
+            "relations": [{"from_table": "mine", "file": "pkg0/mod.py"}],
+            "relations_total_count": 12,
+        }
+    }
+
+
+def test_file_page_repo_context_trim_tolerates_an_item_without_a_path(monkeypatch):
+    monkeypatch.delenv("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", raising=False)
+    from scan_worker.live_wiki import _trim_file_page_repo_context
+
+    context = {"api_endpoints": [{"file": "pkg1/mod.py"}, {"file": "far/away.py"}]}
+
+    trimmed = _trim_file_page_repo_context(context, [{"imports": ["pkg1/mod.py"]}])
+
+    assert trimmed == {"api_endpoints": [{"file": "pkg1/mod.py"}]}
+
+
+def test_file_page_repo_context_trim_returns_none_when_nothing_relevant_remains(monkeypatch):
+    monkeypatch.delenv("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", raising=False)
+    from scan_worker.live_wiki import _trim_file_page_repo_context
+
+    context = {"api_endpoints": [{"method": "GET", "path": "/x", "file": "far/away.py"}]}
+
+    assert _trim_file_page_repo_context(context, [{"path": "pkg0/mod.py"}]) is None
+
+
+def test_file_page_prompts_do_not_claim_repo_context_is_always_repo_wide():
+    from scan_worker.live_wiki import BATCH_FILE_PAGE_WRITING_SYSTEM_PROMPT, FILE_PAGE_WRITING_SYSTEM_PROMPT
+
+    for prompt in (FILE_PAGE_WRITING_SYSTEM_PROMPT, BATCH_FILE_PAGE_WRITING_SYSTEM_PROMPT):
+        flattened = " ".join(prompt.split())
+        assert "repo-wide facts" not in flattened
+        assert "does not mean the repository has none" in flattened
 
 
 def test_file_page_repo_context_trim_does_not_mutate_the_shared_context(monkeypatch):
