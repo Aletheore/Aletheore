@@ -188,6 +188,38 @@ def test_sync_persistent_git_graph_skips_when_git_analysis_was_unavailable(tmp_p
     assert result == evidence
 
 
+def test_run_scan_keeps_parallel_parse_off_unless_an_operator_opts_in(tmp_path, monkeypatch):
+    # Parallel parsing and the overlapped git/secrets/vulnerability stages were switched off for hosted scans
+    # because the workers were capped at 1 CPU and 1 GB. An operator who gives a worker more of both turns it on
+    # explicitly, so that a rebuild with the old limits can never switch it on by itself.
+    monkeypatch.delenv("ALETHEORE_HOSTED_PARALLEL_SCAN", raising=False)
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    with patch("scan_worker.jobs.subprocess.run") as mock_run:
+        _run_scan(repo_dir)
+    assert mock_run.call_args[1]["env"]["ALETHEORE_DISABLE_PARALLEL_PARSE"] == "1"
+
+
+def test_run_scan_lets_an_operator_opt_in_to_parallel_scanning(tmp_path, monkeypatch):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    for value in ("1", "true", "yes", "on", " On "):
+        monkeypatch.setenv("ALETHEORE_HOSTED_PARALLEL_SCAN", value)
+        with patch("scan_worker.jobs.subprocess.run") as mock_run:
+            _run_scan(repo_dir)
+        assert "ALETHEORE_DISABLE_PARALLEL_PARSE" not in mock_run.call_args[1]["env"], value
+
+
+def test_run_scan_keeps_parallel_parse_off_and_warns_on_an_unrecognised_opt_in_value(tmp_path, monkeypatch, caplog):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    monkeypatch.setenv("ALETHEORE_HOSTED_PARALLEL_SCAN", "enabled")  # a plausible typo
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"), patch("scan_worker.jobs.subprocess.run") as mock_run:
+        _run_scan(repo_dir)
+    assert mock_run.call_args[1]["env"]["ALETHEORE_DISABLE_PARALLEL_PARSE"] == "1"
+    assert "ALETHEORE_HOSTED_PARALLEL_SCAN" in caplog.text and "not a recognised value" in caplog.text
+
+
 def test_run_scan_keeps_semgrep_off_by_default(tmp_path, monkeypatch):
     # Semgrep never ran in hosted scans (its rules were not packaged); the first measured run
     # under this worker's real limits timed out. It must not switch on as a side effect of a

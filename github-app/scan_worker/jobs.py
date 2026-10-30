@@ -950,6 +950,102 @@ def _prepare_base_checkout(clone_url: str, base_sha: str, base_dir: Path, persis
     _clone_ref(clone_url, base_sha, base_dir)
 
 
+_REUSE_BASE_EVIDENCE_ENV = "ALETHEORE_HOSTED_REUSE_BASE_EVIDENCE"
+# Dependency advisories are looked up when a scan runs. A base scanned days ago has not seen advisories
+# published since, so diffed against a head scanned now it would make every one of them read as introduced by
+# the PR. Half a day keeps the reuse for the common case (the push scan of the branch tip, minutes to hours
+# old) and sends anything staler back to a fresh scan.
+BASE_EVIDENCE_MAX_AGE_SECONDS = 12 * 3600
+
+
+def _base_evidence_reuse_mode() -> str:
+    """"off" (default), "shadow" or "on" - see _reusable_base_evidence. An operator opt-in like the semgrep and
+    parallel-scan switches: a typo warns and stays off."""
+    raw = os.environ.get(_REUSE_BASE_EVIDENCE_ENV, "").strip().lower()
+    if raw == "shadow":
+        return "shadow"
+    if raw in _TRUE_VALUES:
+        return "on"
+    if raw not in _FALSE_VALUES:
+        logging.getLogger("scan_worker.jobs").warning(
+            "%s=%r is not a recognised value (use on, shadow or off); the base commit is scanned fresh",
+            _REUSE_BASE_EVIDENCE_ENV, os.environ.get(_REUSE_BASE_EVIDENCE_ENV),
+        )
+    return "off"
+
+
+def _evidence_age_seconds(evidence: dict) -> float | None:
+    raw = evidence.get("scanned_at")
+    if not isinstance(raw, str):
+        return None
+    try:
+        scanned_at = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if scanned_at.tzinfo is None:
+        scanned_at = scanned_at.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - scanned_at).total_seconds()
+
+
+def _reusable_base_evidence_with_reason(
+    installation_id: int, repo_full_name: str, base_sha: str
+) -> tuple[dict | None, str]:
+    """The stored evidence of a PR's base commit when it is safe to diff against instead of scanning the base
+    again, plus why not when it is not. The base is usually the default branch's tip, which the push scan
+    already scanned.
+
+    Safe means: recorded for exactly this commit (the lookup is version-gated, so evidence from another
+    scanner version is already excluded), recent enough that dependency advisories have not moved since
+    (BASE_EVIDENCE_MAX_AGE_SECONDS), and the lookup itself worked. Anything else is a fresh scan, so reuse can
+    only ever save work, never fail a job."""
+    try:
+        evidence = _evidence_by_head_sha_or_none(
+            get_settings().database_url, installation_id, repo_full_name, base_sha
+        )
+    except Exception:  # noqa: BLE001
+        return None, "lookup_failed"
+    if not isinstance(evidence, dict):
+        return None, "not_stored"
+    if evidence.get("_scan_head_sha") != base_sha:
+        return None, "other_commit"
+    age = _evidence_age_seconds(evidence)
+    if age is None:
+        return None, "no_scan_time"
+    if age > BASE_EVIDENCE_MAX_AGE_SECONDS:
+        return None, "too_old"
+    return evidence, "reusable"
+
+
+def _reusable_base_evidence(installation_id: int, repo_full_name: str, base_sha: str) -> dict | None:
+    return _reusable_base_evidence_with_reason(installation_id, repo_full_name, base_sha)[0]
+
+
+def _diff_sections_that_differ(a: dict, b: dict) -> list[str]:
+    return sorted(key for key in set(a) | set(b) if a.get(key) != b.get(key))
+
+
+def _log_base_evidence_shadow_comparison(
+    fresh_diff: dict, stored_base: dict, new: dict, renamed_paths: dict | None
+) -> None:
+    """Shadow mode: the comment is built from a fresh base scan as always, and this logs whether the diff
+    would have come out the same from the stored base evidence, naming the sections that differ if not. A
+    week of these lines is the hit rate and the accuracy of reuse, measured on real PRs before it is relied on.
+    Never able to fail the scan."""
+    try:
+        stored_diff = compute_diff(stored_base, new, full=False, renamed_paths=renamed_paths)
+        differing = _diff_sections_that_differ(fresh_diff, stored_diff)
+        logging.getLogger("scan_worker.jobs").info(
+            "base evidence reuse shadow comparison",
+            extra={
+                "reuse_identical": not differing,
+                "reuse_differing_sections": differing,
+                "reuse_evidence_age_s": round(max(0.0, _evidence_age_seconds(stored_base) or 0.0)),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning("base evidence reuse shadow comparison failed", exc_info=True)
+
+
 def _build_unchanged_scan_cache(
     installation_id: int,
     repo_full_name: str,
@@ -1032,22 +1128,36 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"", "0", "false", "no", "off"}
 
 
-def _hosted_semgrep_enabled() -> bool:
-    """Operator opt-in for semgrep in hosted scans (off by default, see _run_scan).
+_HOSTED_PARALLEL_SCAN_ENV = "ALETHEORE_HOSTED_PARALLEL_SCAN"
+
+
+def _operator_opt_in(env_name: str, stays_off: str) -> bool:
+    """True when an operator has switched a deliberately-off hosted-scan feature on.
 
     Accepts the usual truthy spellings, and warns on a value it does not recognise: this is a
     switch for a feature that was deliberately left off, so a typo must not silently keep it off
     with the operator believing it is on.
     """
-    raw = os.environ.get(_HOSTED_SEMGREP_ENV, "").strip().lower()
+    raw = os.environ.get(env_name, "").strip().lower()
     if raw in _TRUE_VALUES:
         return True
     if raw not in _FALSE_VALUES:
         logging.getLogger("scan_worker.jobs").warning(
-            "%s=%r is not a recognised value (use 1/true/yes/on); semgrep stays disabled for hosted scans",
-            _HOSTED_SEMGREP_ENV, os.environ.get(_HOSTED_SEMGREP_ENV),
+            "%s=%r is not a recognised value (use 1/true/yes/on); %s",
+            env_name, os.environ.get(env_name), stays_off,
         )
     return False
+
+
+def _hosted_semgrep_enabled() -> bool:
+    """Operator opt-in for semgrep in hosted scans (off by default, see _run_scan)."""
+    return _operator_opt_in(_HOSTED_SEMGREP_ENV, "semgrep stays disabled for hosted scans")
+
+
+def _hosted_parallel_scan_enabled() -> bool:
+    """Operator opt-in for parallel parsing and overlapped scan stages in hosted scans (off by default,
+    see _run_scan). Meant to be switched on together with more CPU and memory for the worker."""
+    return _operator_opt_in(_HOSTED_PARALLEL_SCAN_ENV, "scans stay sequential for hosted scans")
 
 
 def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> Path:
@@ -1088,7 +1198,15 @@ def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> 
     # which could make memory pressure worse here even though it's a clear
     # win on a developer's own machine. Left unset for a developer running
     # `aletheore scan` directly, same as the depth caps above.
-    env["ALETHEORE_DISABLE_PARALLEL_PARSE"] = "1"
+    #
+    # Stays the default. An operator who gives the worker more CPU and memory than that 1 CPU / 1 GB
+    # (docker-compose.yml does) opts in with ALETHEORE_HOSTED_PARALLEL_SCAN, which also lets the git,
+    # secrets-history and vulnerability stages overlap the parse. The CLI sizes its process pool from the
+    # container's own CPU quota (see _available_parallelism in aletheore/scanner/graph.py), not the host's
+    # core count, so a worker capped at 2 CPUs starts 2 parse processes, and a worker that loses one to
+    # the OOM killer retries the rest with half as many. Measured on a 9,269-file repo: 50.7s -> 19.7s.
+    if not _hosted_parallel_scan_enabled():
+        env["ALETHEORE_DISABLE_PARALLEL_PARSE"] = "1"
     # Bandit B607: resolve the CLI's own installed path rather than a bare
     # "aletheore" name, same class as _git_path() above.
     aletheore_path = shutil.which("aletheore") or "aletheore"
@@ -1686,6 +1804,23 @@ def run_pr_scan_job(
         clone_url = _clone_url(repo_full_name, token)
         base_dir = job_dir / "base"
 
+        # Whether the base commit's stored evidence can stand in for a fresh base scan (see
+        # _reusable_base_evidence). Looked up before the lock: it is one short database read, and a miss
+        # costs nothing. "shadow" still scans the base and builds the comment from that, and only logs how
+        # the stored evidence would have compared.
+        reuse_mode = _base_evidence_reuse_mode()
+        stored_base, reuse_reason = (
+            _reusable_base_evidence_with_reason(installation_id, repo_full_name, base_sha)
+            if reuse_mode != "off"
+            else (None, "off")
+        )
+        if reuse_mode != "off":
+            logging.getLogger("scan_worker.jobs").info(
+                "base evidence reuse lookup",
+                extra={"reuse_mode": reuse_mode, "reuse_hit": stored_base is not None, "reuse_reason": reuse_reason},
+            )
+        use_stored_base = reuse_mode == "on" and stored_base is not None
+
         # Locked for the whole checkout-through-scan span, not just the
         # checkout call: _ensure_persistent_checkout has no filesystem
         # locking of its own (see repo_checkout_lock's docstring), and
@@ -1715,10 +1850,11 @@ def run_pr_scan_job(
             # Made here, inside the lock and after the head checkout, so it can borrow the persistent checkout's
             # objects (see _prepare_base_checkout). head_dir is the ephemeral fallback when persistent storage
             # was unavailable, and that has nothing worth borrowing.
-            with _timed_phase("run_pr_scan_job", "base_checkout"):
-                _prepare_base_checkout(
-                    clone_url, base_sha, base_dir, persistent_dir=None if head_dir == job_dir / "head" else head_dir
-                )
+            if not use_stored_base:
+                with _timed_phase("run_pr_scan_job", "base_checkout"):
+                    _prepare_base_checkout(
+                        clone_url, base_sha, base_dir, persistent_dir=None if head_dir == job_dir / "head" else head_dir
+                    )
 
             try:
                 previous_sha = CodeGraphStore(
@@ -1731,11 +1867,14 @@ def run_pr_scan_job(
                 job_dir / "unchanged-scan-cache.json",
             )
 
-            with _timed_phase("run_pr_scan_job", "base_scan"):
-                base_evidence_path = _run_scan(base_dir)
+            if use_stored_base:
+                old = stored_base
+            else:
+                with _timed_phase("run_pr_scan_job", "base_scan"):
+                    base_evidence_path = _run_scan(base_dir)
+                old = json.loads(base_evidence_path.read_text(encoding="utf-8"))
             with _timed_phase("run_pr_scan_job", "head_scan"):
                 head_evidence_path = _run_scan(head_dir, unchanged_scan_cache_path=unchanged_scan_cache_path)
-            old = json.loads(base_evidence_path.read_text(encoding="utf-8"))
             new = json.loads(head_evidence_path.read_text(encoding="utf-8"))
             # Fetched here, ahead of compute_diff, so a pure rename's
             # carried-over findings can be remapped through renamed_paths
@@ -1761,6 +1900,9 @@ def run_pr_scan_job(
                 if f.get("previous_filename")
             } or None
             diff = compute_diff(old, new, full=False, renamed_paths=renamed_paths)
+            if reuse_mode == "shadow" and stored_base is not None:
+                # Before the dismissal filters below mutate `diff`.
+                _log_base_evidence_shadow_comparison(diff, stored_base, new, renamed_paths)
             dismissed = get_dismissed_identity_keys(settings.database_url, installation_id, repo_full_name)
             # history_secrets shares the same (path, pattern, match_preview) identity
             # space as secrets - accepted_secrets (.aletheore.json) already treats them
