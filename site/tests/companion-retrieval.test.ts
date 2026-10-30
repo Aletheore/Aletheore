@@ -1,6 +1,6 @@
 // Deterministic and free: checks that the passages a visitor's wording should reach are actually handed to the model.
 import { describe, expect, it } from "vitest";
-import { retrieve } from "@/lib/companion/knowledge";
+import { normalizeProductName, retrieve } from "@/lib/companion/knowledge";
 
 const ids = (question: string, history: string[] = []) => retrieve(question, history).map((fact) => fact.id);
 
@@ -57,4 +57,15 @@ describe("retrieval reaches the right passages for how people really type", () =
     const found = ids("do you store my questions?");
     expect(found.indexOf("theo-2")).toBeLessThan(found.indexOf("privacy-cli-4") === -1 ? 99 : found.indexOf("privacy-cli-4"));
   });
+});
+
+describe("misspelled product names are corrected before the model sees them", () => {
+  it.each([
+    ["wat is aletheor", "wat is Aletheore"],
+    ["what is Alethore?", "what is Aletheore?"],
+    ["Aletheor pricing", "Aletheore pricing"],
+    ["what is Aletheore?", "what is Aletheore?"],
+    ["what is a thermometer", "what is a thermometer"],
+    ["alethiometer", "alethiometer"],
+  ])("%s", (input, expected) => expect(normalizeProductName(input)).toBe(expected));
 });

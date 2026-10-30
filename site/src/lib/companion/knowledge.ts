@@ -105,6 +105,11 @@ function nearVocabulary(word: string): string | undefined {
   }
   return best;
 }
+// A near-miss of the product name ("aletheor", "alethore") is corrected before the model sees the question: models classify
+// a misspelled brand inconsistently, and only words within two edits of the name are touched.
+export function normalizeProductName(question: string): string {
+  return question.replace(/[A-Za-z]{7,10}/g, (word) => (word.toLowerCase() !== "aletheore" && editDistance(word.toLowerCase(), "aletheore") <= 2 ? "Aletheore" : word));
+}
 export function retrieve(question: string, history: readonly string[] = []): Fact[] {
   const raw = wordsOf(question);
   const mentionsProduct = /aletheore/i.test(question) || raw.some((word) => word.length >= 7 && editDistance(word, "aletheore") <= 2);
