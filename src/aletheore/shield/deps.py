@@ -604,7 +604,14 @@ def _base_sources(repo: Path, change: "_changes.ChangeSet", rels: list[str], bud
     found = cat_file_batch(repo, list(asked), timeout=budget.timeout(_GIT_TIMEOUT_S))
     if found is None:
         return None
-    return {asked[name]: data for name, data in found.items()}
+    texts = {asked[name]: data for name, data in found.items()}
+    for name, rel in asked.items():
+        # The batch protocol is line based, so a path holding a newline is asked for on its own.
+        if "\n" in name or "\r" in name:
+            shown = run_git(repo, "show", name, timeout=budget.timeout(_GIT_TIMEOUT_S))
+            if shown.returncode == 0:
+                texts[rel] = shown.stdout
+    return texts
 
 
 def added_dependencies(

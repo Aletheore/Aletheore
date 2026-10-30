@@ -464,6 +464,13 @@ def test_moved_between_manifests_is_not_new(tmp_path):
     assert added_dependencies(repo) == ([], [])
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows file names cannot hold a newline")
+def test_unchanged_import_in_a_file_whose_name_holds_a_newline_is_not_new(tmp_path):
+    repo = _init(tmp_path / "r", {"odd\nname.py": "import yaml\n"})
+    _write(repo, "odd\nname.py", "import yaml\nx = 1\n")
+    assert added_dependencies(repo) == ([], [])
+
+
 def test_deleted_source_and_manifest_files_are_handled(tmp_path):
     repo = _init(tmp_path / "r", {"a/requirements.txt": "x==1\n", "m.py": "import x\n", "keep.py": "y = 1\n"})
     (repo / "a" / "requirements.txt").unlink()
