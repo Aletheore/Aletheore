@@ -184,6 +184,16 @@ def test_agent_hooks_merge_idempotently_and_replace_another_interpreter_in_place
     assert changed and merged["hooks"]["Stop"] == [{"hooks": [_exec_hook("turn-end")]}, {"hooks": [mine]}]
 
 
+def test_migration_keeps_extra_fields_the_user_added_to_shields_own_entry():
+    timed = {**_legacy_hook("turn-end", "/old/venv/python"), "timeout": 30, "statusMessage": "guarding"}
+    merged, _created, changed = setup._merge({"hooks": {"Stop": [{"hooks": [timed]}]}})
+    assert changed
+    assert merged["hooks"]["Stop"] == [{"hooks": [{**_exec_hook("turn-end"), "timeout": 30, "statusMessage": "guarding"}]}]
+    # already current apart from the user's extra fields: nothing to change
+    again = setup._merge(json.loads(json.dumps(merged)))
+    assert again[2] is False and again[0] == merged
+
+
 def _write_legacy_settings(repo, monkeypatch, before: bytes | None = None):
     """Set Shield up the way a version before the exec form did: string commands in settings.local.json."""
     if before is not None:

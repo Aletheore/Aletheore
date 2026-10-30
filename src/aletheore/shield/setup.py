@@ -418,8 +418,8 @@ def _strip_ours(entries: list, only_event: str | None = None) -> bool:
 
 def _place(entries: list, matcher: str | None, event: str) -> bool:
     """Make `entries` hold Shield's hook for `event` exactly once. The first of Shield's hooks for that event is
-    replaced in place (same entry, same position) when it differs (the legacy string form, another interpreter);
-    further copies are dropped. When there is none, a new entry is appended. Returns whether anything changed."""
+    replaced in place (same entry, same position) when it differs (the legacy string form, another interpreter),
+    keeping any other fields on it; further copies are dropped. When there is none, a new entry is appended. Returns whether anything changed."""
     wanted = _hook(event)
     found = changed = False
     for entry in list(entries):
@@ -431,8 +431,9 @@ def _place(entries: list, matcher: str | None, event: str) -> bool:
                 kept.append(hook)
             elif not found:
                 found = True
-                changed = changed or hook != wanted
-                kept.append(wanted)
+                current = {**hook, **wanted}  # fields the user added to Shield's entry (a timeout, say) are kept
+                changed = changed or hook != current
+                kept.append(current)
             else:
                 changed = True
         if kept:
