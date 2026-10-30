@@ -110,6 +110,11 @@ function nearVocabulary(word: string): string | undefined {
 export function normalizeProductName(question: string): string {
   return question.replace(/[A-Za-z]{7,10}/g, (word) => (word.toLowerCase() !== "aletheore" && editDistance(word.toLowerCase(), "aletheore") <= 2 ? "Aletheore" : word));
 }
+// The few chat shorthands that are unambiguous in this context. Whole words only, so nothing inside another word changes.
+const SHORTHAND: Record<string, string> = { wat: "what", wht: "what", hw: "how", pls: "please", plz: "please", abt: "about", ur: "your", dos: "does" };
+export function normalizeQuestion(question: string): string {
+  return normalizeProductName(question.replace(/\b[A-Za-z]{2,3}\b/g, (word) => SHORTHAND[word.toLowerCase()] ?? word));
+}
 export function retrieve(question: string, history: readonly string[] = []): Fact[] {
   const raw = wordsOf(question);
   const mentionsProduct = /aletheore/i.test(question) || raw.some((word) => word.length >= 7 && editDistance(word, "aletheore") <= 2);

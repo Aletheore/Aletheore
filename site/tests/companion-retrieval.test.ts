@@ -1,6 +1,6 @@
 // Deterministic and free: checks that the passages a visitor's wording should reach are actually handed to the model.
 import { describe, expect, it } from "vitest";
-import { normalizeProductName, retrieve } from "@/lib/companion/knowledge";
+import { normalizeProductName, normalizeQuestion, retrieve } from "@/lib/companion/knowledge";
 
 const ids = (question: string, history: string[] = []) => retrieve(question, history).map((fact) => fact.id);
 
@@ -68,4 +68,14 @@ describe("misspelled product names are corrected before the model sees them", ()
     ["what is a thermometer", "what is a thermometer"],
     ["alethiometer", "alethiometer"],
   ])("%s", (input, expected) => expect(normalizeProductName(input)).toBe(expected));
+});
+
+describe("chat shorthand is expanded only as whole words", () => {
+  it.each([
+    ["wat is aletheor", "what is Aletheore"],
+    ["hw much dos it cost pls", "how much does it cost please"],
+    ["what is the weather", "what is the weather"],
+    ["ur pricing abt flash", "your pricing about flash"],
+    ["Watson Hwang", "Watson Hwang"],
+  ])("%s", (input, expected) => expect(normalizeQuestion(input)).toBe(expected));
 });
