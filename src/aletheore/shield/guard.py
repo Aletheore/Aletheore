@@ -129,8 +129,10 @@ def _dependency_findings(
                 note = f"; no {label} package of that name exists"
             elif recent:
                 note = f"; {age}"
-            elif info is None or exists is None:
+            elif info is None:
                 note = "; registry was not checked"
+            elif exists is None:
+                note = "; the registry lookup failed, so whether it exists is unknown"
             findings.append(
                 Finding(
                     "dependencies",

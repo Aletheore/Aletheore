@@ -230,7 +230,9 @@ def _claim_marker(marker: Path, newest_edit: float | None = None) -> bool:
     return _write_marker(marker, now)
 
 
-def start_background_refresh(repo: Path, changed: list[str] | None = None, scanned_at: object = None) -> bool:
+def start_background_refresh(
+    repo: Path, changed: list[str] | None = None, scanned_at: object = None, *, scanned_modules: set[str] | None = None
+) -> bool:
     """Start a detached re-scan of `repo`; True only when a process was started.
 
     Does nothing when the repo has no evidence yet (the first scan is the user's to run; this never creates
@@ -238,6 +240,10 @@ def start_background_refresh(repo: Path, changed: list[str] | None = None, scann
     started within the last 60 seconds (a marker file in Shield's state directory, which also records when the
     refresh started), so a burst of edits cannot spawn a burst of scans. A refresh still running blocks a new one for
     up to two minutes; a finished one lets a new one start at once when a changed file was modified after it began.
+
+    A changed file that no longer exists has no modification time. When it is one of `scanned_modules` (the evidence
+    still lists it), the evidence predates its deletion, so it always counts as a reason to refresh (still at most
+    once per marker window).
     """
     repo = Path(repo)
     evidence_file = repo / _EVIDENCE_REL
@@ -247,13 +253,15 @@ def start_background_refresh(repo: Path, changed: list[str] | None = None, scann
     newest_edit = None
     if changed:
         safe = [r for r in (_safe_relative(c) for c in changed) if r is not None]
-        edit_times = [t for t in (_mtime(repo / rel) for rel in safe) if t is not None]
+        times = {rel: _mtime(repo / rel) for rel in safe}
+        edit_times = [t for t in times.values() if t is not None]
+        deleted_in_scan = [rel for rel, t in times.items() if t is None and rel in (scanned_modules or ())]
         reference = _scan_time(scanned_at)
         if reference is None:
             reference = evidence_time  # written at the end of the scan, so never earlier than scanned_at
         if edit_times:
             newest_edit = max(edit_times)
-            if _covered_until(repo, reference) >= newest_edit:
+            if not deleted_in_scan and _covered_until(repo, reference) >= newest_edit:
                 return False
     marker = state.shield_dir(repo) / _MARKER_NAME
     try:
@@ -418,6 +426,15 @@ def _has_pytest_config(repo: Path) -> bool:
     )
 
 
+def _shell_join(paths: list[str]) -> str:
+    """Paths quoted for the shell the user will paste them into: POSIX quoting, or cmd.exe quoting on Windows."""
+    if os.name == "nt":
+        return subprocess.list2cmdline(paths)
+    import shlex
+
+    return " ".join(shlex.quote(p) for p in paths)
+
+
 def _affected_finding(repo: Path, head: dict, targets: list[str]) -> Finding | None:
     from aletheore import dependents
     from aletheore.scope_filter import is_test_path
@@ -448,7 +465,7 @@ def _affected_finding(repo: Path, head: dict, targets: list[str]) -> Finding | N
         text = f"Test files that import it or are named for it: {_cap(high_list)}."
         python_tests = [p for p in high_list if p.endswith(".py")]
         if python_tests and _has_pytest_config(repo):
-            command = "pytest " + " ".join(python_tests[:_LIST_CAP])
+            command = "pytest " + _shell_join(python_tests[:_LIST_CAP])
             if len(python_tests) > _LIST_CAP:
                 command += f" (and {len(python_tests) - _LIST_CAP} more test files)"
             text += f" Command: {command}."
@@ -568,8 +585,14 @@ def evidence_checks(
     newer = _files_newer_than(repo, _relevant_changed(repo, changed, known), head.get("scanned_at"))
     if newer is None:
         return [], ["scan evidence has no readable scan time, so its age cannot be checked; run aletheore scan"]
+    # A scanned module that was deleted since: the evidence still describes it, so it is as stale as a newer edit.
+    deleted = [
+        rel for rel in (_safe_relative(c) for c in changed)
+        if rel is not None and rel in known and not (repo / rel).exists()
+    ]
+    newer = newer + [rel for rel in deleted if rel not in newer]
     if newer:
-        started = start_background_refresh(repo, newer, head.get("scanned_at"))
+        started = start_background_refresh(repo, newer, head.get("scanned_at"), scanned_modules=known)
         followup = "a refresh was started" if started else "run aletheore scan"
         return [], [
             f"evidence is older than {len(newer)} changed file(s); dependents, signature and new-risk checks "

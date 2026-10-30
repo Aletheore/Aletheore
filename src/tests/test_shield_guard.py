@@ -137,6 +137,16 @@ def test_offline_run_reports_not_checked_never_pass(tmp_path):
     assert render_report(report) != ""
 
 
+def test_near_miss_whose_lookup_failed_says_so_instead_of_not_checked(tmp_path):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n"})
+    _write(repo, "requirements.txt", "requests==2.0\nreqeusts==1.0\n")
+    report = run_guard(repo, opener=_Opener(default=urllib.error.URLError("down")))
+    near = [f for f in report.findings if "one edit from" in f.message]
+    assert len(near) == 1 and near[0].severity == "info"
+    assert "lookup failed" in near[0].message and "not checked" not in near[0].message
+    assert any("registry lookup failed" in line for line in report.not_checked)
+
+
 def test_config_and_env_switch_gate_lookups(tmp_path, monkeypatch):
     repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n"})
     _write(repo, "requirements.txt", "requests==2.0\nzzqnopkgx==1.0\n")

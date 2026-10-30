@@ -133,6 +133,24 @@ def test_affected_without_pytest_config_lists_files(repo):
     assert "pytest" not in msg and "tests/test_core.py" in msg
 
 
+def test_affected_test_command_quotes_paths_with_spaces(repo):
+    import shlex
+
+    mods = [
+        _mod("app/core.py", imported_by=["my tests/test_core.py"]),
+        _mod("my tests/test_core.py", imports=["app/core.py"]),
+    ]
+    _write_evidence(repo, _evidence(mods))
+    (repo / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+    findings, _ = evidence_checks(repo, ["app/core.py"], None)
+    msg = next(f.message for f in findings if f.check == "affected")
+    command = msg.split("Command: ", 1)[1].rstrip(".")
+    if os.name == "nt":
+        assert command == 'pytest "my tests/test_core.py"'
+    else:
+        assert shlex.split(command) == ["pytest", "my tests/test_core.py"]
+
+
 def test_affected_caps_long_lists(repo):
     mods = [_mod("app/core.py", imported_by=[f"m{i}.py" for i in range(9)])] + [_mod(f"m{i}.py") for i in range(9)]
     _write_evidence(repo, _evidence(mods))
@@ -171,7 +189,7 @@ def test_new_cycle_and_new_secret_are_reported(repo):
 
 def test_stale_evidence_is_labelled_and_skips_dependent_checks(repo, monkeypatch):
     started = []
-    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda r, changed=None, scanned_at=None: started.append(1) or True)
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda r, changed=None, scanned_at=None, **k: started.append(1) or True)
     _write_evidence(repo, _evidence(_core_modules(), scanned_at=PAST))
     findings, not_checked = evidence_checks(repo, ["app/core.py"], _evidence(_core_modules("(a)")))
     assert findings == []  # no false "no dependents", no signature or risk claims from stale data
@@ -180,10 +198,42 @@ def test_stale_evidence_is_labelled_and_skips_dependent_checks(repo, monkeypatch
 
 
 def test_stale_evidence_says_to_scan_when_no_refresh_started(repo, monkeypatch):
-    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda r, changed=None, scanned_at=None: False)
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda r, changed=None, scanned_at=None, **k: False)
     _write_evidence(repo, _evidence(_core_modules(), scanned_at=PAST))
     _, not_checked = evidence_checks(repo, ["app/core.py"], None)
     assert "aletheore scan" in not_checked[0] and "refresh was started" not in not_checked[0]
+
+
+def test_deleted_scanned_module_makes_the_evidence_stale_and_requests_a_refresh(repo, monkeypatch):
+    asked = []
+    monkeypatch.setattr(guard_evidence, "start_background_refresh",
+                        lambda r, changed=None, scanned_at=None, **k: asked.append((changed, k)) or True)
+    _write_evidence(repo, _evidence(_core_modules()))
+    findings, not_checked = evidence_checks(repo, ["app/api.py"], None)  # in the scan, not on disk
+    assert findings == [] and "older than 1 changed file(s)" in not_checked[0]
+    assert asked and asked[0][0] == ["app/api.py"] and "app/api.py" in asked[0][1]["scanned_modules"]
+
+
+def test_deleted_file_the_scan_never_saw_needs_no_refresh(repo, monkeypatch):
+    monkeypatch.setattr(guard_evidence, "start_background_refresh",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("refresh requested")))
+    _write_evidence(repo, _evidence(_core_modules()))
+    evidence_checks(repo, ["notes/gone.py"], None)
+
+
+def test_refresh_starts_for_a_deleted_scanned_module_even_when_other_edits_are_covered(repo, no_spawn):
+    air = _write_evidence(repo, _evidence(_core_modules()))
+    older = time.time() - 500
+    os.utime(repo / "app" / "core.py", (older, older))
+    os.utime(air, (older + 100, older + 100))
+    changed = ["app/core.py", "app/api.py"]  # app/api.py was deleted after the scan
+    assert guard_evidence.start_background_refresh(repo, changed) is False  # without the module list: as before
+    known = {"app/core.py", "app/api.py"}
+    assert guard_evidence.start_background_refresh(repo, changed, scanned_modules=known) is True
+    assert len(no_spawn) == 1
+    # Once per marker window.
+    assert guard_evidence.start_background_refresh(repo, changed, scanned_modules=known) is False
+    assert len(no_spawn) == 1
 
 
 def test_missing_base_evidence_skips_signature_check_with_reason(repo):
