@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,7 +101,10 @@ def test_first_run_states_the_network_disclosure(repo, monkeypatch):
     monkeypatch.delenv("ALETHEORE_SHIELD_OFFLINE")
     r = runner.invoke(app, ["shield", "--path", str(repo)], input="no\n")
     assert "package NAME" in r.output
-    assert "pypi.org" in r.output and "registry.npmjs.org" in r.output
+    # The registry hosts named, compared exactly (not as substrings of the output).
+    named = re.search(r"package NAME to (\S+) / (\S+)\s", " ".join(r.output.split()))
+    assert named is not None, r.output
+    assert named.groups() == ("pypi.org", "registry.npmjs.org")
     assert "ALETHEORE_SHIELD_OFFLINE=1" in r.output
     assert "registry_lookups" in r.output
 

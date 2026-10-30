@@ -1163,3 +1163,12 @@ def test_removal_report_sorts_every_path_by_what_happened(tmp_path):
     assert _settings(repo) in removal.removed and repo / ".aletheore" / "shield" / "config.json" in removal.removed
     assert set(removal.changed) == set(removal.restored + removal.edited + removal.removed)
     assert len(removal.changed) == len(set(removal.changed))
+
+
+def test_control_characters_are_exactly_c0_without_tab_del_and_c1():
+    expected = {c for c in range(0x20) if c != 0x09} | set(range(0x7F, 0xA0))
+    found = {c for c in range(0x3000) if setup._CONTROL.fullmatch(chr(c))}
+    assert found == expected
+    assert {c for c in range(0x3000) if setup._BREAKS.fullmatch(chr(c))} == {
+        0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029
+    }
