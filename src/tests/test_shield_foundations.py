@@ -171,3 +171,18 @@ def test_config_registry_lookups_false_without_env(tmp_path, monkeypatch):
     monkeypatch.delenv("ALETHEORE_SHIELD_OFFLINE", raising=False)
     state.save_config(tmp_path, state.ShieldConfig(registry_lookups=False))
     assert state.registry_lookups_enabled(tmp_path) is False
+
+
+def test_repo_state_inside_the_git_dir_is_accepted_as_before(tmp_path):
+
+    from aletheore.shield.gitutil import repo_state
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    for args in (["init", "-q"], ["config", "user.name", "T"], ["config", "user.email", "t@example.com"],
+                 ["config", "commit.gpgsign", "false"], ["commit", "-q", "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    inside = repo_state(repo / ".git")
+    assert inside.ok and inside.has_head and inside.top is None
+    outside = repo_state(repo)
+    assert outside.ok and outside.top is not None and outside.index is not None

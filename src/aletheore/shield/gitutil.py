@@ -160,14 +160,18 @@ def repo_state(repo: Path) -> RepoState:
     # rev-parse prints each answer in turn and stops at the first it cannot give: a bare repository has no top.
     if len(lines) >= 2 and lines[1].strip() == "true":
         return _unsupported("bare repositories have no working tree to guard", Path(lines[0]))
-    if probe.returncode != 0 or len(lines) != 5:
+    if len(lines) < 2 or not lines[0]:
         return _unsupported("this folder is not a git repository")
     git_dir = Path(lines[0])
-    top, common, index = Path(lines[2]), Path(lines[3]), Path(lines[4])
-    if not common.is_absolute():
-        common = Path(repo) / common
-    if not index.is_absolute():
-        index = Path(repo) / index
+    top = common = index = None
+    # Inside the git dir itself there is no top (rev-parse stops after the first two answers); that was always
+    # accepted here, so it still is, just without the layout: take_checkpoint then probes on its own (and declines).
+    if probe.returncode == 0 and len(lines) == 5:
+        top, common, index = Path(lines[2]), Path(lines[3]), Path(lines[4])
+        if not common.is_absolute():
+            common = Path(repo) / common
+        if not index.is_absolute():
+            index = Path(repo) / index
     for marker, what in (
         ("rebase-merge", "a rebase"),
         ("rebase-apply", "a rebase"),
