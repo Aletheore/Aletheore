@@ -332,6 +332,18 @@ def test_time_budget_reports_manifests_not_compared_and_the_next_run_continues(t
     assert clock.t - first == (6 - first) + 1  # the rest of the base folders, then the changed one
 
 
+def test_git_failing_is_not_reported_as_the_time_budget(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n", "a.py": "x = 1\n"})
+    _write(repo, "requirements.txt", "requests==2.0\nfastjsonx==1.0\n")
+    _write(repo, "a.py", "import zzqb\n")
+    monkeypatch.setattr(_deps, "cat_file_batch", lambda *a, **k: None)  # git failed, with all the time in the world
+    refs, not_checked = added_dependencies(repo)
+    assert refs == []
+    assert NotChecked("", _deps.GIT_FAILED_MANIFESTS) in not_checked
+    assert NotChecked("", _deps.GIT_FAILED_IMPORTS) in not_checked
+    assert not any("time budget" in n.reason for n in not_checked)
+
+
 def test_a_corrupt_pins_cache_is_ignored_and_replaced(tmp_path, parsed):
     repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n", "a/requirements.txt": "x==1\n"})
     cache = repo / ".git" / "aletheore-shield" / _deps.PINS_CACHE_NAME

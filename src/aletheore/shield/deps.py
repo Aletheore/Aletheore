@@ -53,6 +53,13 @@ _STATE_DIRNAME = "aletheore-shield"
 
 TIME_BUDGET_MANIFESTS = "time budget reached; new manifest dependencies were not compared with the base"
 TIME_BUDGET_IMPORTS = "time budget reached; new imports were not checked"
+GIT_FAILED_MANIFESTS = "git did not answer; new manifest dependencies were not compared with the base"
+GIT_FAILED_IMPORTS = "git did not answer; new imports were not checked"
+
+
+def _why_stopped(budget: Budget, timed_out: str, failed: str) -> str:
+    """A step that could not finish: out of time, or git failing for another reason (same rule as run_guard)."""
+    return timed_out if budget.spent(MIN_STAGE_S) else failed
 
 
 @dataclass(frozen=True)
@@ -570,7 +577,7 @@ def _manifest_pins(
     finally:
         cache.save()  # keep whatever was parsed, even when the budget ran out: the next run continues from there
     if not complete:
-        not_checked.append(NotChecked("", TIME_BUDGET_MANIFESTS))
+        not_checked.append(NotChecked("", _why_stopped(budget, TIME_BUDGET_MANIFESTS, GIT_FAILED_MANIFESTS)))
         return [], {}, base_pins, False
     now_by_unit, unreadable, parsed_all = _working_unit_pins(repo, changed_folders, names_by_folder, budget)
     if not parsed_all:
@@ -674,7 +681,7 @@ def added_dependencies(
         sources = []
     base_texts = _base_sources(repo, change, sources, budget) if sources else {}
     if base_texts is None:
-        not_checked.append(NotChecked("", TIME_BUDGET_IMPORTS))
+        not_checked.append(NotChecked("", _why_stopped(budget, TIME_BUDGET_IMPORTS, GIT_FAILED_IMPORTS)))
         sources, base_texts = [], {}
     import_map = _import_map()
     installed = _LazyNames(_installed_import_names)
