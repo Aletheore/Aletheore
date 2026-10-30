@@ -135,6 +135,38 @@ def test_is_denied_path(path, expected):
     assert denylist.is_denied_path(path) is expected
 
 
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        # Environment files named for their environment rather than starting with ".env".
+        ("prod.env", True),
+        ("config\\Staging.ENV", True),
+        ("deploy/app.env.local", True),
+        ("docker/.env.local", True),
+        ("C:\\work\\repo\\.env.production", True),
+        ("keys\\server.KEY", True),
+        ("certs\\client.p12", True),
+        ("home\\.ssh\\id_ed25519", True),
+        ("aws\\credentials", True),
+        ("deploy/terraform.tfvars", True),
+        ("secrets/prod.secrets.yaml", False),  # only the exact secrets.* names, not anything ending in them
+        (".git-credentials", True),
+        ("user.ppk", True),
+        # Ordinary source files whose names only contain the words.
+        ("src/env.py", False),
+        ("src/dotenv_loader.py", False),
+        ("src/environment.ts", False),
+        ("docs/keyboard.md", False),
+        ("src/keys.py", False),
+        ("src/secrets.py", False),
+        ("src/envoy.yaml", False),
+        ("README.env.md", False),
+    ],
+)
+def test_is_denied_path_by_suffix_and_on_windows_paths(path, expected):
+    assert denylist.is_denied_path(path) is expected
+
+
 def test_run_git_timeout_and_spawn_failure_do_not_raise(tmp_path, monkeypatch):
     def timeout(*a, **k):
         raise subprocess.TimeoutExpired("git", 0.01)
