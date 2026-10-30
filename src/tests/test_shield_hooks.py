@@ -936,6 +936,12 @@ def test_session_end_reports_a_receipt_that_could_not_be_built_on_stderr_and_exi
 
 
 def _slow_state_reads(monkeypatch, seconds=0.03):
+    """Widen the race window, and let a waiter wait as long as it takes, so a loaded machine cannot turn a lock wait
+    that runs out (which writes without the lock, by design) into a test failure."""
+    from aletheore.shield import fsutil
+
+    monkeypatch.setattr(fsutil, "LOCK_WAIT_S", 60.0)
+    monkeypatch.setattr(fsutil, "LOCK_STALE_S", 600.0)
     real = hooks._load_state
 
     def slow(path):

@@ -183,13 +183,15 @@ def _release(lock: Path, token: str) -> None:
 
 
 @contextmanager
-def exclusive(lock: Path, *, wait_s: float = LOCK_WAIT_S, stale_s: float = LOCK_STALE_S) -> Iterator[bool]:
+def exclusive(lock: Path, *, wait_s: float | None = None, stale_s: float | None = None) -> Iterator[bool]:
     """Hold `lock` (a file that must not otherwise exist) for the body; yields whether it is held.
 
     Waits at most `wait_s` for another holder; a lock older than `stale_s` is broken (see the module docstring) and
     then competed for. Never raises OSError for the lock itself: a folder that cannot hold the lock file yields
     False."""
     lock = Path(lock)
+    wait_s = LOCK_WAIT_S if wait_s is None else wait_s  # read at call time, so a test can widen it
+    stale_s = LOCK_STALE_S if stale_s is None else stale_s
     token = f"{os.getpid()}-{secrets.token_hex(8)}"
     held = False
     deadline = time.monotonic() + wait_s
