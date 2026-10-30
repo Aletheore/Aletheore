@@ -17,6 +17,7 @@ _PATTERNS = (
     "*.keystore",
     "*.jks",
     "*.tfvars",
+    "*.tfvars.json",
     "id_rsa*",
     "id_dsa*",
     "id_ecdsa*",
@@ -30,9 +31,13 @@ _PATTERNS = (
     ".pypirc",
     ".netrc",
 )
-# "<name>.env.<variant>" (app.env.local, prod.env.example) is an environment file too, unless the last suffix makes it
-# documentation or source code (README.env.md, config.env.ts).
-_ENV_VARIANT = r".+\.env\.(?!(?:md|markdown|rst|adoc|html|py|js|mjs|cjs|jsx|ts|tsx)\Z)[^.]+"
+# "<name>.env.<environment>" (app.env.local, api.env.production) is an environment file too. Only environment and
+# backup names count: values.env.yaml, config.env.go or app.env.example are configuration, source or a template.
+_ENV_NAMES = (
+    "local", "production", "prod", "staging", "stage", "dev", "development", "test", "testing", "qa", "uat", "ci",
+    "preview", "secret", "secrets", "backup", "bak", "old", "orig", "save",
+)
+_ENV_VARIANT = r".+\.env\.(?:" + "|".join(_ENV_NAMES) + r")"
 
 
 # One compiled alternation: the same fnmatch semantics, but cheap enough to run on every file in a checkpoint.

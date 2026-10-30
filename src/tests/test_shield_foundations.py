@@ -312,3 +312,19 @@ def test_repo_state_with_a_git_that_exits_124_is_not_reported_as_slow(tmp_path, 
     monkeypatch.setattr(gitutil, "run_git", exits_124)
     state_ = gitutil.repo_state(tmp_path)
     assert state_.ok is False and "in time" not in state_.reason
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("values.env.yaml", False), ("docker-compose.env.yml", False), ("x.env.json", False),
+        ("config.env.go", False), ("settings.env.rb", False), ("app.env.sh", False),
+        ("app.env.example", False), ("app.env.sample", False), ("app.env.template", False),
+        ("app.env.production", True), ("app.env.prod", True), ("api.env.staging", True), ("x.env.dev", True),
+        ("x.env.development", True), ("x.env.test", True), ("x.env.secret", True), ("x.env.bak", True),
+        ("x.env.old", True), ("X.ENV.LOCAL", True), (".env.example", True), ("prod.env", True),
+        ("infra/main.tfvars.json", True), ("infra\\prod.tfvars", True),
+    ],
+)
+def test_env_variants_are_denied_only_for_environment_names(path, expected):
+    assert denylist.is_denied_path(path) is expected
