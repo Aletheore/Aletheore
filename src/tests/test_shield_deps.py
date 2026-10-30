@@ -751,3 +751,23 @@ def test_editable_requirement_lines_declare_their_egg_name(tmp_path):
 )
 def test_js_imports_are_not_hidden_by_stray_backticks_or_found_in_member_calls(source, expected):
     assert _imports.js_imports(source) == expected
+
+
+def test_installed_names_include_namespace_packages_by_their_dotted_name(monkeypatch):
+    import importlib.metadata as md
+    from pathlib import PurePosixPath
+
+    class _Dist:
+        def __init__(self, files):
+            self.files = [PurePosixPath(f) for f in files]
+
+    dists = {
+        "protobuf": _Dist(["google/protobuf/__init__.py", "google/protobuf/json_format.py", "google/__init__.py"]),
+        "google-auth": _Dist(["google/auth/__init__.py", "google/oauth2/id_token.py", "google/__pycache__/x.pyc"]),
+    }
+    monkeypatch.setattr(md, "packages_distributions",
+                        lambda: {"google": ["protobuf", "google-auth"], "requests": ["requests"]})
+    monkeypatch.setattr(md, "distribution", lambda name: dists[name])
+    names = _deps._real_installed_import_names()
+    assert {"google", "requests", "google.protobuf", "google.auth", "google.oauth2"} <= names
+    assert not {n for n in names if "__" in n}

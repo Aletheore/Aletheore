@@ -578,14 +578,33 @@ def _import_map() -> dict[str, tuple[str, ...]]:
     return found
 
 
-def _installed_import_names() -> set[str]:
+def _real_installed_import_names() -> set[str]:
+    """Top-level import names of the installed distributions, plus `root.sub` for namespace roots (google.protobuf),
+    which is how the import check names those imports."""
     import importlib.metadata
 
     try:
-        return set(importlib.metadata.packages_distributions())
+        mapping = importlib.metadata.packages_distributions()
     except Exception as error:  # noqa: BLE001 - a broken installed distribution must not stop the check
         debug_note("could not list the installed distributions", error)
         return set()
+    names = set(mapping)
+    for root in imports.PY_NAMESPACE_ROOTS & names:
+        for dist in set(mapping[root]):
+            try:
+                files = importlib.metadata.distribution(dist).files or []
+            except Exception as error:  # noqa: BLE001
+                debug_note(f"could not list the files of {dist}", error)
+                continue
+            for file in files:
+                parts = file.parts
+                if len(parts) >= 2 and parts[0] == root and not parts[1].startswith("__"):
+                    names.add(f"{root}.{parts[1].removesuffix('.py')}")
+    return names
+
+
+def _installed_import_names() -> set[str]:
+    return _real_installed_import_names()
 
 
 def _manifest_where(repo: Path, owners: list[str], ecosystem: str, name: str) -> str:
