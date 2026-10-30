@@ -70,7 +70,8 @@ def _python_statements(source: str):
         for token in tokenize.generate_tokens(io.StringIO(source).readline):
             if token.type in _SKIPPED_TOKENS:
                 continue
-            if token.type in (tokenize.NEWLINE, tokenize.ENDMARKER) or (token.type == tokenize.OP and token.string == ";"):
+            ends = token.type in (tokenize.NEWLINE, tokenize.ENDMARKER)
+            if ends or (token.type == tokenize.OP and token.string == ";"):
                 if statement:
                     yield statement
                 statement = []

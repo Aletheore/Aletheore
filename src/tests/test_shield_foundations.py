@@ -218,3 +218,54 @@ def test_repo_state_inside_the_git_dir_is_accepted_as_before(tmp_path):
     assert inside.ok and inside.has_head and inside.top is None
     outside = repo_state(repo)
     assert outside.ok and outside.top is not None and outside.index is not None
+
+
+def test_save_config_is_atomic_under_concurrent_writers_and_readers(tmp_path):
+    import json
+    import threading
+
+    state.save_config(tmp_path, state.ShieldConfig(registry_lookups=True))
+    path = state.shield_dir(tmp_path) / "config.json"
+    torn = []
+    stop = threading.Event()
+
+    def read():
+        while not stop.is_set():
+            try:
+                json.loads(path.read_text(encoding="utf-8"))
+            except ValueError:
+                torn.append(1)
+            except OSError:
+                pass  # Windows: replaced while open
+
+    def write(value):
+        for _ in range(150):
+            state.save_config(tmp_path, state.ShieldConfig(registry_lookups=value))
+
+    reader = threading.Thread(target=read)
+    writers = [threading.Thread(target=write, args=(v,)) for v in (True, False, True)]
+    reader.start()
+    for t in writers:
+        t.start()
+    for t in writers:
+        t.join(60)
+    stop.set()
+    reader.join(60)
+    assert torn == []
+    assert isinstance(state.load_config(tmp_path).registry_lookups, bool)
+    assert [p.name for p in path.parent.iterdir()] == ["config.json"]  # no temporary files left behind
+
+
+def test_save_config_failure_keeps_the_old_file_and_no_temporary(tmp_path, monkeypatch):
+    import os
+
+    state.save_config(tmp_path, state.ShieldConfig(registry_lookups=False))
+
+    def refuse(*a, **k):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(os, "replace", refuse)
+    with pytest.raises(OSError):
+        state.save_config(tmp_path, state.ShieldConfig(registry_lookups=True))
+    assert state.load_config(tmp_path).registry_lookups is False
+    assert [p.name for p in state.shield_dir(tmp_path).iterdir()] == ["config.json"]

@@ -42,10 +42,14 @@ def load_config(repo: Path) -> ShieldConfig:
 
 
 def save_config(repo: Path, config: ShieldConfig) -> None:
+    """Write the config atomically: a reader (a hook running meanwhile) sees the old file or the new one, never a
+    partial one, and of two concurrent writers the last one wins whole. Raises OSError when the write fails, leaving
+    the old file as it was."""
+    from aletheore.shield.fsutil import atomic_write_text
+
     directory = shield_dir(repo, create=True)
-    (directory / "config.json").write_text(
-        json.dumps({"registry_lookups": config.registry_lookups}, indent=2) + "\n", encoding="utf-8"
-    )
+    text = json.dumps({"registry_lookups": config.registry_lookups}, indent=2) + "\n"
+    atomic_write_text(directory / "config.json", text)
 
 
 def registry_lookups_enabled(repo: Path) -> bool:
