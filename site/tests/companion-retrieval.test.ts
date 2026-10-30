@@ -65,7 +65,6 @@ describe("misspelled product names are corrected before the model sees them", ()
     ["wat is aletheor", "wat is Aletheore"],
     ["what is Alethore?", "what is Aletheore?"],
     ["Aletheor pricing", "Aletheore pricing"],
-    ["what is Aletheore?", "what is Aletheore?"],
     ["what is a thermometer", "what is a thermometer"],
     ["alethiometer", "alethiometer"],
   ])("%s", (input, expected) => expect(normalizeProductName(input)).toBe(expected));
@@ -74,9 +73,15 @@ describe("misspelled product names are corrected before the model sees them", ()
 describe("chat shorthand is expanded only as whole words", () => {
   it.each([
     ["wat is aletheor", "what is Aletheore"],
-    ["hw much dos it cost pls", "how much does it cost please"],
+    ["wat is the cost pls", "what is the cost please"],
     ["what is the weather", "what is the weather"],
-    ["ur pricing abt flash", "your pricing about flash"],
+    ["pricing abt flash", "pricing about flash"],
     ["Watson Hwang", "Watson Hwang"],
+    // ambiguous or literal words are never rewritten
+    ["does the scanner support DOS files?", "does the scanner support DOS files?"],
+    ["what are the hw requirements", "what are the hw requirements"],
+    ["is Ur supported", "is Ur supported"],
+    ["can it scan a .wat file", "can it scan a .wat file"],
+    ["does it parse src/wat.py", "does it parse src/wat.py"],
   ])("%s", (input, expected) => expect(normalizeQuestion(input)).toBe(expected));
 });

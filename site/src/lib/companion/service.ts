@@ -85,7 +85,7 @@ export async function answerQuestion(question: string, options: { apiKey: string
     return { answer: fallback("off_topic"), usage, usageReliable, usageViolation, corpus: CORPUS_VERSION };
   }
   if (usageViolation) return { answer: fallback("unverified"), usage, usageReliable, usageViolation, corpus: CORPUS_VERSION };
-  const facts = retrieve(question, options.history);
+  const facts = retrieve(normalizeQuestion(question), options.history);
   const selection = await select(SYSTEM_PROMPT, { ...data, FACTS: facts }, 250);
   return { answer: validateSelection(selection, facts), usage, usageReliable, usageViolation, corpus: CORPUS_VERSION, selection };
 }

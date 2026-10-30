@@ -38,7 +38,7 @@ export const FACTS: readonly Fact[] = [
   ...paragraphs(legal.terms.html, "What Aletheore is").map((text, index) => ({ id: `terms-what-${index}`, title: "What Aletheore is, and its license", text, href: "/terms" })),
   { id: "hallbook-what", title: "Hallbook", text: hallbookCopy.summary, href: "/hallbook" },
   { id: "hallbook-setup", title: "Hallbook needs no setup per agent", text: hallbookCopy.noSetup, href: "/hallbook#no-setup" },
-  { id: "hallbook-catalog", title: "Hallbook catalogue", text: `${hallbook.stats.total.toLocaleString("en-US")} skills across ${hallbook.stats.shelves.length} shelves: ${hallbook.stats.shelves.map((shelf) => `${shelf.name} (${shelf.count})`).join(", ")}.`, href: "/hallbook#shelves" },
+  ...(hallbook.stats.total > 0 && hallbook.stats.shelves.length > 0 ? [{ id: "hallbook-catalog", title: "Hallbook catalogue", text: `${hallbook.stats.total.toLocaleString("en-US")} skills across ${hallbook.stats.shelves.length} shelves: ${hallbook.stats.shelves.map((shelf) => `${shelf.name} (${shelf.count})`).join(", ")}.`, href: "/hallbook#shelves" }] : []),
   { id: "hallbook-custom", title: "Your own Hallbook skills", text: hallbookCopy.customBefore + hallbookCopy.customMarked, command: hallbookCopy.addCommand, href: "/hallbook#custom" },
   ...hallbookCopy.vettingChecks.map(([title, text], index) => ({ id: `hallbook-vetting-${index}`, title: `How Hallbook skills are vetted: ${title}`, text, href: "/hallbook#vetting" })),
   { id: "hallbook-results", title: hallbookCopy.benchmark.question, text: `${hallbookCopy.benchmark.question} ${hallbookCopy.benchmark.body} ${hallbookCopy.benchmark.marked}`, href: "/hallbook#receipts" },
@@ -111,9 +111,11 @@ export function normalizeProductName(question: string): string {
   return question.replace(/[A-Za-z]{7,10}/g, (word) => (word.toLowerCase() !== "aletheore" && editDistance(word.toLowerCase(), "aletheore") <= 2 ? "Aletheore" : word));
 }
 // The few chat shorthands that are unambiguous in this context. Whole words only, so nothing inside another word changes.
-const SHORTHAND: Record<string, string> = { wat: "what", wht: "what", hw: "how", pls: "please", plz: "please", abt: "about", ur: "your", dos: "does" };
+// "dos", "hw" and "ur" are left alone on purpose: DOS, hardware and Ur are real words in this domain.
+const SHORTHAND: Record<string, string> = { wat: "what", wht: "what", pls: "please", plz: "please", abt: "about" };
 export function normalizeQuestion(question: string): string {
-  return normalizeProductName(question.replace(/\b[A-Za-z]{2,3}\b/g, (word) => SHORTHAND[word.toLowerCase()] ?? word));
+  return normalizeProductName(// Not when part of a filename or path (".wat" is a WebAssembly text file).
+    question.replace(/(?<![\w./-])[A-Za-z]{2,3}(?![\w./-])/g, (word) => SHORTHAND[word.toLowerCase()] ?? word));
 }
 export function retrieve(question: string, history: readonly string[] = []): Fact[] {
   const raw = wordsOf(question);
