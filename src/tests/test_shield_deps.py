@@ -664,8 +664,11 @@ def test_npm_dependencies_from_paths_or_git_and_aliases_are_not_registry_names(t
     for name in deps:
         lock["packages"][f"node_modules/{name}"] = {"version": "1.0.0"}
     _write(repo, "package-lock.json", json.dumps(lock))
-    refs, _ = added_dependencies(repo)
+    refs, not_checked = added_dependencies(repo)
     assert refs == [DepRef("npm", "@acme/real-name", "manifest", "package.json")]
+    # A git host or URL is not a registry package: said to be unchecked, never silently skipped.
+    assert {n.name for n in not_checked} == {"gitlib", "tarlib"}
+    assert all("not from the npm registry" in n.reason for n in not_checked)
 
 
 def test_an_ignored_corrupt_pins_cache_is_explained_on_stderr_when_debugging(tmp_path, monkeypatch, capsys):
@@ -679,3 +682,45 @@ def test_an_ignored_corrupt_pins_cache_is_explained_on_stderr_when_debugging(tmp
     out, err = capsys.readouterr()
     assert [r.name for r in refs] == ["fastjsonx"] and out == ""
     assert "aletheore shield: ignoring an unreadable pins cache: JSONDecodeError" in err
+
+
+@pytest.mark.parametrize("spec", ["~1.0.0", "~1.0", "^1", "1.x", ">=1 <2", "latest", "*"])
+def test_npm_registry_version_ranges_are_checked(tmp_path, spec):
+    repo = _init(tmp_path / "r", {"package.json": json.dumps({"name": "p"})})
+    _write(repo, "package.json", json.dumps({"name": "p", "dependencies": {"zzq-new": spec}}))
+    refs, not_checked = added_dependencies(repo)
+    assert refs == [DepRef("npm", "zzq-new", "manifest", "package.json")] and not_checked == []
+
+
+@pytest.mark.parametrize(
+    "spec", ["file:../x", "link:../x", "workspace:*", "portal:../x", "./x", "../x", "~/x", "/abs/x", "C:\\x"]
+)
+def test_npm_path_specs_are_local(tmp_path, spec):
+    repo = _init(tmp_path / "r", {"package.json": json.dumps({"name": "p"})})
+    _write(repo, "package.json", json.dumps({"name": "p", "dependencies": {"zzq-local": spec}}))
+    assert added_dependencies(repo) == ([], [])
+
+
+@pytest.mark.parametrize("spec", ["github:evil/repo", "evil/repo", "evil/repo#v1", "git+https://x.example/r.git",
+                                  "git@github.com:evil/repo.git", "https://x.example/r.tgz"])
+def test_npm_git_and_url_specs_are_reported_as_not_checked(tmp_path, spec):
+    repo = _init(tmp_path / "r", {"package.json": json.dumps({"name": "p"})})
+    _write(repo, "package.json", json.dumps({"name": "p", "dependencies": {"zzq-remote": spec}}))
+    refs, not_checked = added_dependencies(repo)
+    assert refs == [] and [n.name for n in not_checked] == ["zzq-remote"]
+
+
+def test_changing_an_npm_alias_target_is_a_new_dependency_of_the_new_target(tmp_path):
+    lock = {"name": "p", "lockfileVersion": 3, "packages": {"": {"name": "p"}, "node_modules/short": {"version": "1.0.0"}}}
+    repo = _init(tmp_path / "r", {
+        "package.json": json.dumps({"name": "p", "dependencies": {"short": "npm:@acme/real@^1"}}),
+        "package-lock.json": json.dumps(lock),
+    })
+    _write(repo, "package.json", json.dumps({"name": "p", "dependencies": {"short": "npm:@evil/real@^1"}}))
+    lock["packages"]["node_modules/short"] = {"version": "1.0.1"}
+    _write(repo, "package-lock.json", json.dumps(lock))
+    refs, _ = added_dependencies(repo)
+    assert refs == [DepRef("npm", "@evil/real", "manifest", "package.json")]
+    # The same target as before is not new.
+    _write(repo, "package.json", json.dumps({"name": "p", "dependencies": {"short": "npm:@acme/real@^1.1"}}))
+    assert added_dependencies(repo)[0] == []

@@ -367,6 +367,7 @@ class _Facts:
     aliases: set[str]
     private: dict[str, str]  # ecosystem -> reason
     npm_alias: dict[str, str] = field(default_factory=dict)  # "short": "npm:@acme/real@^1" -> short: @acme/real
+    npm_remote: set[str] = field(default_factory=set)  # git host or URL specs: not registry packages
 
 
 def _gather(repo: Path, working: list[str]) -> _Facts:
@@ -394,7 +395,7 @@ def _gather(repo: Path, working: list[str]) -> _Facts:
             for key in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
                 section = data.get(key)
                 if isinstance(section, dict):
-                    facts.declared_npm.update(n.lower() for n in section)
+                    facts.declared_npm.update(n.lower() for n in section if isinstance(n, str))
                     _npm_specs(section, facts)
         elif name == "pyproject.toml" and not skipped:
             _collect_pyproject(_toml(_read(repo, rel)), facts, rel, pip_hits)
@@ -423,25 +424,101 @@ def _gather(repo: Path, working: list[str]) -> _Facts:
 
 
 # Version specs that do not name a registry package: a path, a link, a workspace, a git host or a tarball URL.
-_NPM_NOT_REGISTRY = re.compile(r"^(?:file:|link:|workspace:|portal:|patch:|git[+:]|github:|gitlab:|bitbucket:|gist:"
-                               r"|https?:|[\w.-]+/[\w.-]+(?:#.*)?$|[./~])")
+# Version specs that do not name a registry package. A path (only "./", "../", "~/", "/" or a drive: "~1.0.0" is a
+# version range), a link or a workspace is local. A git host, "user/repo" shorthand or a URL is remote: not from the
+# registry, so it is reported as not checked rather than looked up.
+_NPM_LOCAL = re.compile(r"^(?:file:|link:|workspace:|portal:|patch:|\.{1,2}(?:/|\\|$)|~[/\\]|/|\\|[A-Za-z]:[/\\])")
+_NPM_REMOTE = re.compile(r"^(?:git[+:]|git@|github:|gitlab:|bitbucket:|gist:|https?:|[\w.-]+/[\w.-]+(?:#.*)?$)")
+_NPM_SECTIONS = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+
+
+def _npm_spec_kind(spec: str) -> tuple[str, str]:
+    """("alias", real name) | ("local", "") | ("remote", "") | ("registry", "") for a package.json version spec."""
+    spec = spec.strip()
+    if spec.startswith("npm:"):
+        target = spec[4:]
+        at = target.find("@", 1)  # the version separator; a scoped name starts with its own "@"
+        return ("alias", target[:at] if at > 0 else target) if target else ("registry", "")
+    if _NPM_LOCAL.match(spec):
+        return "local", ""
+    if _NPM_REMOTE.match(spec):
+        return "remote", ""
+    return "registry", ""
+
+
+def _npm_entries(data: dict) -> dict[str, str]:
+    """{name: spec} of every dependency section of one package.json."""
+    found: dict[str, str] = {}
+    for key in _NPM_SECTIONS:
+        section = data.get(key)
+        if isinstance(section, dict):
+            found.update({n: v for n, v in section.items() if isinstance(n, str) and isinstance(v, str)})
+    return found
 
 
 def _npm_specs(section: dict, facts: _Facts) -> None:
     """package.json entries that are not the registry package of that name: an `npm:` alias names the real package
-    (`"short": "npm:@acme/real@^1"`); a path, link, workspace, git or URL spec is local and never looked up."""
+    (`"short": "npm:@acme/real@^1"`); a path, link or workspace spec is local; a git or URL spec is remote. None of
+    them is looked up under its own name."""
     for name, spec in section.items():
         if not isinstance(name, str) or not isinstance(spec, str):
             continue
-        spec = spec.strip()
-        if spec.startswith("npm:"):
-            target = spec[4:]
-            at = target.find("@", 1)  # the version separator; a scoped name starts with its own "@"
-            target = target[:at] if at > 0 else target
-            if target:
-                facts.npm_alias[name.lower()] = target
-        elif _NPM_NOT_REGISTRY.match(spec):
+        kind, target = _npm_spec_kind(spec)
+        if kind == "alias":
+            facts.npm_alias[name.lower()] = target
+        elif kind == "local":
             facts.local_npm.add(name.lower())
+        elif kind == "remote":
+            facts.npm_remote.add(name.lower())
+
+
+REMOTE_NPM_REASON = "a git or URL dependency, not from the npm registry, so it was not checked"
+
+
+def _package_json_changes(
+    repo: Path, change: "_changes.ChangeSet", patterns: list[str], known: set, local: set[str], budget: Budget
+) -> tuple[list[DepRef], list[NotChecked]]:
+    """Dependencies a changed package.json declares now and did not declare at the base, read from the file itself
+    (a lock file may be missing, stale, or list an alias under its local name):
+
+    - a registry entry is new when its name was not declared there before and is not a known base pin;
+    - an `npm:` alias is new when it points to another package than before (checked under the real name);
+    - a git or URL entry that is new or changed is reported as not checked; path, link and workspace entries are
+      local."""
+    rels = [rel for rel in change.present_changed if _name(rel) == "package.json" and _counted_manifest(rel, patterns)]
+    if not rels:
+        return [], []
+    base: dict[str, bytes] = {}
+    if change.has_base:
+        untracked = set(change.untracked)
+        asked = {f"{change.base_commit}:{rel}": rel for rel in rels if rel not in untracked}
+        found = cat_file_batch(repo, list(asked), timeout=budget.timeout(_GIT_TIMEOUT_S)) if asked else {}
+        if found is None:
+            return [], []  # the caller already reports the base as unknown when git fails
+        base = {asked[name]: data for name, data in found.items()}
+    refs: list[DepRef] = []
+    not_checked: list[NotChecked] = []
+    for rel in rels:
+        now = _npm_entries(_json(_read(repo, rel)))
+        before = _npm_entries(_json(base[rel].decode("utf-8", "replace"))) if rel in base else {}
+        for name, spec in now.items():
+            kind, target = _npm_spec_kind(spec)
+            old = before.get(name)
+            if kind == "local" or (kind == "registry" and name.lower() in local):  # a workspace package
+                continue
+            if kind == "remote":
+                if old is None or old.strip() != spec.strip():
+                    not_checked.append(NotChecked(name, REMOTE_NPM_REASON))
+                continue
+            real = target if kind == "alias" else name
+            if old is not None:
+                old_kind, old_target = _npm_spec_kind(old)
+                if (old_target if old_kind == "alias" else name) == real:
+                    continue  # the same package as before, perhaps another version
+            if ("npm", real.lower()) in known:
+                continue
+            refs.append(DepRef("npm", real, "manifest", rel))
+    return refs, not_checked
 
 
 def _npmrc_private(text: str) -> bool:
@@ -722,8 +799,14 @@ def added_dependencies(
     pins_now: list = []
     owners_by_pin: dict = {}
     base_pins: list = []
+    npm_refs: list[DepRef] = []
     if any(_is_manifest(rel) and not _skipped_dir(rel) for rel in change.changed):
-        pins_now, owners_by_pin, base_pins, _complete = _manifest_pins(repo, change, working, budget, not_checked)
+        pins_now, owners_by_pin, base_pins, complete = _manifest_pins(repo, change, working, budget, not_checked)
+        if complete:
+            base_known = {(eco, _norm(eco, name)) for name, _v, eco in base_pins}
+            npm_refs, remote = _package_json_changes(
+                repo, change, _ignored_patterns(repo), base_known, facts.local_npm, budget)
+            not_checked.extend(remote)
     # With no manifest in the change, import-only additions are judged against the names the manifests in the
     # working tree declare (read directly by _declared_python_names and _gather), not against parsed pins.
     known = {(eco, _norm(eco, name)) for name, _v, eco in base_pins}
@@ -745,16 +828,16 @@ def added_dependencies(
             # Lock files list transitive packages; only names a package.json declares count.
             if key[1] not in facts.declared_npm or key[1] in facts.local_npm:
                 continue
-            if key[1] in facts.npm_alias:  # installed under another name: the registry package is the real one
-                name = facts.npm_alias[key[1]]
-                key = (eco, name.lower())
-                if key in known:
-                    continue
+            if key[1] in facts.npm_alias or key[1] in facts.npm_remote:
+                continue  # not the registry package of that name: _package_json_changes judges these entries
         else:
             unsupported.setdefault(eco, []).append(name)
             continue
         candidates.setdefault(key, DepRef(eco, key[1] if eco == "PyPI" else name, "manifest",
                                           _manifest_where(repo, owners_by_pin.get(pin, ["."]), eco, name)))
+
+    for ref in npm_refs:
+        candidates.setdefault(("npm", ref.name.lower()), ref)
 
     for eco, names in unsupported.items():
         label = _ECOSYSTEM_LABEL.get(eco, eco)
