@@ -731,3 +731,23 @@ def test_editable_requirement_lines_declare_their_egg_name(tmp_path):
             "--editable=git+https://x.example/qux.git#egg=qux&subdirectory=src\n-e ./local\n-r other.txt\n")
     repo = _init(tmp_path / "r", {"requirements.txt": reqs, "app.py": "x = 1\n"})
     assert _deps._declared_python_names(repo, ["requirements.txt"]) == {"foo", "baz", "qux"}
+
+
+@pytest.mark.parametrize(
+    "source,expected",
+    [
+        # A backtick inside a regex after `if (...)` / `}`, or in JSX text, must not hide later imports.
+        ("if (x) /`/.test(s);\nimport a from 'afterregex';\n", {"afterregex"}),
+        ("function f(){}\n/`/.test(s);\nimport b from 'afterbrace';\n", {"afterbrace"}),
+        ("const C = () => <code>`</code>;\nimport d from 'afterjsxtick';\n", {"afterjsxtick"}),
+        ("while (ok) /'/.exec(s);\nconst e = require('afterwhile');\n", {"afterwhile"}),
+        # Division after a call's closing parenthesis is still division.
+        ("const r = f(a) / 2 / g(b); import k from 'afterdiv2';\n", {"afterdiv2"}),
+        # Member calls are not module imports.
+        ("loader.import('memberpkg'); obj.require('memreq'); a?.require('optreq');\n", set()),
+        # A real template literal still hides its text.
+        ("const t = `import x from 'intmpl'`;\nimport y from 'outside';\n", {"outside"}),
+    ],
+)
+def test_js_imports_are_not_hidden_by_stray_backticks_or_found_in_member_calls(source, expected):
+    assert _imports.js_imports(source) == expected

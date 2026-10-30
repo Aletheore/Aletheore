@@ -123,10 +123,15 @@ _JS_REGEX_AFTER_WORDS = frozenset(
     "return typeof instanceof in of new delete void throw case do else yield await".split()
 )
 _STRING, _NAME, _PUNCT = "s", "n", "p"
+_CONTROL_WORDS = frozenset((_NAME, word) for word in ("if", "while", "for", "with"))
 
 
-def _template(text: str, position: int) -> tuple[int, bool, str]:
-    """Scan a template literal from just after its opening backtick: (end position, ends at a `${`, its raw text)."""
+def _template(text: str, position: int, last_tick: int) -> tuple[int, bool, str] | None:
+    """Scan a template literal from just after its opening backtick: (end position, ends at a `${`, its raw text).
+    None when it never ends: no closing backtick and no `${` before the end of the file. `last_tick` is the position
+    of the file's last backtick, so a template opened after it is known to be unclosed without scanning."""
+    if position > last_tick and text.find("${", position) < 0:
+        return None
     start = position
     while position < len(text):
         char = text[position]
@@ -138,7 +143,7 @@ def _template(text: str, position: int) -> tuple[int, bool, str]:
             return position + 2, True, text[start:position]
         else:
             position += 1
-    return position, False, text[start:]
+    return None
 
 
 def _js_tokens(text: str) -> list[tuple[str, str]]:
@@ -146,6 +151,9 @@ def _js_tokens(text: str) -> list[tuple[str, str]]:
     dropped (a template with no substitution is a string token, like a quoted one). Never raises."""
     tokens: list[tuple[str, str]] = []
     braces: list[int] = []  # for each open `${`, the depth of plain braces inside it
+    parens: list[bool] = []  # for each open "(", whether it is the condition of if/while/for/with
+    control_closes: set[int] = set()  # token indexes of ")" that close such a condition: a "/" after one is a regex
+    last_tick = text.rfind("`")
     position = 0
     while position < len(text):
         match = _JS_TOKEN.match(text, position)
@@ -165,9 +173,17 @@ def _js_tokens(text: str) -> list[tuple[str, str]]:
             tokens.append((_NAME, value))
             continue
         if value == "`" or (value == "}" and braces and braces[-1] == 0):
+            scanned = _template(text, position, last_tick)
+            if scanned is None:
+                if value == "`":
+                    # A backtick that opens nothing that ever closes is not a template: most likely one inside a
+                    # regex or JSX text the tokenizer could not tell apart. Read on as code, so it hides nothing.
+                    tokens.append((_PUNCT, "`"))
+                    continue
+                scanned = (len(text), False, text[position:])
             if value == "}":
                 braces.pop()  # end of a `${...}`: back inside the template
-            position, opened, raw = _template(text, position)
+            position, opened, raw = scanned
             if opened:
                 braces.append(0)
                 tokens.append((_PUNCT, "`"))  # a template is a value, but its text is never a specifier
@@ -180,11 +196,18 @@ def _js_tokens(text: str) -> list[tuple[str, str]]:
             braces[-1] += 1
         elif value == "}" and braces:
             braces[-1] -= 1
+        elif value == "(":
+            parens.append(bool(tokens) and tokens[-1] in _CONTROL_WORDS)
+        elif value == ")" and parens and parens.pop():
+            control_closes.add(len(tokens))
         if value == "/":
             previous = tokens[-1] if tokens else None
-            regex_allowed = previous is None or (
-                previous[0] == _PUNCT and previous[1] not in (")", "]", "}", "0", "`")
-            ) or (previous[0] == _NAME and previous[1] in _JS_REGEX_AFTER_WORDS)
+            regex_allowed = (
+                previous is None
+                or (previous[0] == _PUNCT and previous[1] not in (")", "]", "}", "0", "`"))
+                or (previous[0] == _NAME and previous[1] in _JS_REGEX_AFTER_WORDS)
+                or len(tokens) - 1 in control_closes  # if (...) /re/
+            )
             if regex_allowed:
                 body = _JS_REGEX_BODY.match(text, position)
                 if body is not None:
@@ -223,8 +246,8 @@ def _from_specifier(tokens: list[tuple[str, str]], start: int) -> str | None:
 
 def _js_specifiers(tokens: list[tuple[str, str]]):
     for index, (kind, value) in enumerate(tokens):
-        if kind != _NAME:
-            continue
+        if kind != _NAME or (index and tokens[index - 1] == (_PUNCT, ".")):
+            continue  # obj.require("x") / loader.import("x") are method calls, not module imports
         following = tokens[index + 1 : index + 4]
         call = (
             len(following) >= 3 and following[0] == (_PUNCT, "(") and following[1][0] == _STRING
