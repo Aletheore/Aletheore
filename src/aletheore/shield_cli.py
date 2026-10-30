@@ -27,7 +27,11 @@ if TYPE_CHECKING:
 # as `module.name` at call time, so patching the name on its own module works.
 
 shield_app = typer.Typer(
-    help="a local safety net for AI-written changes: guard, undo, receipts",
+    short_help="the local safety net for AI-written changes: setup, status, undo, off, check",
+    help=(
+        "A local safety net for AI-written changes: guard, undo, receipts. On its own, `aletheore shield` is "
+        "shorthand for `shield setup` until Shield is on here, and for `shield status` after that."
+    ),
     invoke_without_command=True,
     no_args_is_help=False,
 )
@@ -237,8 +241,7 @@ def shield(
     path: Path = typer.Option(None, "--path", help="repository (default: current directory)"),
     yes: bool = typer.Option(False, "--yes", help="set up without asking"),
 ) -> None:
-    """A local safety net for AI-written changes: guard, undo, receipts. On its own, `aletheore shield` is
-    shorthand for `shield setup` until Shield is on here, and for `shield status` after that."""
+    """Group options; with no subcommand, set up (Shield off) or show status (Shield on). Help is the Typer's."""
     ctx.obj = {"path": path, "yes": yes}
     if ctx.invoked_subcommand is not None:
         return
@@ -314,7 +317,7 @@ def _setup(repo: Path, yes: bool, *, already_on: bool = False) -> None:
         if str(exc) == setup.PLAN_CHANGED:
             raise _fail(
                 "Files changed while you were reading the plan; nothing was written. "
-                "Run `aletheore shield` again."
+                "Run `aletheore shield setup` again."
             )
         raise _fail(f"Shield setup failed and was rolled back: {_safe(exc) or 'ValueError'}")
     except Exception as exc:  # noqa: BLE001 - apply_setup rolls itself back; the user needs a sentence, not a trace

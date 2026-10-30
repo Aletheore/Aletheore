@@ -717,6 +717,18 @@ def test_shield_help_lists_setup_and_status():
     assert r.exit_code == 0
     for name in ("setup", "status", "undo", "off", "check"):
         assert name in r.output
+    text = " ".join(r.output.split())
+    assert "shorthand for `shield setup` until Shield is on here, and for `shield status` after that" in text
+
+
+def test_plan_changed_while_reading_points_to_shield_setup(repo, monkeypatch):
+    def changed(*_args, **_kwargs):
+        raise ValueError(setup.PLAN_CHANGED)
+
+    monkeypatch.setattr(setup, "apply_setup", changed)
+    r = runner.invoke(app, ["shield", "setup", "--path", str(repo), "--yes"])
+    assert r.exit_code != 0
+    assert "Run `aletheore shield setup` again." in r.stderr
 
 
 # Shield modules that `import aletheore.cli` (so `aletheore --help`, `aletheore scan` and every other command) must
