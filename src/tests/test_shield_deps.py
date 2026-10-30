@@ -771,3 +771,10 @@ def test_installed_names_include_namespace_packages_by_their_dotted_name(monkeyp
     names = _deps._real_installed_import_names()
     assert {"google", "requests", "google.protobuf", "google.auth", "google.oauth2"} <= names
     assert not {n for n in names if "__" in n}
+
+
+@pytest.mark.parametrize("imp,declared", [("environ", "environ-config"), ("slugify", "awesome-slugify")])
+def test_more_alternative_providers_satisfy_an_import(imp, declared):
+    ref = _deps._import_ref(imp, "a.py", True, _deps._Facts(set(), set(), set(), set(), set(), {}),
+                            _deps._import_map(), set(), {_deps._norm_py(declared)}, set())
+    assert ref is None

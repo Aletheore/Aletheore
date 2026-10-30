@@ -80,7 +80,10 @@
  "docx": "python-docx",
  "dotenv": "python-dotenv",
  "engineio": "python-engineio",
- "environ": "django-environ",
+ "environ": [
+  "django-environ",
+  "environ-config"
+ ],
  "fabric": "fabric",
  "faiss": [
   "faiss-cpu",
@@ -226,7 +229,10 @@
  "skimage": "scikit-image",
  "sklearn": "scikit-learn",
  "slack_sdk": "slack-sdk",
- "slugify": "python-slugify",
+ "slugify": [
+  "python-slugify",
+  "awesome-slugify"
+ ],
  "snappy": "python-snappy",
  "sniffio": "sniffio",
  "socketio": "python-socketio",
