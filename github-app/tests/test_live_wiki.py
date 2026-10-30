@@ -1213,6 +1213,41 @@ def test_file_page_repo_context_trim_keeps_a_section_that_still_has_a_relevant_e
     }
 
 
+def test_file_page_repo_context_trim_drops_the_total_of_a_list_it_trimmed_away(monkeypatch):
+    monkeypatch.delenv("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", raising=False)
+    from scan_worker.live_wiki import _trim_file_page_repo_context
+
+    context = {
+        "database_schema": {
+            "tables": [{"name": "far", "file": "far/away.py"}],
+            "relations": [{"from_table": "mine", "file": "pkg0/mod.py"}],
+            "tables_total_count": 40,
+            "relations_total_count": 12,
+        },
+    }
+
+    trimmed = _trim_file_page_repo_context(context, [{"path": "pkg0/mod.py", "imports": [], "imported_by": []}])
+
+    # The tables are gone, so their total must not be left behind describing nothing.
+    assert trimmed == {
+        "database_schema": {
+            "relations": [{"from_table": "mine", "file": "pkg0/mod.py"}],
+            "relations_total_count": 12,
+        }
+    }
+
+
+def test_file_page_repo_context_trim_tolerates_an_item_without_a_path(monkeypatch):
+    monkeypatch.delenv("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", raising=False)
+    from scan_worker.live_wiki import _trim_file_page_repo_context
+
+    context = {"api_endpoints": [{"file": "pkg1/mod.py"}, {"file": "far/away.py"}]}
+
+    trimmed = _trim_file_page_repo_context(context, [{"imports": ["pkg1/mod.py"]}])
+
+    assert trimmed == {"api_endpoints": [{"file": "pkg1/mod.py"}]}
+
+
 def test_file_page_repo_context_trim_returns_none_when_nothing_relevant_remains(monkeypatch):
     monkeypatch.delenv("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", raising=False)
     from scan_worker.live_wiki import _trim_file_page_repo_context

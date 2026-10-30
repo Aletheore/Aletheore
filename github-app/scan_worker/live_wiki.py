@@ -1778,7 +1778,8 @@ def _trim_file_page_repo_context(repo_context: dict | None, request_items: list[
 
     relevant: set[str] = set()
     for item in request_items:
-        relevant.add(item["path"])
+        if item.get("path"):
+            relevant.add(item["path"])
         relevant.update(item.get("imports") or [])
         relevant.update(item.get("imported_by") or [])
 
@@ -1798,14 +1799,18 @@ def _trim_file_page_repo_context(repo_context: dict | None, request_items: list[
             kept = [trim(v) for v in value if keep(v)]
             return dropped if value and not kept else kept
         if isinstance(value, dict):
-            out, emptied = {}, False
+            out, dropped_keys = {}, []
             for k, v in value.items():
                 trimmed = trim(v)
                 if trimmed is dropped:
-                    emptied = True
+                    dropped_keys.append(k)
                 else:
                     out[k] = trimmed
-            if emptied and not any(isinstance(v, (list, dict)) and v for v in out.values()):
+            # build_repo_context names a truncated list's real total
+            # `<list>_total_count`; with the list gone the total is an orphan.
+            for k in dropped_keys:
+                out.pop(f"{k}_total_count", None)
+            if dropped_keys and not any(isinstance(v, (list, dict)) and v for v in out.values()):
                 return dropped
             return out
         return value
