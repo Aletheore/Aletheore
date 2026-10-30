@@ -269,3 +269,46 @@ def test_save_config_failure_keeps_the_old_file_and_no_temporary(tmp_path, monke
         state.save_config(tmp_path, state.ShieldConfig(registry_lookups=True))
     assert state.load_config(tmp_path).registry_lookups is False
     assert [p.name for p in state.shield_dir(tmp_path).iterdir()] == ["config.json"]
+
+
+def test_a_real_git_exit_124_is_not_a_timeout(tmp_path):
+    result = gitutil.run_git(tmp_path, "-c", "alias.x=!exit 124", "x")
+    assert result.returncode == 124
+    assert result.timed_out is False and result.spawn_failed is False
+
+
+def test_run_git_flags_say_timed_out_and_spawn_failed(tmp_path, monkeypatch):
+    def timeout(*a, **k):
+        raise subprocess.TimeoutExpired("git", 0.01)
+
+    monkeypatch.setattr(gitutil.subprocess, "run", timeout)
+    result = gitutil.run_git(tmp_path, "status", timeout=0.01)
+    assert result.timed_out is True and result.spawn_failed is False and result.returncode != 0
+    assert "did not answer in time" in gitutil.repo_state(tmp_path).reason
+
+    def missing(*a, **k):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(gitutil.subprocess, "run", missing)
+    result = gitutil.run_git(tmp_path, "status")
+    assert result.spawn_failed is True and result.timed_out is False and result.returncode != 0
+    assert gitutil.repo_state(tmp_path).reason == "git was not found or could not be started"
+
+    def not_on_path():
+        raise FileNotFoundError("git was not found on PATH")
+
+    monkeypatch.setattr(gitutil, "git_executable", not_on_path)
+    result = gitutil.run_git(tmp_path, "status")
+    assert result.spawn_failed is True and result.returncode != 0
+    assert gitutil.repo_state(tmp_path).reason == "git was not found or could not be started"
+
+
+def test_repo_state_with_a_git_that_exits_124_is_not_reported_as_slow(tmp_path, monkeypatch):
+    real = gitutil.run_git
+
+    def exits_124(repo, *args, **kwargs):
+        return real(repo, "-c", "alias.x=!exit 124", "x")
+
+    monkeypatch.setattr(gitutil, "run_git", exits_124)
+    state_ = gitutil.repo_state(tmp_path)
+    assert state_.ok is False and "in time" not in state_.reason
