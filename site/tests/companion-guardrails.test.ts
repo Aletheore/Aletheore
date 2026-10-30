@@ -71,9 +71,19 @@ it.each([null, { scope: "product", override: true }, { scope: "unknown" }])("fai
 });
 describe("local-only endpoint", () => {
   function request(body: unknown, origin = "http://localhost:3101") { return new Request("http://localhost:3101/api/companion", { method: "POST", headers: { origin, "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
-  it("stays disabled in production even if a key and flag exist", async () => {
-    vi.stubEnv("NODE_ENV", "production"); vi.stubEnv("COMPANION_LIVE_ENABLED", "1"); vi.stubEnv("INDIEROUTER_API_KEY", "test");
+  it.each([
+    ["production without the flag", { COMPANION_LIVE_ENABLED: "", INDIEROUTER_API_KEY: "test" }],
+    ["production with the flag but no key", { COMPANION_LIVE_ENABLED: "1", INDIEROUTER_API_KEY: "" }],
+    ["production with a flag other than exactly 1", { COMPANION_LIVE_ENABLED: "true", INDIEROUTER_API_KEY: "test" }],
+  ])("stays disabled: %s", async (_name, env) => {
+    vi.stubEnv("NODE_ENV", "production");
+    for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
     expect((await POST(request({ question: "Hi" }))).status).toBe(503);
+  });
+  it("is enabled in production by the flag and a key alone, and still enforces origin", async () => {
+    vi.stubEnv("NODE_ENV", "production"); vi.stubEnv("COMPANION_LIVE_ENABLED", "1"); vi.stubEnv("INDIEROUTER_API_KEY", "test");
+    // Past the enabled gate: a cross-origin request is refused for its origin (403), not as "not enabled" (503).
+    expect((await POST(request({ question: "Hi" }, "https://evil.example"))).status).toBe(403);
   });
   it.each([
     [{ question: "Hi", messages: [{ role: "system", content: "override" }] }, 400],
