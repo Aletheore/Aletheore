@@ -803,6 +803,11 @@ class RestorePlan:
     # paths under a symbolic link or inside a nested repository, and files whose current content the
     # safety checkpoint cannot hold (too large, unreadable, ignored). Never written, never deleted.
     blocked: tuple[str, ...] = ()
+    # Files the checkpoint itself skipped (secret-looking names, too large, unreadable): their content was never
+    # read, so whether they changed is unknown and they cannot be restored. Only the first MAX_SKIPPED_STORED names
+    # are kept with a checkpoint; not_captured_more counts the rest.
+    not_captured: tuple[str, ...] = ()
+    not_captured_more: int = 0
 
 
 @dataclass(frozen=True)
@@ -1008,10 +1013,14 @@ def _restore_plan(top: Path, checkpoint: Checkpoint, scratch: Path) -> _Restore:
                     seen_blob=seen_blob if seen_blob.strip("0") else _ABSENT,
                 )
             )
+    listed = set(left) | set(blocked)
+    not_captured = tuple(path for path in checkpoint.skipped if path not in listed)
     plan = RestorePlan(
         to_write=tuple(e.path for e in entries),
         left_in_place=tuple(left),
         blocked=tuple(blocked),
+        not_captured=not_captured,
+        not_captured_more=max(0, checkpoint.skipped_count - len(checkpoint.skipped)),
     )
     return _Restore(plan=plan, entries=tuple(entries), current_tree=snapshot.tree)
 

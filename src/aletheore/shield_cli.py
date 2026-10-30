@@ -395,8 +395,19 @@ def undo(
         _out(f"  {_plural(len(plan.blocked), 'file')} left untouched because restoring is not safe:")
         for name in plan.blocked[:10]:
             _out(f"    {_safe(name)}")
+    not_captured = len(plan.not_captured) + plan.not_captured_more
+    if not_captured:
+        # Their content was never read (secret-looking names, size caps), so whether they changed is unknown.
+        _out(f"  {_plural(not_captured, 'file')} not captured by the checkpoint, cannot be restored:")
+        for name in plan.not_captured[:10]:
+            _out(f"    {_safe(name)}")
+        if not_captured > 10:
+            _out(f"    ... and {not_captured - 10} more")
     if not plan.to_write:
-        _out("Nothing to restore; the files already match.")
+        if plan.blocked or not_captured:
+            _out("Nothing restorable differs; the files listed above were left as they are.")
+        else:
+            _out("Nothing to restore; the files already match.")
         raise typer.Exit(0)
     if not yes and not _interactive():
         raise _fail("Nothing was changed. Run in a terminal or pass --yes to restore.")

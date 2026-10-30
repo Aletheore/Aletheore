@@ -870,3 +870,18 @@ def test_off_lists_a_hook_it_only_edited_under_entries_removed(repo):
     sections = _off_sections(r.stdout)
     assert ".git/hooks/pre-commit" in sections["Removed Shield's entries from"]
     assert ".claude/settings.local.json" in sections["Removed"]
+
+
+def test_undo_never_says_nothing_to_restore_when_the_checkpoint_skipped_files(repo, monkeypatch):
+    (repo / "prod.env").write_text("LOG=1\n", encoding="utf-8")
+    made = cp.take_checkpoint(repo, "s1", force=True)
+    assert made is not None and "prod.env" in made.skipped
+    (repo / "prod.env").write_text("LOG=2\n", encoding="utf-8")  # the only change is to a file never captured
+    plan = cp.plan_restore(repo, made)
+    assert plan.to_write == () and plan.not_captured == ("prod.env",)
+    monkeypatch.setattr(shield_cli, "_interactive", lambda: False)
+    r = runner.invoke(app, ["shield", "undo", made.ref, "--yes", "--path", str(repo)])
+    assert r.exit_code == 0, r.output
+    assert "Nothing to restore" not in r.output and "already match" not in r.output
+    assert "1 file not captured by the checkpoint, cannot be restored:" in r.output and "prod.env" in r.output
+    assert (repo / "prod.env").read_text(encoding="utf-8") == "LOG=2\n"
