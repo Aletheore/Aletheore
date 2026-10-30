@@ -22,6 +22,18 @@ def test_job_temp_dirs_and_their_root_are_owner_only(tmp_path, monkeypatch):
     assert stat.S_IMODE(job_dir.stat().st_mode) == 0o700
 
 
+def test_the_default_scratch_root_is_under_the_system_temp_dir():
+    # Built from tempfile instead of a hardcoded "/tmp/..." string (bandit B108). In the worker container the
+    # system temp dir is /tmp, so the default location is unchanged.
+    import tempfile
+    from pathlib import Path
+
+    from scan_worker.jobs import _FALLBACK_JOBS_ROOT, _default_jobs_root
+
+    assert _default_jobs_root() == Path(tempfile.gettempdir()) / "aletheore-jobs"
+    assert _FALLBACK_JOBS_ROOT == _default_jobs_root()
+
+
 def test_job_temp_dir_falls_back_to_tmp_when_the_scratch_volume_is_not_writable(tmp_path, monkeypatch, caplog):
     # A host directory that the unprivileged container user cannot write to must degrade to the old behaviour
     # (small repos keep working) rather than failing every scan job with PermissionError.
