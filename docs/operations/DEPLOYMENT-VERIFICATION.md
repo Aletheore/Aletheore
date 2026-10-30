@@ -4,8 +4,39 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-29
-**Snapshot Freshness:** CURRENT as of 2026-10-29 - all six app services (`app-server`, both scan workers,
+**Last Updated:** 2026-10-30
+**Snapshot Freshness:** CURRENT as of 2026-10-30 - the four services that import `scan_worker/jobs.py` (both scan
+workers, `health-worker` and `scheduler`) run `master` at commit `ecea6f08` (tag `github-app-deploy-2026-10-30`), and the
+server checkout is at the same commit. `app-server` and `jina-embed` were not rebuilt for this commit and keep the
+`5f279db3` images; `postgres`, `redis`, `caddy` and `autoheal` were not touched. Three commits since the previous deploy
+(`5f279db3`): #1163 (docs and the Redis backup script), #1164 (test-only) and #1166. No migration, and no change to
+`docker-compose.yml`, any Dockerfile or any lockfile. Both scan workers, `health-worker` and `scheduler` were rolled
+one at a time on 2026-10-30 (container start times 03:29 to 03:30 UTC).
+
+2026-10-30 deploy (`ecea6f08`, tag `github-app-deploy-2026-10-30`; `git log 5f279db3..ecea6f08` is the exact range):
+
+- **Companion budget alert (#1166):** the ops monitor emails the operator when the website companion's monthly spend
+  reaches 80% and 100% of its INR 500 cap (once per UTC month for each threshold), and alerts when the ledger is disabled
+  or unreadable (6 hour cooldown). It sends through the existing error alert path, so it reaches Sentry and the support
+  inbox. 11 tests in `github-app/tests/test_companion_budget_alert.py`.
+- **Tests (#1164):** the HTTP client, hosted embedder and scan-worker database tests use a module-local fake clock
+  instead of patching the shared `time` module, so stray threads cannot fail sleep assertions.
+- **Redis backup (#1163):** `github-app/scripts/backup-redis.sh` and the 2026-10-29 record below. The cron entry that runs
+  it daily at 03:15 is installed on the server.
+
+**Website companion (Theo) is enabled in production** as of this deploy window. Server side: `app-server` was restarted
+on 2026-10-29 at 18:09 UTC with a rotated `COMPANION_LIMIT_SERVICE_TOKEN` in the server `.env`, and the ledger was
+initialized once with `scripts/companion_limits.py initialize-first-use` (INR 20 a day, INR 500 a month). Website side:
+`COMPANION_LIVE_ENABLED=1`, the service URL, the service token, the HMAC secret and the provider key are set in the
+`aletheore-website` Production environment; the operator pasted the provider key in the Vercel dashboard themselves.
+`GET /v1/internal/companion-limits` now answers `405` (the route exists and accepts only authenticated `POST`), where it
+answered `404` before the token was configured. The 2026-10-29 note below that says it returns 404 describes the state
+before this activation.
+
+Verified over SSH and HTTPS on 2026-10-30: the server checkout is at `ecea6f08`; the app services show `healthy` in
+`docker ps`; `https://app.aletheore.com/healthz` returns 200; the nightly Redis backup cron entry is present.
+
+**Previous:** CURRENT as of 2026-10-29 - all six app services (`app-server`, both scan workers,
 `health-worker`, `scheduler` and `jina-embed`) run `master` at commit `5f279db3` (tag `github-app-deploy-2026-10-29`);
 `postgres`, `caddy` and `autoheal` were not touched, and `redis` was moved to a named volume with AOF persistence (below).
 Four PRs since the previous deploy (`31959d9e`): #1155, #1157, #1158 and #1159. No migration (newest applied row is still
