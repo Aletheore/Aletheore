@@ -483,6 +483,19 @@ def test_unchanged_import_in_a_file_whose_name_holds_a_newline_is_not_new(tmp_pa
     assert added_dependencies(repo) == ([], [])
 
 
+def test_a_symlinked_manifest_does_not_make_its_targets_dependencies_new(tmp_path):
+    repo = _init(tmp_path / "r", {"vendor/x/requirements.txt": "vendlib==1.0\n", "app/main.py": "x = 1\n"})
+    try:
+        os.symlink("../vendor/x/requirements.txt", repo / "app" / "requirements.txt")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks cannot be created here")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "link")
+    _write(repo, "app/pyproject.toml", "[project]\nname = 'app'\ndependencies = ['zzqnewlib>=1']\n")
+    refs, _ = added_dependencies(repo)
+    assert refs == [DepRef("PyPI", "zzqnewlib", "manifest", "app/pyproject.toml")]
+
+
 def test_deleted_source_and_manifest_files_are_handled(tmp_path):
     repo = _init(tmp_path / "r", {"a/requirements.txt": "x==1\n", "m.py": "import x\n", "keep.py": "y = 1\n"})
     (repo / "a" / "requirements.txt").unlink()

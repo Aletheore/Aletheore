@@ -49,6 +49,7 @@ PINS_CACHE_MAX_UNITS = 4000
 PINS_CACHE_MAX_BYTES = 16 * 1024 * 1024
 _PINS_CACHE_VERSION = 1
 STALE_TEMPORARY_S = 3600.0
+_SYMLINK_MODE = b"120000"
 _STATE_DIRNAME = "aletheore-shield"
 
 TIME_BUDGET_MANIFESTS = "time budget reached; new manifest dependencies were not compared with the base"
@@ -254,8 +255,8 @@ def _base_units(repo: Path, base_commit: str, patterns: list[str], budget: Budge
     for entry in listing.stdout.split(b"\0"):
         meta, tab, raw = entry.partition(b"\t")
         fields = meta.split(b" ")
-        if not tab or len(fields) != 3 or fields[1] != b"blob":
-            continue
+        if not tab or len(fields) != 3 or fields[1] != b"blob" or fields[0] == _SYMLINK_MODE:
+            continue  # a symbolic link's blob is its target path, not a manifest: left out on both sides
         rel = raw.decode("utf-8", "replace")
         if _counted_manifest(rel, patterns):
             folder, name = _unit_of(rel)
@@ -323,6 +324,8 @@ def _working_unit_pins(
             try:
                 for name in names_by_folder.get(folder, ()):
                     rel = name if folder == "." else f"{folder}/{name}"
+                    if os.path.islink(repo / rel):
+                        continue  # as on the base side: a linked manifest belongs to its target's folder
                     shutil.copyfile(repo / rel, unit / name)
                 found[folder] = pins_in_directory(unit)
             except Exception:  # noqa: BLE001
