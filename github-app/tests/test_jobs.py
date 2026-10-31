@@ -12986,15 +12986,18 @@ def test_cross_file_check_runs_for_is_off_unless_enabled_and_never_for_free_tier
 @pytest.mark.parametrize(
     "env_value,is_free_tier,expected",
     [
-        (None, False, False),       # off by default
-        ("off", False, False),
-        ("yes", False, False),      # only "on" enables it
+        (None, False, True),        # on by default for paid tiers
         ("on", False, True),
-        (" ON ", False, True),      # case and surrounding whitespace do not matter
-        ("on", True, False),        # never for free tier, even when enabled
+        ("yes", False, True),       # only the kill-switch values turn it off
+        ("off", False, False),
+        ("0", False, False),
+        (" FALSE ", False, False),  # case and surrounding whitespace do not matter
+        ("no", False, False),
+        (None, True, False),        # never for free tier
+        ("on", True, False),        # not even when set explicitly
     ],
 )
-def test_merge_repeats_for_is_off_unless_enabled_and_never_for_free_tier(monkeypatch, env_value, is_free_tier, expected):
+def test_merge_repeats_for_is_on_for_paid_tiers_unless_switched_off_and_never_for_free_tier(monkeypatch, env_value, is_free_tier, expected):
     from scan_worker.jobs import _merge_repeats_for
 
     if env_value is None:

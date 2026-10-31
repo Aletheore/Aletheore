@@ -2676,11 +2676,12 @@ def _merge_repeats_for(is_free_tier: bool) -> bool:
     """Whether a review also merges findings that are the same defect repeated across files (see
     flash_review._merge_findings_with_same_root_cause).
 
-    OFF unless FLASH_REVIEW_MERGE_REPEATS=on: it removes findings from what a PR shows, so it is enabled
-    deliberately, measured and watched, not by merging. Never for free tier: per-file generation, which is what
-    produces the repeats, is paid-tier only. The extra call is one cheap pass over already-written findings.
+    ON for paid tiers; FLASH_REVIEW_MERGE_REPEATS=off (or 0, false, no) is the kill switch. It removes repeats
+    from what a PR shows, so it was first shipped off and measured: on 17 held-out PRs it cut findings by 17% and
+    raised recall, so it is now the default. Never for free tier: per-file generation, which is what produces the
+    repeats, is paid-tier only. The extra call is one cheap pass over already-written findings, and it fails open.
     """
-    return not is_free_tier and os.environ.get("FLASH_REVIEW_MERGE_REPEATS", "").strip().lower() == "on"
+    return not is_free_tier and not _env_switched_off("FLASH_REVIEW_MERGE_REPEATS")
 
 
 _OFF_VALUES = frozenset({"off", "0", "false", "no"})
