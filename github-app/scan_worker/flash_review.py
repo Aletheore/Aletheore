@@ -763,10 +763,31 @@ def fetch_review_file_context(
     return file_contents
 
 
+_LOCALIZATION_SUFFIXES = (".properties", ".po", ".pot", ".xlf", ".xliff", ".strings", ".resx", ".arb")
+_LOCALIZATION_DIRS = frozenset({"locale", "locales", "i18n", "l10n", "translations", "lang", "languages"})
+_LOCALIZATION_DATA_SUFFIXES = (".json", ".yml", ".yaml", ".js", ".ts")
+
+
+def _is_localization_path(path: str) -> bool:
+    """A translation resource: a message-bundle file, or a data file under a locale/i18n directory.
+
+    Ranked after source code when a PR touches more files than the review covers (see
+    order_changed_files_by_diff_size). Such a PR, e.g. one string added to every locale, is many tiny patches
+    next to the one file that holds the code, and smallest-first alone drops that code file first.
+    """
+    lowered = path.lower()
+    if lowered.endswith(_LOCALIZATION_SUFFIXES):
+        return True
+    directories = lowered.split("/")[:-1]
+    return lowered.endswith(_LOCALIZATION_DATA_SUFFIXES) and any(d in _LOCALIZATION_DIRS for d in directories)
+
+
 def order_changed_files_by_diff_size(
     changed_files: list[str], diff_patches: tuple[tuple[str, str], ...] | None
 ) -> list[str]:
     """changed_files, most-surgical-change-first.
+
+    Translation resources (see _is_localization_path) rank after every other file, whatever their size.
 
     GitHub's changed-files listing carries no relevance ordering of its
     own, so every downstream context builder that caps how many files it
@@ -785,7 +806,10 @@ def order_changed_files_by_diff_size(
     keep their original relative order.
     """
     patch_sizes = {filename: len(patch) for filename, patch in (diff_patches or ())}
-    return sorted(changed_files, key=lambda path: (path not in patch_sizes, patch_sizes.get(path, 0)))
+    return sorted(
+        changed_files,
+        key=lambda path: (_is_localization_path(path), path not in patch_sizes, patch_sizes.get(path, 0)),
+    )
 
 
 # Budget for build_code_evidence_context/build_dependency_impact_context -
@@ -2612,7 +2636,7 @@ def _generate_findings_per_file(
             for filename, patch in diff_patches
             if patch.strip() and not _is_non_substantive_path(filename)
         ),
-        key=lambda item: len(item[1]),
+        key=lambda item: (_is_localization_path(item[0]), len(item[1])),
     )[:MAX_CONTEXT_FILES]
     if not candidates:
         return []
