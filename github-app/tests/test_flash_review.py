@@ -4218,6 +4218,71 @@ def test_generate_findings_per_file_caps_smallest_patch_first_not_raw_order(monk
     assert "large_a.py" not in called_files
 
 
+def test_order_changed_files_by_diff_size_puts_localization_files_after_code_even_when_smaller():
+    # A PR that adds one translated string to dozens of locale files has
+    # many tiny patches and, usually, one real code change. Smallest-first
+    # alone ranks every locale file ahead of the code, so on a PR past
+    # MAX_CONTEXT_FILES the code is the first thing dropped.
+    diff_patches = (
+        ("themes/messages/messages_de.properties", "x" * 10),
+        ("src/Verifier.java", "x" * 5000),
+        ("web/locales/fr/common.json", "x" * 20),
+        ("src/util.py", "x" * 300),
+    )
+
+    ordered = order_changed_files_by_diff_size([path for path, _ in diff_patches], diff_patches)
+
+    assert ordered == [
+        "src/util.py",
+        "src/Verifier.java",
+        "themes/messages/messages_de.properties",
+        "web/locales/fr/common.json",
+    ]
+
+
+def test_order_changed_files_by_diff_size_keeps_ordinary_config_files_in_the_code_tier():
+    # Only translation resources are demoted. A settings file is not a
+    # translation, so it keeps its place by patch size.
+    diff_patches = (
+        ("src/big.py", "x" * 5000),
+        ("config/settings.json", "x" * 9),
+    )
+
+    ordered = order_changed_files_by_diff_size([path for path, _ in diff_patches], diff_patches)
+
+    assert ordered == ["config/settings.json", "src/big.py"]
+
+
+def test_generate_findings_per_file_reviews_code_before_localization_files_when_capped(monkeypatch):
+    # Real miss on keycloak PR 37429: 47 substantive files, most of them tiny
+    # translation patches, plus one real code file. The code file has the
+    # largest patch, so smallest-first dropped it and nothing in it was ever
+    # reviewed.
+    from scan_worker import flash_review
+
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILES", 2)
+
+    diff_patches = (
+        ("themes/messages_a.properties", "a" * 10),
+        ("themes/messages_b.properties", "b" * 20),
+        ("src/Verifier.java", "c" * 500),
+    )
+    called_files = []
+
+    def fake_completion(system_prompt, user_prompt, cwd="."):
+        for path, _ in diff_patches:
+            if f"--- {path} ---" in user_prompt:
+                called_files.append(path)
+        return "review:\n  key_issues_to_review: []\n"
+
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.side_effect = fake_completion
+
+    flash_review._generate_findings_per_file(diff_patches, "some PR", mock_adapter)
+
+    assert set(called_files) == {"src/Verifier.java", "themes/messages_a.properties"}
+
+
 def test_generate_findings_per_file_scales_the_cap_to_each_files_own_hunk_count(monkeypatch):
     # Real gap found via audit: review_diff computes a hunk-scaled system
     # prompt (raising the "(0-5 issues)" cap to 8/12 for a large diff) but
