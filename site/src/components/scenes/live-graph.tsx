@@ -10,6 +10,7 @@ export function LiveGraph() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [hover, setHover] = useState<string | null>(null);
   const hoverRef = useRef<number>(-1);
+  const redrawRef = useRef<(() => void) | null>(null);
   const reduced = useReducedMotion();
 
   useEffect(() => {
@@ -44,6 +45,7 @@ export function LiveGraph() {
         }
       });
     };
+    redrawRef.current = draw;
     const loop = () => {
       if (visible && running) {
         const speed = stepSim(sim);
@@ -73,7 +75,7 @@ export function LiveGraph() {
     };
     const onDown = (e: PointerEvent) => {
       const point = at(e);
-      const i = pick(point.x, point.y, e.pointerType === "touch" ? 45 : 14);
+      const i = pick(point.x, point.y, e.pointerType === "touch" ? (12 * W) / el.getBoundingClientRect().width : 14);
       if (e.pointerType === "touch") {
         hoverRef.current = i;
         setHover(i >= 0 ? sim.nodes[i].id : null);
@@ -95,7 +97,7 @@ export function LiveGraph() {
     const onLeave = (e: PointerEvent) => { if (e.pointerType !== "touch") { hoverRef.current = -1; setHover(null); if (reduced) draw(); } };
     el.addEventListener("pointerleave", onLeave);
     return () => {
-      cancelAnimationFrame(raf); io.disconnect();
+      cancelAnimationFrame(raf); io.disconnect(); redrawRef.current = null;
       el.removeEventListener("pointermove", onMove); el.removeEventListener("pointerdown", onDown); el.removeEventListener("pointerup", onUp); el.removeEventListener("pointerleave", onLeave);
     };
   }, [reduced]);
@@ -117,9 +119,10 @@ export function LiveGraph() {
           className="block h-auto w-full touch-pan-y"
         />
       </div>
-      <p className="mt-3 font-display text-[12px] text-faint" aria-live="polite">
-        {hover ? hover : <><span className="md:hidden">Tap a module to highlight its connections.</span><span className="hidden md:inline">Hover a module to highlight its connections; drag to move it.</span></>}
-      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 font-display text-[12px] text-faint">
+        <p aria-live="polite">{hover ? hover : <><span className="md:hidden">Tap a module to highlight its connections.</span><span className="hidden md:inline">Hover a module to highlight its connections; drag to move it.</span></>}</p>
+        {hover && <button type="button" className="min-h-11 underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-stamp" onClick={() => { hoverRef.current = -1; setHover(null); redrawRef.current?.(); }}>Clear selection</button>}
+      </div>
     </section>
   );
 }

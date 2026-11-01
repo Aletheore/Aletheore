@@ -11,11 +11,11 @@ export function Surfaces() {
       <h2 id="surfaces-title" className="font-display text-[clamp(24px,3.2vw,34px)] font-bold leading-[1.1] tracking-[-0.015em]">{intro.title}</h2>
       <p className="mt-4 max-w-[60ch] text-[15px] leading-[1.65] text-muted">{intro.intro}</p>
       <Tabs.Root defaultValue={home.surfaces[0].id} className="crop-marks mt-10 border border-line bg-raised">
-        <Tabs.List aria-label="Surfaces" className="grid grid-cols-2 border-b border-line md:flex md:flex-wrap">
+        <Tabs.List aria-label="Surfaces" className="grid grid-cols-2 gap-px border-b border-line bg-line md:flex md:flex-wrap md:gap-0 md:bg-raised">
           {home.surfaces.map((s) => (
             <Tabs.Trigger
               key={s.id} value={s.id}
-              className="min-h-12 border-b border-r border-line px-3 py-3 text-left font-display text-[12px] md:border-b-0 md:px-5 md:text-[12.5px] text-muted transition-colors last:border-r-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-stamp data-[state=active]:bg-ink data-[state=active]:text-paper"
+              className="min-h-12 bg-raised px-3 py-3 text-left font-display text-[12px] md:border-r md:border-line md:px-5 md:text-[12.5px] text-muted transition-colors md:last:border-r-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-stamp data-[state=active]:bg-ink data-[state=active]:text-paper"
             >
               {s.title}
             </Tabs.Trigger>

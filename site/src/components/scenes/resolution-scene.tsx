@@ -15,7 +15,7 @@ export function ResolutionScene() {
   const [mobile, setMobile] = useState<boolean | null>(null);
   const reduced = useReducedMotion();
   const steps = evidenceChain.steps;
-  const active = reduced && mobile === false ? steps.length - 1 : scrollStep;
+  const active = reduced && mobile !== true ? steps.length - 1 : scrollStep;
   const scene = useMemo(() => sceneForStep(graph, evidenceChain, active), [active]);
 
   useEffect(() => {
@@ -32,8 +32,11 @@ export function ResolutionScene() {
     if (mobile) {
       const cards = Array.from(el.querySelectorAll<HTMLElement>("[data-chain-step]"));
       let frame = 0;
+      let cancelled = false;
       const update = () => {
         frame = 0;
+        const bounds = el.getBoundingClientRect();
+        if (bounds.bottom < 0 || bounds.top > window.innerHeight) return;
         const target = window.innerHeight * 0.72;
         const nearest = cards.reduce((best, card, i) =>
           Math.abs(card.getBoundingClientRect().top - target) < Math.abs(cards[best].getBoundingClientRect().top - target) ? i : best, 0);
@@ -41,9 +44,10 @@ export function ResolutionScene() {
       };
       const onScroll = () => { if (!frame) frame = requestAnimationFrame(update); };
       update();
+      refreshAfterFonts(document.fonts, () => { if (!cancelled) onScroll(); }).catch(() => {});
       window.addEventListener("scroll", onScroll, { passive: true });
       window.addEventListener("resize", onScroll);
-      return () => { window.removeEventListener("scroll", onScroll); window.removeEventListener("resize", onScroll); cancelAnimationFrame(frame); };
+      return () => { cancelled = true; window.removeEventListener("scroll", onScroll); window.removeEventListener("resize", onScroll); cancelAnimationFrame(frame); };
     }
     if (reduced) return;
     let cancelled = false;
