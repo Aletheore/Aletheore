@@ -119,8 +119,8 @@ def build_receipt(
     known = False
     created = datetime.now(timezone.utc)
     try:
-        known = state.session_state_path(repo, session_id) is not None
         created = _utc(now)
+        known = state.session_state_path(repo, session_id) is not None
         checkpoints, previous = _session_checkpoints(repo, session_id, created)
         if not checkpoints:
             return None

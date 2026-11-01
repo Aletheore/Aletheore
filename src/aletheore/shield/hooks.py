@@ -294,6 +294,7 @@ def _prune_hook_state(path: Path, now: float) -> None:
     try:
         with file_lock(path.parent / ".hook-state.lock") as acquired:
             if not acquired:
+                _debug(None, "Shield stale hook state was not pruned: state lock is busy")
                 return
             for old in path.parent.glob("hook-*.json"):
                 try:

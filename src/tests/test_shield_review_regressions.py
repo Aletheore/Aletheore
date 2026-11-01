@@ -332,8 +332,10 @@ def test_declared_suffix_does_not_hide_unrelated_new_import(repo):
 
 def test_receipt_state_probe_failure_still_produces_failure_receipt(repo, monkeypatch):
     monkeypatch.setattr(state, 'session_state_path', MagicMock(side_effect=OSError('unavailable')))
-    built = receipt.build_receipt(repo, 'session', lookups=False)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    built = receipt.build_receipt(repo, 'session', lookups=False, now=now)
     assert built.session == 'unknown' and not built.session_known
+    assert built.created_at == now
     assert any('receipt could not be computed' in r for r in built.report.not_checked)
 
 
@@ -371,7 +373,17 @@ def test_listing_timeout_has_a_budget_skip_reason(repo, monkeypatch):
     monkeypatch.setattr(guard, 'added_dependencies', lambda *a: ([], []))
     monkeypatch.setattr(guard, '_changed_files', MagicMock(side_effect=TimeoutError()))
     report = guard.run_guard(repo, lookups=False)
-    assert 'time budget reached; evidence checks were not run' in report.not_checked
+    assert 'time budget reached; evidence checks were not completed' in report.not_checked
+
+
+def test_listing_spawn_failure_is_an_environment_skip(repo, monkeypatch):
+    monkeypatch.setattr(guard, 'added_dependencies', lambda *a: ([], []))
+    monkeypatch.setattr(guard, 'run_git', lambda *a, **k: subprocess.CompletedProcess([], gitutil._SPAWN_FAILED, b'', b''))
+    checks = MagicMock(side_effect=AssertionError('cannot check without git'))
+    monkeypatch.setattr(guard, 'evidence_checks', checks)
+    report = guard.run_guard(repo, lookups=False)
+    assert 'git could not be started; check its installation and PATH' in report.not_checked
+    checks.assert_not_called()
 
 
 def test_busy_state_lock_reports_failed_save(tmp_path, monkeypatch):

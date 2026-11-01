@@ -13,7 +13,7 @@ from pathlib import Path
 
 from aletheore.shield import state
 from aletheore.shield.deps import DepRef, added_dependencies
-from aletheore.shield.gitutil import _TIMED_OUT, run_git
+from aletheore.shield.gitutil import _SPAWN_FAILED, _TIMED_OUT, run_git
 from aletheore.shield.guard_evidence import Finding, evidence_checks
 from aletheore.shield.nearmiss import near_miss
 from aletheore.shield.registry import lookup_package
@@ -62,6 +62,8 @@ def _changed_files(repo: Path, base: str, *, deadline: float | None = None) -> l
         result = run_git(repo, *args, timeout=min(10.0, remaining))
         if result.returncode == _TIMED_OUT:
             raise TimeoutError("evidence file listing exceeded its budget")
+        if result.returncode == _SPAWN_FAILED:
+            raise FileNotFoundError("git could not be started")
         return result
 
     has_base = git("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}").returncode == 0
@@ -226,7 +228,9 @@ def run_guard(
                 findings.extend(evidence_findings)
                 not_checked.extend(evidence_skipped)
     except TimeoutError:
-        not_checked.append("time budget reached; evidence checks were not run")
+        not_checked.append("time budget reached; evidence checks were not completed")
+    except FileNotFoundError:
+        not_checked.append("git could not be started; check its installation and PATH")
     except Exception as exc:  # noqa: BLE001
         not_checked.append(f"evidence check failed ({type(exc).__name__})")
     findings = [
