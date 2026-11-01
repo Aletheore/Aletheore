@@ -33,7 +33,7 @@ export function Terminal({ terms }: { terms: Term[] }) {
   return (
     <Tabs.Root defaultValue={terms[0].id} className="overflow-hidden rounded-[6px] bg-ink text-[#e8e2d4] shadow-[0_18px_40px_-24px_rgba(22,20,15,0.6)]">
       <div className="flex items-center justify-between border-b border-white/10 px-3 pt-2">
-        <Tabs.List aria-label="Terminal examples" className="flex gap-1">
+        <Tabs.List aria-label="Terminal examples" className="flex flex-wrap gap-1">
           {terms.map((t) => (
             <Tabs.Trigger
               key={t.id}
@@ -47,8 +47,8 @@ export function Terminal({ terms }: { terms: Term[] }) {
       </div>
       {terms.map((t) => (
         <Tabs.Content key={t.id} value={t.id} className="relative">
-          <div className="absolute right-2 top-2"><CopyButton text={t.copy} /></div>
-          <pre className="overflow-x-auto p-5 pr-24 font-display text-[12.5px] leading-[1.75]">
+          <div className="flex justify-end px-3 pt-2 md:absolute md:right-2 md:top-2 md:p-0"><CopyButton text={t.copy} /></div>
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words p-5 pt-2 font-display md:whitespace-pre md:break-normal md:pt-5 md:pr-24 text-[12.5px] leading-[1.75]">
             {t.lines.map((l, i) => (
               <div key={i} className={l.kind === "cmd" ? "term-line text-paper" : "term-line text-[#b6b09f]"} style={{ animationDelay: `${Math.min(i, 24) * 45}ms` }}>
                 {l.kind === "cmd" ? <span className="mr-2 text-stamp" aria-hidden="true">$</span> : null}

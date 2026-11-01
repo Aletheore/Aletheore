@@ -320,7 +320,7 @@ export function GraphCanvas({ graph, activeIds = [], activeLabel, focus = false,
         <span
           ref={labelRef}
           aria-hidden="true"
-          className="pointer-events-none absolute left-0 top-0 whitespace-nowrap rounded-[3px] bg-stamp px-2 py-1 font-display text-[11px] font-semibold text-paper opacity-0 transition-opacity duration-300"
+          className="pointer-events-none absolute left-0 top-0 hidden whitespace-nowrap rounded-[3px] md:block bg-stamp px-2 py-1 font-display text-[11px] font-semibold text-paper opacity-0 transition-opacity duration-300"
         >
           {activeLabel}
         </span>

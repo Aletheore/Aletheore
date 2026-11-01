@@ -28,7 +28,7 @@ export function FlowScene({ steps, panels }: { steps: readonly FlowStep[]; panel
 
   const current = steps[active];
   return (
-    <div className="grid gap-10 md:grid-cols-[1fr_1.05fr]">
+    <div className="grid grid-cols-1 gap-10 md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
       <ol className="flex flex-col">
         {steps.map((s, i) => (
           <li
@@ -64,7 +64,7 @@ function PanelView({ panel }: { panel: Panel }) {
         <span className="size-2 rounded-full bg-white/20" aria-hidden="true" />
         <span className="ml-2 font-display text-[11.5px] text-[#9a9384]">{panel.label}</span>
       </div>
-      <pre className="max-h-[26rem] overflow-auto p-5 font-display text-[12px] leading-[1.75]">
+      <pre className="max-h-[26rem] overflow-auto whitespace-pre-wrap break-words p-5 font-display text-[12px] leading-[1.75]">
         {panel.lines.map((l, i) => (
           <div key={i} className={cn("term-line", l.kind === "cmd" ? "text-paper" : "text-[#b6b09f]")} style={{ animationDelay: `${Math.min(i, 24) * 45}ms` }}>
             {l.kind === "cmd" ? <span className="mr-2 text-stamp" aria-hidden="true">$</span> : null}

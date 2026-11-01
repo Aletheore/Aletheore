@@ -33,13 +33,17 @@ export function ToolExplorer({ tools, groups }: { tools: ToolInfo[]; groups: str
                     {t.name.replace("aletheore_", "")}
                     {t.optional ? <span className="text-[10px] text-stamp">opt-in</span> : null}
                   </button>
+                  {selected === t.name && <div className="mb-2 ml-3 border border-line bg-raised p-3 lg:hidden" aria-live="polite">
+                    <p className="break-all font-display text-[12px] font-bold">{t.name}</p>
+                    <p className="mt-2 text-[13px] leading-[1.6] text-muted">{t.description}</p>
+                  </div>}
                 </li>
               ))}
             </ul>
           </div>
         ))}
       </div>
-      <div className="order-1 lg:order-2">
+      <div className="order-1 hidden lg:order-2 lg:block">
         <div className="sticky top-28 overflow-hidden rounded-[6px] bg-ink text-[#e8e2d4]" aria-live="polite">
           <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5 font-display text-[11.5px] text-[#9a9384]">
             <span>{tool.group}</span>
