@@ -6,7 +6,7 @@ import { FileTree } from "@/components/site/file-tree";
 import { FlowScene } from "@/components/site/flow-scene";
 import { ToolExplorer } from "@/components/site/tool-explorer";
 import {
-  contract, depth, developersHead, flow, flowPanels, mcpHead, mcpToolNote, mcpTools, quickstart, terminalNote, terminals, toolGroups, toolInfo,
+  contract, depth, developersHead, flow, flowPanels, languageSupport, mcpHead, mcpSetup, mcpToolNote, mcpTools, quickstart, terminalNote, terminals, toolGroups, toolInfo,
 } from "@/data/developers";
 
 export const metadata: Metadata = {
@@ -59,9 +59,18 @@ export default function DevelopersPage() {
             </article>
           ))}
         </div>
+        <article className="rule-dashed mt-10 max-w-[76ch] pt-5">
+          <h3 className="font-display text-[14px] font-bold">{languageSupport.title}</h3>
+          <p className="mt-3 text-[12.5px] leading-[1.6] text-muted">{languageSupport.body}</p>
+        </article>
       </Section>
 
       <Section id="mcp" eyebrow={mcpHead.eyebrow} title={mcpHead.title} intro={mcpHead.intro}>
+        <article className="rule-dashed mb-10 max-w-[76ch] pt-5">
+          <h3 className="font-display text-[14px] font-bold">{mcpSetup.title}</h3>
+          <pre className="mt-3 overflow-x-auto font-display text-[12px] leading-[1.75] text-ink"><code>{mcpSetup.code}</code></pre>
+          <p className="mt-3 text-[12.5px] leading-[1.6] text-muted">{mcpSetup.body}</p>
+        </article>
         <ToolExplorer tools={toolInfo} groups={toolGroups} />
         <p className="mt-8 max-w-[76ch] text-[12.5px] leading-[1.65] text-faint">{mcpToolNote}</p>
       </Section>

@@ -3,7 +3,8 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MODEL, type answerQuestion } from "../src/lib/companion/service";
-export type EvalCase = { id: string; question: string; history?: readonly string[]; status: string; contains?: string; command?: string };
+// alsoAccept lists other statuses that satisfy the same property (e.g. a refusal may be off_topic or unverified).
+export type EvalCase = { id: string; question: string; history?: readonly string[]; status: string; alsoAccept?: readonly string[]; contains?: string; command?: string };
 export const evaluationDestination = () => process.env.COMPANION_EVAL_OUTPUT ?? join(tmpdir(), "aletheore-companion-live-eval.json");
 export async function evaluateCompanion({ cases, repeats, suite, answer, destination = evaluationDestination(), log = console.info }: {
   cases: readonly EvalCase[]; repeats: number; suite: string;
@@ -33,7 +34,7 @@ export async function evaluateCompanion({ cases, repeats, suite, answer, destina
         input += result.usage.prompt_tokens;
         output += result.usage.completion_tokens;
         if (tokens >= 400000) stopped ??= "Evaluation token cap reached.";
-        const pass = result.answer.status === test.status && (!test.contains || result.answer.text.includes(test.contains)) && (!test.command || result.answer.command?.includes(test.command));
+        const pass = (result.answer.status === test.status || (test.alsoAccept?.includes(String(result.answer.status)) ?? false)) && (!test.contains || result.answer.text.includes(test.contains)) && (!test.command || result.answer.command?.includes(test.command));
         if (!pass) failures++;
         rows.push({ id: test.id, round, pass, expected: test.status, actual: result.answer.status, answer: result.answer, usage: result.usage, selection: "selection" in result ? result.selection : undefined, ms: Date.now() - start });
         log(`${pass ? "PASS" : "FAIL"} ${test.id}: ${result.answer.status}`);

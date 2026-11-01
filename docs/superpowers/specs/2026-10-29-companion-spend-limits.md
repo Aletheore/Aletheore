@@ -1,6 +1,6 @@
 # Companion admission and spending controls
 
-Implemented locally; production activation remains gated pending deployment verification.
+Implemented. Public activation is a single environment switch (`COMPANION_LIVE_ENABLED=1` with a provider key) on the website, to be flipped only after the activation checklist below is complete.
 
 ## Policy
 
@@ -37,7 +37,7 @@ Network-address limits are not user authentication. A distributed attacker or VP
 2. Deploy the backend router and the JSON Lua snapshot included in its existing Docker image. The backend uses its existing `REDIS_URL` through a dedicated async pool (four connections, 0.5-second socket/connect timeouts, no retries and a 1.5-second operation deadline); keep that Redis private, durable and configured with eviction disabled.
 3. Initialize exactly once on first use from inside the server environment: `python scripts/companion_limits.py initialize-first-use`. The operator tool requires `REDIS_URL` and refuses to overwrite an existing ledger. `status` is read-only; `disable` stops model admission without wiping accounting. There is intentionally no HTTP initialization/reset endpoint.
 4. Use a dedicated IndieRouter credential/account allowance for this chatbot and set a provider-side hard spend cap. Other uses of the same key/account and changes in prices/billing behavior are outside the application ledger. IndieRouter documents that uncapped overage can continue after included credits, so prepaid credits alone are not an adequate stop.
-5. Verify the service credential, proxy header provenance, origin, rate responses, outage behavior, persistent counters and deployed paths in a Vercel preview. Verify provider rates and billing units before enabling real traffic. Update privacy disclosures for transient IP-based abuse controls and provider message processing. Only then approve public enablement and remove the separate production gate.
+5. Verify the service credential, proxy header provenance, origin, rate responses, outage behavior, persistent counters and deployed paths in a Vercel preview. Verify provider rates and billing units before enabling real traffic. Update privacy disclosures for transient IP-based abuse controls and provider message processing. Only then approve public enablement by setting `COMPANION_LIVE_ENABLED=1` on the website and redeploying (Vercel applies environment changes to new deployments only). There is no separate code gate: the switch is `site/src/lib/companion/enabled.ts`, shared by the route and the layout. To stop model spending immediately without a deploy, run `python scripts/companion_limits.py disable` on the app server; admissions then fail closed.
 
 Current root .env has the model credential but no deployed limiter service credential. Local end-to-end tests use the real backend route with an isolated private Redis socket, not production server access. No remote server configuration or provider billing setting was changed.
 

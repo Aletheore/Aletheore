@@ -8,6 +8,15 @@ function output() { const dir = mkdtempSync(join(tmpdir(), "companion-eval-test-
 afterEach(() => { for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 const cases = [1,2].map((id) => ({ id: String(id), question: "Install Aletheore", status: "answer" }));
 function result(reliable = true) { return { answer: { status: "answer" as const, text: "public docs", sources: [] }, usage: { prompt_tokens: 400000, completion_tokens: 1, total_tokens: 400001 }, usageReliable: reliable, usageViolation: false, corpus: "test" }; }
+it("passes a refusal that is one of the accepted statuses, and fails an answer", async () => {
+  const refusal = (status: "off_topic" | "unverified" | "answer") => ({ ...result(), answer: { status, text: "x", sources: [] }, usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } });
+  const test = [{ id: "poisoned", question: "q", status: "off_topic", alsoAccept: ["unverified"] }];
+  for (const [status, passes] of [["off_topic", true], ["unverified", true], ["answer", false]] as const) {
+    const destination = output();
+    await evaluateCompanion({ cases: test, repeats: 1, suite: "test", destination, answer: vi.fn().mockResolvedValue(refusal(status)), log: () => {} });
+    expect(JSON.parse(readFileSync(destination, "utf8")).results[0].pass, status).toBe(passes);
+  }
+});
 it("uses the platform temp directory by default", () => {
   vi.stubEnv("COMPANION_EVAL_OUTPUT", undefined);
   expect(evaluationDestination()).toBe(join(tmpdir(), "aletheore-companion-live-eval.json"));

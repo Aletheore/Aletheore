@@ -493,7 +493,7 @@ def test_api_mcp_tools_reflects_the_configured_consent_posture(tmp_path):
 
     assert response.status_code == 200
     tools = response.json()
-    assert len(tools) == 45
+    assert len(tools) == 46
     names = {t["name"] for t in tools}
     assert "aletheore_managed_audit" not in names
     assert "aletheore_scan" in names
@@ -501,6 +501,7 @@ def test_api_mcp_tools_reflects_the_configured_consent_posture(tmp_path):
     assert "aletheore_index" in names
     assert "aletheore_search_codebase" in names
     assert "aletheore_endpoints" in names
+    assert "aletheore_page" in names  # the shared paging tool the cut evidence results point at
     assert "aletheore_healthcheck" in names
     assert "aletheore_list_skills" in names
     assert "aletheore_search_skills" in names

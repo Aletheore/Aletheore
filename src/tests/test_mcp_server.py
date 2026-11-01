@@ -236,6 +236,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
     expected = {
         "aletheore_imports",
         "aletheore_imported_by",
+        "aletheore_page",
         "aletheore_symbols",
         "aletheore_branch",
         "aletheore_ownership",
@@ -282,7 +283,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_remove_custom_skill",
     }
     assert expected.issubset(names)
-    assert len(names) == 46
+    assert len(names) == 47
     assert "aletheore_answer" not in names
 
 
@@ -326,7 +327,7 @@ async def test_compaction_keeps_what_a_client_needs_to_call_the_tools(tmp_path):
     by_name = {t.name: t for t in await build_server(repo).list_tools()}
     imports = by_name["aletheore_imports"]
     assert imports.input_schema["required"] == ["target"]
-    props = imports.input_schema["properties"]
+    props = by_name["aletheore_page"].input_schema["properties"]
     # optional arguments stay typed (not a union with null) and keep their descriptions
     assert props["section"]["type"] == "string" and props["section"]["description"]
     assert props["offset"]["type"] == "integer" and props["limit"]["type"] == "integer"
@@ -356,6 +357,7 @@ def test_compaction_preserves_non_simple_any_of_schemas():
 LEAN_TOOL_NAMES = {
     "aletheore_ask", "aletheore_imports", "aletheore_imported_by", "aletheore_symbols", "aletheore_get_blast_radius",
     "aletheore_list", "aletheore_overview", "aletheore_locate", "aletheore_symbol_source",
+    "aletheore_page",  # the cut-result continue hint for imports/imported_by/symbols points at it
 }
 
 
@@ -2461,3 +2463,55 @@ def test_server_instructions_tell_agents_to_search_hallbook_before_specialist_ta
     assert "aletheore_find_skill" in SERVER_INSTRUCTIONS
     assert "aletheore_search_skills" in SERVER_INSTRUCTIONS
     assert "aletheore_get_skill_file" in SERVER_INSTRUCTIONS
+
+
+# --- tool-definition size (the definitions are re-sent to the agent on every turn) --------------------------------
+
+# Measured on master: 35,459 characters over 46 tools. The paging sentence moved into the server instructions (33,821)
+# and the four paging arguments moved off 18 tools onto one aletheore_page tool (26,979, 47 tools).
+FULL_PROFILE_DEFINITION_CHAR_BUDGET = 27_500
+
+
+async def _full_profile_tools(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, profile="full", allow=frozenset({"external", "network", "write"}))
+    return server, await server.list_tools()
+
+
+@pytest.mark.asyncio
+async def test_paging_rule_is_stated_once_not_in_every_tool_description(tmp_path):
+    server, tools = await _full_profile_tools(tmp_path)
+
+    assert [t.name for t in tools if "size-capped and paged" in (t.description or "")] == []
+    # The rule lives in the server instructions, where it is paid for once.
+    assert "section" in server.instructions and "offset" in server.instructions
+    assert "how to continue" in server.instructions
+
+
+@pytest.mark.asyncio
+async def test_full_profile_definitions_stay_within_budget(tmp_path):
+    _, tools = await _full_profile_tools(tmp_path)
+    size = sum(
+        len(json.dumps({"name": t.name, "description": t.description, "inputSchema": t.input_schema}, separators=(",", ":")))
+        for t in tools
+    )
+    assert size <= FULL_PROFILE_DEFINITION_CHAR_BUDGET, f"full profile definitions are {size} characters"
+
+
+@pytest.mark.asyncio
+async def test_tool_descriptions_do_not_carry_docstring_indentation_on_any_python(tmp_path):
+    # Python 3.13+ strips a docstring's indentation at compile time; 3.11 and 3.12 keep it, so those versions sent about
+    # 1,200 extra characters of leading spaces on every turn. _compact_tool_schemas normalizes them, so the definitions
+    # are the same size everywhere. Simulate the older behaviour by re-indenting, then check it is undone exactly.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, allow=frozenset({"external", "network", "write"}))
+    tools = server._tool_manager.list_tools()
+    expected = {t.name: t.description for t in tools}
+    for tool in tools:
+        first, *rest = (tool.description or "").split("\n")
+        tool.description = "\n".join([first, *("        " + line if line.strip() else line for line in rest)])
+    assert any("\n        " in (t.description or "") for t in tools)  # the re-indent really changed something
+
+    _compact_tool_schemas(server)
+
+    assert {t.name: t.description for t in tools} == expected

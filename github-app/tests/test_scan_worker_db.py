@@ -1,3 +1,4 @@
+import types
 from datetime import datetime, timezone
 import os
 
@@ -1801,7 +1802,7 @@ def test_installation_spend_lock_retries_transient_lock_not_available(monkeypatc
             pass
 
     monkeypatch.setattr(scan_worker_db.psycopg, "connect", lambda *args, **kwargs: _Connection())
-    monkeypatch.setattr(scan_worker_db.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(scan_worker_db, "time", types.SimpleNamespace(sleep=sleep_calls.append))
 
     with scan_worker_db.installation_spend_lock("postgresql://unused", 301):
         pass
@@ -1837,7 +1838,7 @@ def test_installation_spend_lock_reraises_after_retry_limit(monkeypatch):
             pass
 
     monkeypatch.setattr(scan_worker_db.psycopg, "connect", lambda *args, **kwargs: _Connection())
-    monkeypatch.setattr(scan_worker_db.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(scan_worker_db, "time", types.SimpleNamespace(sleep=sleep_calls.append))
 
     with pytest.raises(scan_worker_db.psycopg.errors.LockNotAvailable, match="persistent"):
         with scan_worker_db.installation_spend_lock("postgresql://unused", 301):

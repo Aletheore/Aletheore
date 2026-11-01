@@ -4,8 +4,56 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-27
-**Snapshot Freshness:** CURRENT as of 2026-10-27 (second deploy of the day) - all six app services (`app-server`, both
+**Last Updated:** 2026-10-29
+**Snapshot Freshness:** CURRENT as of 2026-10-29 - all six app services (`app-server`, both scan workers,
+`health-worker`, `scheduler` and `jina-embed`) run `master` at commit `5f279db3` (tag `github-app-deploy-2026-10-29`);
+`postgres`, `caddy` and `autoheal` were not touched, and `redis` was moved to a named volume with AOF persistence (below).
+Four PRs since the previous deploy (`31959d9e`): #1155, #1157, #1158 and #1159. No migration (newest applied row is still
+`074_skill_hub_personal_identity.sql`). `docker-compose.yml` and `Dockerfile.scan-worker` changed. Done after a database
+backup (`backups/aletheore_app_2026-10-29T14-51-30Z.dump`) and a Redis dump
+(`backups/redis_dump_2026-10-29T14-51-40Z.rdb`): the server checkout was fetched (without `--tags`), reset and confirmed
+at `5f279db3` before anything was built, all six images were built detached with `nohup` and a status file (the first
+attempt failed on a PyPI read timeout, the retry exited 0), then `app-server` was replaced first, then both scan
+workers, `health-worker`, `scheduler` and `jina-embed` one at a time with `--no-deps`, each waiting for `healthy` and for
+every RQ worker to be idle first.
+
+**Redis migration (same day).** The compose file now runs Redis with a named volume, `appendonly yes`,
+`appendfsync always`, `noeviction` and `aof-load-truncated no`; before this it was the stock `redis-server` on an
+anonymous volume with RDB snapshots only. Starting Redis directly with AOF enabled on a copied `dump.rdb` loads **zero
+keys** (verified on a throwaway container), so a plain `docker compose up redis` would have discarded the queue. The
+queues were empty first (`scans`, `health` and `email` at length 0, nothing scheduled or started, every worker idle; one
+stale `demo_scan` job from 2026-09-08 and 35 old failed-job records, none with a consumer). The migration then stopped the
+five writers, ran `SAVE`, copied the dump to `backups/redis_final_2026-10-29T15-41-55Z.rdb`, recreated the container on
+the new volume without starting it, loaded the dump into the volume with AOF off, ran `CONFIG SET appendonly yes`,
+waited for the rewrite, and started Redis on the final flags (592 keys against 593 before; the difference is one TTL'd
+marker that expired). The writers were then restarted. The old anonymous volume (`fb1c000366e7...`) was kept as a
+rollback. Redis now has its own backup, `github-app/scripts/backup-redis.sh`, run daily at 03:15 by cron next to the
+Postgres one. It writes `backups/aletheore_redis_<timestamp>.rdb` (retention 14, owner-only files) and keeps a dump only
+after `redis-check-rdb` parses it end to end. The `redis_dump_*` and `redis_final_*` files in the same directory are the
+manual dumps taken for this migration, and the script never prunes them.
+
+Verified live over SSH after the migration: all ten containers up and the app services `healthy`;
+`https://app.aletheore.com/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`; zero lines
+matching `error|traceback|exception|refused|timeout` in the seven affected services' logs; three RQ workers registered
+and idle on `scans`, `scans` and `health,email` with both scheduler locks held; `aof_last_write_status:ok`,
+`evicted_keys:0`; a scheduled `run_health_check_sweep_job` finished after the restart; `https://www.aletheore.com/`
+returns 200 (the apex redirects there). `/v1/internal/companion-limits` returns 404 because the companion token and
+ledger are deliberately not configured.
+
+2026-10-29 deploy (`5f279db3`, tag `github-app-deploy-2026-10-29`; `git log 31959d9e..5f279db3` is the exact range):
+
+- **Scan worker image:** PMD's bundled Guava is replaced with 33.7.2 (CVE-2026-102554) and Trivy v0.76.1 is rebuilt from
+  its pinned source with go-jose 4.1.6 (CVE-2026-116587), which had been failing the image scan on every PR (#1157).
+- **Tests:** lazy module stand-ins proxy `__dict__` so pytest 9.2 monkeypatch restores correctly (#1157).
+- **CLI:** the local token savings meter, a shared terminal design, the mascot and the consent-gated read-guard hook
+  setup (#1158); the branded header no longer prints before a usage error.
+- **Website companion (not enabled):** the authenticated reserve, settle and disable endpoint with its Redis ledger
+  scripts and the website chat route, which stays disabled outside development (#1159). Public activation still needs the
+  service token and ledger initialization on the server, the website environment, the provider-side hard spend cap,
+  proxy-header verification on a Vercel preview and the privacy disclosure update.
+- **README:** the DeepWiki badge (#1155).
+
+**Previous:** CURRENT as of 2026-10-27 (second deploy of the day) - all six app services (`app-server`, both
 scan workers, `health-worker`, `scheduler` and `jina-embed`) run `master` at commit `31959d9e` (tag
 `github-app-deploy-2026-10-27-b`); `postgres`, `redis`, `caddy` and `autoheal` were not touched. One commit since the
 previous deploy (`be6c82b5`), a Python-only change to `src/aletheore/skill_hub.py` and two tests. No migration (newest

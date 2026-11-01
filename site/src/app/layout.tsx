@@ -4,6 +4,7 @@ import { WebsiteCompanion } from "@/components/site/website-companion";
 import { Footer } from "@/components/site/footer";
 import { Header } from "@/components/site/header";
 import "./globals.css";
+import { companionEnabled } from "@/lib/companion/enabled";
 import { siteMetadata } from "@/lib/site-metadata";
 
 const plexMono = IBM_Plex_Mono({
@@ -25,9 +26,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Header />
         <main>{children}</main>
         <Footer />
-        {/* Production chat is deliberately disabled; this prop enables local dev review only.
-            Public activation must add runtime configuration rather than bake a switch into static HTML. */}
-        <WebsiteCompanion live={process.env.NODE_ENV === "development" && process.env.COMPANION_LIVE_ENABLED === "1" && Boolean(process.env.INDIEROUTER_API_KEY)} />
+        {/* Chat is off unless COMPANION_LIVE_ENABLED=1 and a provider key are set (lib/companion/enabled.ts). The
+            flag is read at build time here, so changing it needs a redeploy, like every Vercel env change. */}
+        <WebsiteCompanion live={companionEnabled()} />
       </body>
     </html>
   );
