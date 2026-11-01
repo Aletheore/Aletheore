@@ -775,11 +775,21 @@ def _is_localization_path(path: str) -> bool:
     order_changed_files_by_diff_size). Such a PR, e.g. one string added to every locale, is many tiny patches
     next to the one file that holds the code, and smallest-first alone drops that code file first.
     """
-    lowered = path.lower()
+    lowered = path.replace("\\", "/").lower()
     if lowered.endswith(_LOCALIZATION_SUFFIXES):
         return True
-    directories = lowered.split("/")[:-1]
-    return lowered.endswith(_LOCALIZATION_DATA_SUFFIXES) and any(d in _LOCALIZATION_DIRS for d in directories)
+    parts = lowered.split("/")
+    if not lowered.endswith(_LOCALIZATION_DATA_SUFFIXES) or not any(d in _LOCALIZATION_DIRS for d in parts[:-1]):
+        return False
+    if lowered.endswith((".js", ".ts")):
+        # Locale packages also contain parsers, loaders and runtime code. Only demote a JS/TS
+        # resource when its path identifies a language or a message bundle.
+        locale = r"[a-z]{2,3}(?:[-_][a-z]{2,4})?"
+        stem = parts[-1].rsplit(".", 1)[0]
+        return bool(re.fullmatch(locale, stem) or any(re.fullmatch(locale, d) for i, d in enumerate(parts[:-1])
+                                               if any(p in _LOCALIZATION_DIRS for p in parts[:i]))
+                    or re.fullmatch(r"(?:messages?|strings?)(?:[-_].+)?", stem))
+    return True
 
 
 def order_changed_files_by_diff_size(

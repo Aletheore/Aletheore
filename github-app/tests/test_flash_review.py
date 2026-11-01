@@ -4794,3 +4794,17 @@ def test_semantic_checker_ignores_non_concurrent_dot_map():
     )
 
     assert findings == []
+
+
+@pytest.mark.parametrize("path", ["packages/lang/parser.ts", "src/locale/runtime.js", "src/i18n/loader.ts"])
+def test_locale_directory_runtime_code_keeps_source_priority(path):
+    from scan_worker.flash_review import _is_localization_path
+
+    assert not _is_localization_path(path)
+
+
+@pytest.mark.parametrize("path", ["src/locales/en.ts", "src/locales/fr/messages.ts", "src/i18n/messages.js", r"src\locales\fr\common.json"])
+def test_localization_resources_are_recognized_with_either_separator(path):
+    from scan_worker.flash_review import _is_localization_path
+
+    assert _is_localization_path(path)
