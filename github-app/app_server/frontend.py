@@ -746,6 +746,70 @@ svg#depgraph:active { cursor: grabbing; }
   .review-cost { grid-area: cost; text-align: right; }
 }
 
+
+/* Dashboard refresh: shared presentation; data and actions remain page-owned. */
+.dashboard-nav { display: contents; }
+.dashboard-nav > summary { display: none; }
+.shell .sidebar { background: var(--paper); padding: 24px 16px; gap: 1.35rem; }
+.shell .brand { padding: 0 8px; }
+.shell .brand-name { font-size: 18px; letter-spacing: -.035em; }
+.shell .nav-group-label { font: 10px/1.4 var(--font-mono); letter-spacing: .07em; text-transform: uppercase; padding: 0 8px 8px; }
+.shell .nav-item { min-height: 37px; padding: 8px 10px; font-size: 13px; }
+.shell .nav-item.active { color: var(--accent-strong); font-weight: 700; }
+.shell .sidebar > .repo-nav-scroll { display: block; flex: none; min-height: auto; }
+.repo-switcher { position: relative; }
+.repo-switcher summary { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 5px; color: var(--ink-900); background: var(--paper); cursor: pointer; list-style: none; }
+.repo-switcher summary::-webkit-details-marker { display: none; }
+.repo-switcher summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.repo-switcher-icon { display: grid; place-items: center; width: 31px; height: 31px; flex: none; border-radius: 4px; border: 1px solid var(--border); background: var(--slate-50); color: var(--accent-strong); }
+.repo-switcher-current { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+.repo-switcher-chevron { color: var(--slate-500); }
+.repo-switcher-panel { margin-top: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--paper); }
+.repo-switcher-search { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--border); border-radius: 4px; font: 12px var(--font-sans); color: var(--ink-900); background: var(--slate-50); }
+.repo-switcher-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.repo-switcher-panel .nav-list { max-height: 220px; overflow-y: auto; margin-top: 6px; }
+.repo-switcher-panel .nav-item { overflow-wrap: anywhere; }
+.repo-switcher-panel .nav-item.active { color: var(--accent-strong); }
+.repo-switcher-note { padding: 9px 8px; font-size: 11px; line-height: 1.45; color: var(--slate-600); }
+.repo-switcher-all { display: block; padding: 10px 8px 4px; border-top: 1px solid var(--border); color: var(--ink-700); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.shell .main { max-width: 1360px; padding: 38px clamp(22px, 4vw, 54px) 70px; }
+.shell .h1 { font-size: 27px; font-weight: 720; letter-spacing: -.04em; line-height: 1.15; }
+.shell .section { border-radius: 6px; }
+.shell .section-head { padding: 18px 20px; }
+.shell .section-title { font-weight: 700; }
+.shell .section-body { padding: 14px 20px 20px; }
+.shell .stat-strip { gap: 12px; border: 0; border-radius: 0; overflow: visible; }
+.shell .stat-strip .stat-card { border: 1px solid var(--border); border-radius: 6px; padding: 18px; }
+.shell .finding-list, .shell .review-list { border-radius: 6px; background: var(--paper); }
+.shell .credit-hero { border-radius: 6px; }
+.dashboard-empty { padding: 28px; border: 1px solid var(--border); border-radius: 6px; background: var(--paper); text-align: left; }
+.dashboard-empty-icon { display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 16px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-strong); font-size: 19px; }
+.dashboard-empty h2, .dashboard-empty h3 { margin: 0 0 8px; font-size: 16px; font-weight: 700; letter-spacing: -.02em; }
+.dashboard-empty p { max-width: 62ch; margin: 0; color: var(--slate-600); font-size: 13px; line-height: 1.6; }
+.dashboard-empty .btn { margin-top: 16px; text-decoration: none; }
+.overview-start { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(240px, 1fr); gap: 14px; }
+.overview-start .dashboard-empty { height: 100%; }
+.overview-steps { margin: 16px 0 0; padding: 0; list-style: none; counter-reset: steps; }
+.overview-steps li { counter-increment: steps; position: relative; padding: 0 0 15px 38px; color: var(--slate-600); font-size: 12px; line-height: 1.5; }
+.overview-steps li:last-child { padding-bottom: 0; }
+.overview-steps li::before { content: '0' counter(steps); position: absolute; left: 0; color: var(--accent-strong); font: 11px var(--font-mono); }
+.overview-steps strong { display: block; color: var(--ink-900); font-size: 13px; }
+.overview-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.overview-links .btn { margin: 0; }
+@media (max-width: 860px) {
+  .dashboard-nav { display: block; background: var(--paper); border-bottom: 1px solid var(--border); }
+  .dashboard-nav > summary { display: block; padding: 16px 18px; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .dashboard-nav > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+  .shell .sidebar { height: auto; position: static; }
+  .shell .nav-scroll { display: block; }
+  .shell .repo-switcher-panel .nav-list { display: flex; flex-direction: column; flex-wrap: nowrap; }
+  .shell .main { padding: 26px 18px 60px; }
+  .shell .stat-strip { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .overview-start { grid-template-columns: 1fr; }
+}
+@media (max-width: 420px) { .shell .stat-strip .stat-card { padding: 12px; } }
+@media (prefers-reduced-motion: reduce) { .shell .nav-item, .shell .stat-card { transition: none; } }
+
 </style>
 """
 
@@ -790,6 +854,16 @@ async function apiGet(url) {
     return null;
   }
   return res;
+}
+async function apiGetWithStatus(url) {
+  try {
+    const res = await fetch(url);
+    if (res.status === 401) { window.location.href = '/auth/logout'; return null; }
+    return res;
+  } catch (error) {
+    console.error('apiGet failed: ' + url);
+    return null;
+  }
 }
 async function apiPost(url, body) {
   const res = await fetch(url, {
@@ -1153,9 +1227,18 @@ def _sidebar(active: str) -> str:
     return f"""
   <nav class="sidebar" aria-label="Dashboard navigation">
     <div class="brand"><img class="brand-mark" src="{BRAND_MARK_DATA_URI}" alt="" width="28" height="28"><span class="brand-name">Aletheore</span></div>
-    <div class="nav-scroll">
-      <div class="nav-group-label">Repository</div>
-      <ul class="nav-list" id="repo-switch-list"><li><a class="nav-item" aria-hidden="true">&hellip;</a></li></ul>
+    <div class="nav-scroll repo-nav-scroll">
+      <div class="nav-group-label">Current repository</div>
+      <details class="repo-switcher">
+        <summary><span class="repo-switcher-icon"><i class="ti ti-git-branch" aria-hidden="true"></i></span><span class="repo-switcher-current" id="repo-switch-current">Repository</span><span class="repo-switcher-chevron" aria-hidden="true">&#8964;</span></summary>
+        <div class="repo-switcher-panel">
+          <label class="sr-only" for="repo-switch-search">Search repositories</label>
+          <input class="repo-switcher-search" id="repo-switch-search" type="search" placeholder="Find a repository" autocomplete="off">
+          <ul class="nav-list" id="repo-switch-list"><li class="repo-switcher-note">Loading&hellip;</li></ul>
+          <div class="repo-switcher-note" id="repo-switch-empty" hidden>No matching repositories.</div>
+          <a class="repo-switcher-all" href="/dashboard">All repositories &rarr;</a>
+        </div>
+      </details>
     </div>
     <div>
       <div class="nav-group-label">This repository</div>
@@ -1184,7 +1267,18 @@ def _sidebar(active: str) -> str:
 # static per-page, only the org/repo prefix is computed client-side), and
 # loads the plan badge from the same admin endpoint every page needs
 # anyway for its own paid-gate check.
-PAGE_HEAD_JS = """
+DASHBOARD_NAV_JS = """
+(function () {
+  const nav = document.querySelector('.dashboard-nav');
+  if (!nav || !window.matchMedia) return;
+  const small = window.matchMedia('(max-width: 860px)');
+  function update() { nav.open = !small.matches; }
+  update();
+  if (small.addEventListener) small.addEventListener('change', update);
+})();
+"""
+
+PAGE_HEAD_JS = DASHBOARD_NAV_JS + """
 window.addEventListener('pageshow', function (event) {
   if (event.persisted) { window.location.reload(); }
 });
@@ -1194,6 +1288,8 @@ const repo = decodeURIComponent(parts[2]);
 const base = '/app/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 const adminBase = '/admin/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 const pageBase = '/dashboard/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
+const switchCurrent = document.getElementById('repo-switch-current');
+if (switchCurrent) switchCurrent.textContent = org + '/' + repo;
 
 document.querySelectorAll('.nav-item[data-href]').forEach(function (el) {
   el.href = pageBase + el.dataset.href;
@@ -1206,19 +1302,46 @@ document.title = document.title.replace('{repo}', repo).replace('{org}', org);
 
 async function loadRepoSwitcher() {
   const list = document.getElementById('repo-switch-list');
-  const res = await apiGet('/app/repos');
-  const repos = (res && res.ok ? (await res.json()).repos : []).filter(function (r) { return r.initialized; });
-  if (repos.length === 0) { list.innerHTML = ''; return; }
-  list.innerHTML = repos.map(function (r) {
-    const isActive = r.org === org && r.repo === repo;
-    return '<li><a class="nav-item' + (isActive ? ' active' : '') + '" href="/dashboard/' + encodeURIComponent(r.org) + '/' + encodeURIComponent(r.repo) + '">' +
-      '<span class="nav-dot paid"></span>' + escapeHtml(r.repo_full_name) + '</a></li>';
-  }).join('');
+  const search = document.getElementById('repo-switch-search');
+  const empty = document.getElementById('repo-switch-empty');
+  if (!list || !search || !empty) return;
+  try {
+    const res = await apiGet('/app/repos');
+    if (!res) { list.innerHTML = '<li class="repo-switcher-note">Could not load repositories.</li>'; return; }
+    const data = await res.json();
+    if (!data || !Array.isArray(data.repos)) throw new Error('Invalid repository response');
+    const repos = data.repos.filter(function (r) { return r.initialized; });
+    list.innerHTML = '';
+    repos.forEach(function (r) {
+      const li = document.createElement('li');
+      const link = document.createElement('a');
+      link.className = 'nav-item' + (r.org === org && r.repo === repo ? ' active' : '');
+      link.href = '/dashboard/' + encodeURIComponent(r.org) + '/' + encodeURIComponent(r.repo);
+      link.textContent = r.repo_full_name;
+      if (r.org === org && r.repo === repo) link.setAttribute('aria-current', 'page');
+      li.appendChild(link);
+      list.appendChild(li);
+    });
+    function filterRepos() {
+      const query = search.value.trim().toLowerCase();
+      let visible = 0;
+      Array.from(list.children).forEach(function (item) {
+        const match = item.textContent.toLowerCase().includes(query);
+        item.hidden = !match;
+        if (match) visible += 1;
+      });
+      empty.hidden = visible !== 0;
+    }
+    search.addEventListener('input', filterRepos);
+    filterRepos();
+  } catch (error) {
+    list.innerHTML = '<li class="repo-switcher-note">Could not load repositories.</li>';
+  }
 }
 loadRepoSwitcher();
 
 async function loadPlanBadge() {
-  const res = await apiGet(adminBase);
+  const res = await apiGetWithStatus(adminBase);
   const nameEl = document.getElementById('plan-name');
   const subEl = document.getElementById('plan-sub');
   const planLineEl = document.getElementById('repo-plan-line');
@@ -1486,7 +1609,7 @@ def _topbar(h1: str, right_id: str = "", sub_id: str = "", show_breadcrumb: bool
 def _shell(active: str, body: str) -> str:
     return f"""
 <div class="shell">
-  {_sidebar(active)}
+  <details class="dashboard-nav" open><summary>Navigation</summary>{_sidebar(active)}</details>
   <main class="main">
     {body}
   </main>
@@ -1530,11 +1653,16 @@ document.querySelectorAll('[data-href]').forEach(function (el) {{
 }});
 
 async function loadOverview() {{
-  const res = await apiGet(base);
-  if (!res) return;
+  document.getElementById('top-error').innerHTML = '';
+  const res = await apiGetWithStatus(base);
+  if (!res) {{
+    document.getElementById('last-scanned').textContent = 'Unavailable';
+    document.getElementById('recent-security-body').innerHTML = '<div class="dashboard-empty"><h2>Could not load the overview</h2><p>Check your connection and try again.</p><button class="btn" type="button" onclick="loadOverview()">Try again</button></div>';
+    return;
+  }}
   if (!res.ok) {{
     const data = await res.json().catch(function () {{ return {{}}; }});
-    const fallback = res.status === 403 ? "You don't administer this repository." : 'Repository not found.';
+    const fallback = res.status === 403 ? "You don't administer this repository." : (res.status === 404 ? 'Repository not found.' : 'Could not load the overview. Please try again.');
     document.getElementById('top-error').innerHTML = '<div class="error-banner">' + escapeHtml(data.detail || fallback) + '</div>';
     document.getElementById('recent-security-body').innerHTML = '<div class="empty-state">Unavailable.</div>';
     return;
@@ -1544,7 +1672,7 @@ async function loadOverview() {{
   if (history.length === 0) {{
     document.getElementById('last-scanned').textContent = 'No scans yet';
     document.getElementById('findings-count').textContent = '';
-    document.getElementById('recent-security-body').innerHTML = '<div class="empty-state">No scans yet - findings will appear after the first pull request is scanned.</div>';
+    document.getElementById('recent-security-body').innerHTML = '<div class="overview-start"><div class="dashboard-empty"><div class="dashboard-empty-icon" aria-hidden="true">&#9671;</div><h2>No scan data yet</h2><p>When a scan completes, findings and repository evidence will appear here.</p><div class="overview-links"><a class="btn" href="' + pageBase + '/wiki">Explore AIRview &rarr;</a><a class="btn" href="' + pageBase + '/health">Endpoint health &rarr;</a></div></div><div class="dashboard-empty"><h2>Getting started</h2><p>Your repository is ready to explore as data becomes available.</p><ol class="overview-steps"><li><strong>Wait for scan data</strong>Results appear here after a scan completes.</li><li><strong>Explore your findings</strong>Review issues and follow the evidence.</li><li><strong>Map your architecture</strong>Use AIRview to explore repository dependencies.</li></ol></div></div>';
     return;
   }}
   const latest = history[0];
@@ -1740,13 +1868,12 @@ function toggleDismissedFindings(event, dismissedSecretFindings, dismissedVulnFi
 }}
 
 async function loadSecurity() {{
-  const res = await apiGet(base);
+  const res = await apiGetWithStatus(base);
   const body = document.getElementById('security-body');
-  if (!res) return;
-  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Unavailable.</div>'; return; }}
+  if (!res || !res.ok) {{ body.innerHTML = '<div class="dashboard-empty"><h2>Could not load findings</h2><p>Try again in a moment.</p><button class="btn" type="button" onclick="loadSecurity()">Try again</button></div>'; return; }}
   const data = await res.json();
   const history = data.history || [];
-  if (history.length === 0) {{ body.innerHTML = '<div class="empty-state">No scans yet.</div>'; return; }}
+  if (history.length === 0) {{ body.innerHTML = '<div class="dashboard-empty"><h2>No scan data yet</h2><p>Results will appear after a scan completes.</p></div>'; return; }}
   const dismissedKeys = data.dismissed_finding_keys || {{ secret: [], vulnerability: [], static_analysis: [] }};
   const evidence = history[0].evidence || {{}};
   const security = evidence.security || {{}};
@@ -1831,13 +1958,12 @@ DEADCODE_HTML = _page_head("Dead code — {repo} — Aletheore") + _shell(
 {PAGE_HEAD_JS}
 
 async function loadDeadCode() {{
-  const res = await apiGet(base);
+  const res = await apiGetWithStatus(base);
   const body = document.getElementById('deadcode-body');
-  if (!res) return;
-  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Unavailable.</div>'; return; }}
+  if (!res || !res.ok) {{ body.innerHTML = '<div class="dashboard-empty"><h2>Could not load dead code results</h2><p>Try again in a moment.</p><button class="btn" type="button" onclick="loadDeadCode()">Try again</button></div>'; return; }}
   const data = await res.json();
   const history = data.history || [];
-  if (history.length === 0) {{ body.innerHTML = '<div class="empty-state">No scans yet.</div>'; return; }}
+  if (history.length === 0) {{ body.innerHTML = '<div class="dashboard-empty"><h2>No scan data yet</h2><p>Results will appear after a scan completes.</p></div>'; return; }}
   const evidence = history[0].evidence || {{}};
   const deadCode = (evidence.repository || {{}}).dead_code || {{}};
   const unreachable = deadCode.unreachable_modules || [];
@@ -1879,11 +2005,6 @@ HEALTH_HTML = _page_head("Endpoint health — {repo} — Aletheore") + _shell(
       <div class="stat-card"><div class="stat-label">Reachable now</div><div class="stat-value" id="summary-reachable">&ndash;</div></div>
       <div class="stat-card"><div class="stat-label">Median latency</div><div class="stat-value" id="summary-latency">&ndash;</div></div>
     </div>
-    <div class="plain-section-head" id="endpoints-list-head">
-      <h2>Endpoints</h2>
-      <div class="count" id="endpoints-list-count"></div>
-    </div>
-    <div id="health-body"><div class="empty-state">Loading&hellip;</div></div>
     <section class="section">
       <div class="section-head">
         <div class="section-title"><i class="ti ti-target-arrow" aria-hidden="true"></i>Monitored targets</div>
@@ -1891,6 +2012,11 @@ HEALTH_HTML = _page_head("Endpoint health — {repo} — Aletheore") + _shell(
       </div>
       <div class="section-body" id="targets-body"><div class="empty-state">Loading&hellip;</div></div>
     </section>
+    <div class="plain-section-head" id="endpoints-list-head">
+      <h2>Endpoints</h2>
+      <div class="count" id="endpoints-list-count"></div>
+    </div>
+    <div id="health-body"><div class="empty-state">Loading&hellip;</div></div>
     <section class="section">
       <div class="section-head">
         <div class="section-title"><i class="ti ti-world" aria-hidden="true"></i>Public status API</div>
@@ -1971,17 +2097,17 @@ async function addTarget() {{
 }}
 
 async function loadTargets() {{
-  const res = await apiGet(adminBase);
+  const res = await apiGetWithStatus(adminBase);
   const body = document.getElementById('targets-body');
   const statusApiBody = document.getElementById('status-api-body');
-  if (!res) return;
+  if (!res) {{ body.innerHTML = '<div class="empty-state">Could not load targets. Try again.</div>'; statusApiBody.innerHTML = '<div class="empty-state">Unavailable.</div>'; return; }}
   if (res.status === 402) {{
     body.innerHTML = lockedFeature('Multiple health check targets are a paid feature', 'Monitor staging, production, or any URL per repository.', TARGETS_LOCKED_PREVIEW);
     statusApiBody.innerHTML = '<div class="empty-state">Available on paid plans.</div>';
     document.getElementById('target-usage').textContent = '';
     return;
   }}
-  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Unavailable.</div>'; return; }}
+  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Could not load targets. Try again.</div>'; statusApiBody.innerHTML = '<div class="empty-state">Unavailable.</div>'; return; }}
   const data = await res.json();
   document.getElementById('target-usage').textContent = (data.health_targets || []).length + ' of ' + data.health_target_limit + ' used';
   body.innerHTML = '<div id="target-list">' + renderTargetRows(data.health_targets) + '</div>' +
@@ -2030,10 +2156,9 @@ async function loadTargets() {{
 }}
 
 async function loadResults() {{
-  const res = await apiGet(base + '/health');
-  if (!res) return;
+  const res = await apiGetWithStatus(base + '/health');
   const body = document.getElementById('health-body');
-  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Health data unavailable.</div>'; return; }}
+  if (!res || !res.ok) {{ body.innerHTML = '<div class="dashboard-empty"><h2>Could not load endpoint results</h2><p>Try again in a moment.</p><button class="btn" type="button" onclick="loadResults()">Try again</button></div>'; return; }}
   const data = await res.json();
   const endpoints = data.endpoints || [];
   // total_endpoint_count, not endpoints.length: endpoints is one row per
@@ -2191,10 +2316,10 @@ function renderEndpointRows(endpoints) {{
 }}
 
 async function loadEndpoints() {{
-  const res = await apiGet(adminBase + '/health-endpoints');
+  const res = await apiGetWithStatus(adminBase + '/health-endpoints');
   const body = document.getElementById('endpoints-body');
   const usage = document.getElementById('endpoints-usage');
-  if (!res) return;
+  if (!res) {{ body.innerHTML = '<div class="empty-state">Could not load endpoints. Try again.</div>'; return; }}
   if (res.status === 402) {{ body.innerHTML = '<div class="empty-state">Available on paid plans.</div>'; usage.textContent = ''; return; }}
   if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Unavailable.</div>'; return; }}
   const data = await res.json();
@@ -2519,8 +2644,8 @@ async function showSubsystem(subsystemId) {{
 
 async function loadWiki() {{
   const body = document.getElementById('wiki-body');
-  const planRes = await apiGet(adminBase);
-  if (!planRes) return;
+  const planRes = await apiGetWithStatus(adminBase);
+  if (!planRes) {{ body.innerHTML = '<div class="empty-state">Could not load AIRview. Try again.</div>'; return; }}
   if (planRes.status === 402) {{
     body.innerHTML = lockedFeature(
       'AIRview is a paid feature',
@@ -2529,8 +2654,9 @@ async function loadWiki() {{
     );
     return;
   }}
-  const res = await apiGet(base + '/wiki');
-  if (!res) return;
+  if (!planRes.ok) {{ body.innerHTML = '<div class="empty-state">Could not load AIRview. Try again.</div>'; return; }}
+  const res = await apiGetWithStatus(base + '/wiki');
+  if (!res) {{ body.innerHTML = '<div class="empty-state">Could not load AIRview. Try again.</div>'; return; }}
   if (res.status === 402) {{
     body.innerHTML = lockedFeature(
       'AIRview is a paid feature',
@@ -2590,8 +2716,8 @@ let graphAllClusters = [];
 async function loadGraph() {{
   const container = document.getElementById('graph-body');
   container.innerHTML = '<div class="empty-state">Loading&hellip;</div>';
-  const res = await apiGet(base + '/graph');
-  if (!res) {{ container.innerHTML = '<div class="empty-state">Graph unavailable.</div>'; return; }}
+  const res = await apiGetWithStatus(base + '/graph');
+  if (!res) {{ container.innerHTML = '<div class="dashboard-empty"><h2>Could not load the graph</h2><p>Check your connection and try again.</p><button class="btn" type="button" onclick="loadGraph()">Try again</button></div>'; return; }}
   if (res.status === 402) {{
     container.innerHTML = lockedFeature(
       'AIRview is a paid feature',
@@ -2600,8 +2726,8 @@ async function loadGraph() {{
     );
     return;
   }}
-  if (res.status === 404) {{ container.innerHTML = '<div class="empty-state">No dependency graph available yet.</div>'; return; }}
-  if (!res.ok) {{ container.innerHTML = '<div class="empty-state">Graph unavailable.</div>'; return; }}
+  if (res.status === 404) {{ container.innerHTML = '<div class="dashboard-empty"><h2>No dependency graph available yet</h2><p>The graph will appear when repository graph data is available.</p></div>'; return; }}
+  if (!res.ok) {{ container.innerHTML = '<div class="dashboard-empty"><h2>Could not load the graph</h2><p>Try again in a moment.</p><button class="btn" type="button" onclick="loadGraph()">Try again</button></div>'; return; }}
   const data = await res.json();
   graphAllClusters = data.clusters || [];
   graphNodes = data.nodes || [];
@@ -3028,8 +3154,8 @@ function renderDocsModule(modulePath, markdown) {{
 
 async function loadDocs() {{
   const body = document.getElementById('docs-body');
-  const planRes = await apiGet(adminBase);
-  if (!planRes) return;
+  const planRes = await apiGetWithStatus(adminBase);
+  if (!planRes) {{ body.innerHTML = '<div class="empty-state">Could not load Docs. Try again.</div>'; return; }}
   if (planRes.status === 402) {{
     body.innerHTML = lockedFeature(
       'Docs is a paid feature',
@@ -3038,8 +3164,9 @@ async function loadDocs() {{
     );
     return;
   }}
-  const res = await apiGet(base + '/docs');
-  if (!res) return;
+  if (!planRes.ok) {{ body.innerHTML = '<div class="empty-state">Could not load Docs. Try again.</div>'; return; }}
+  const res = await apiGetWithStatus(base + '/docs');
+  if (!res) {{ body.innerHTML = '<div class="empty-state">Could not load Docs. Try again.</div>'; return; }}
   if (res.status === 402) {{
     body.innerHTML = lockedFeature(
       'Docs is a paid feature',
@@ -3559,8 +3686,8 @@ async function deleteAllData() {{
 
 async function loadSettings() {{
   const body = document.getElementById('settings-body');
-  const res = await apiGet(adminBase);
-  if (!res) return;
+  const res = await apiGetWithStatus(adminBase);
+  if (!res) {{ body.innerHTML = '<div class="empty-state">Could not load settings. Try again.</div>'; return; }}
   if (res.status === 402) {{
     body.innerHTML = lockedFeature(
       'API tokens, webhooks, and team seats are paid features',
@@ -4201,7 +4328,7 @@ def _credits_body_html() -> str:
 
     <div class="plain-section-head" id="review-head">
       <h2>Recent reviews</h2>
-      <div class="count">last 30 days</div>
+      <div class="count">Latest 20 runs</div>
     </div>
     <div id="review-history-body"><div class="empty-state">Loading&hellip;</div></div>
 
@@ -4244,7 +4371,7 @@ def _credits_page(installation_id: int) -> str:
 {ICONS_LINK}
 {STYLE}
 <div class="shell" id="credits-root" data-paddle-env="{escape(settings.paddle_environment)}" data-paddle-client-token="{escape(settings.paddle_client_token)}">
-  <nav class="sidebar" aria-label="Dashboard navigation">
+  <details class="dashboard-nav" open><summary>Navigation</summary><nav class="sidebar" aria-label="Dashboard navigation">
     <div class="brand"><img class="brand-mark" src="{BRAND_MARK_DATA_URI}" alt="" width="28" height="28"><span class="brand-name">Aletheore</span></div>
     <div class="nav-scroll">
       <div class="nav-group-label">Your installs</div>
@@ -4257,7 +4384,7 @@ def _credits_page(installation_id: int) -> str:
         <li><a class="nav-item" href="/auth/logout"><i class="ti ti-logout" aria-hidden="true"></i>Sign out</a></li>
       </ul>
     </div>
-  </nav>
+  </nav></details>
   <main class="main">
     <div class="topbar">
       <div>
@@ -4278,6 +4405,7 @@ def _credits_page(installation_id: int) -> str:
 <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>
 {FETCH_HELPERS}
+{DASHBOARD_NAV_JS}
 {script}
 </script>
 """
