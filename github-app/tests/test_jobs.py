@@ -13004,6 +13004,27 @@ def test_merge_repeats_for_is_off_unless_enabled_and_never_for_free_tier(monkeyp
     assert _merge_repeats_for(is_free_tier) is expected
 
 
+@pytest.mark.parametrize(
+    "env_value,is_free_tier,expected",
+    [
+        (None, False, False),       # off by default
+        ("off", False, False),
+        ("yes", False, False),      # only "on" enables it
+        ("on", False, True),
+        (" ON ", False, True),      # case and surrounding whitespace do not matter
+        ("on", True, False),        # never for free tier: it only exists on top of per-file generation
+    ],
+)
+def test_whole_diff_pass_for_is_off_unless_enabled_and_never_for_free_tier(monkeypatch, env_value, is_free_tier, expected):
+    from scan_worker.jobs import _whole_diff_pass_for
+
+    if env_value is None:
+        monkeypatch.delenv("FLASH_REVIEW_WHOLE_DIFF_PASS", raising=False)
+    else:
+        monkeypatch.setenv("FLASH_REVIEW_WHOLE_DIFF_PASS", env_value)
+    assert _whole_diff_pass_for(is_free_tier) is expected
+
+
 def test_cross_file_check_model_has_a_price_so_its_spend_can_be_accounted():
     from app_server.llm_cost import cost_for_usage
     from scan_worker.model_tiers import CROSS_FILE_CHECK_MODEL

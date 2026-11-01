@@ -2660,6 +2660,24 @@ def _generate_findings_per_file(
     return [finding for file_findings in results for finding in file_findings]
 
 
+def _with_whole_diff_findings(per_file_findings: list[dict], call_whole_pr: Callable[[], str]) -> list[dict]:
+    """Adds the findings of one whole-PR generation call to the per-file findings.
+
+    Per-file generation reads each file blind to the others, so it misses problems that only show when the whole
+    PR is read together. The whole-PR call is the single-call path review_diff used before per-file generation
+    existed, kept here as a second opinion. Fails open like every second pass in this module: any failure of the
+    extra call, or an answer that does not parse, leaves the per-file findings exactly as they were. A finding the
+    whole-PR call repeats word for word (same file, line and text) is dropped; the same defect worded differently is
+    left for the merge-repeats pass, which already knows how to fold repeats."""
+    try:
+        whole_pr_findings = _parse_pr_agent_yaml_findings(call_whole_pr())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("flash review whole-PR pass failed (%s); keeping the per-file findings", type(exc).__name__)
+        return per_file_findings
+    seen = {(f["file"], f["line"], f["issue"]) for f in per_file_findings}
+    return per_file_findings + [f for f in whole_pr_findings if (f["file"], f["line"], f["issue"]) not in seen]
+
+
 def review_diff(
     diff_text: str,
     on_usage: Callable[[int, int, int], None] | None = None,
@@ -2682,6 +2700,7 @@ def review_diff(
     on_cross_file_check_usage: Callable[[int, int, int], None] | None = None,
     share_pr_context_per_file: bool = False,
     merge_repeats: bool = False,
+    whole_diff_pass: bool = False,
 ) -> list[dict]:
     if not diff_text.strip():
         return []
@@ -2817,6 +2836,8 @@ def review_diff(
         findings = _generate_findings_per_file(
             diff_patches, pr_title, adapter, share_pr_context=share_pr_context_per_file
         )
+        if whole_diff_pass:
+            findings = _with_whole_diff_findings(findings, lambda: _call_adapter(adapter))
     else:
         if adapter is not None:
             raw_output = _call_adapter(adapter)
