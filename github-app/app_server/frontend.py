@@ -98,46 +98,128 @@ a { color: var(--accent); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 /* ---- Sign-in ---- */
-.signin { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 4rem 1.5rem; }
-.signin-card { width: 100%; max-width: 380px; background: var(--paper);
-  border: 1px solid var(--border); border-radius: 4px; padding: 2.5rem 2.25rem 2rem; text-align: left; }
-.signin-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 1.75rem; }
+.signin { min-height: 100vh; min-height: 100svh; display: flex; }
+.signin-layout { width: 100%; min-height: 100svh; display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(420px, .92fr); background: var(--paper); }
+.signin-story { position: relative; overflow: hidden; min-width: 0; padding: clamp(2.5rem, 6vw, 6rem); display: flex; flex-direction: column; justify-content: space-between; background: #f2efe8; border-right: 1px solid var(--border); }
+.signin-story::before { content: ""; position: absolute; inset: 0; opacity: .42; background-image: radial-gradient(#c9c3b2 .8px, transparent .8px); background-size: 18px 18px; mask-image: linear-gradient(to bottom, transparent, black 25%, black 80%, transparent); pointer-events: none; }
+.signin-story-head, .signin-illustration, .signin-story-foot { position: relative; }
+.signin-story-kicker { font: 600 10px/1.4 var(--font-mono); color: var(--accent-strong); letter-spacing: .11em; text-transform: uppercase; }
+.signin-story h2 { max-width: 14ch; margin: 14px 0 0; font: 700 clamp(30px, 3.5vw, 44px)/1.08 var(--font-mono); letter-spacing: -.055em; }
+.signin-story-intro { max-width: 39ch; margin: 16px 0 0; color: var(--slate-600); font-size: 14px; line-height: 1.6; }
+.signin-illustration { width: 100%; max-width: 560px; margin: 3rem auto; }
+.signin-illustration svg { width: 100%; height: auto; overflow: visible; display: block; }
+.signin-illustration .path-accent { stroke-dasharray: 5 7; }
+.signin-illustration .signal { opacity: 0; animation: signin-signal 6s cubic-bezier(.45,0,.55,1) infinite; }
+.signin-illustration .signal-second { animation-delay: 3s; }
+.signin-illustration .signal-halo { opacity: .15; }
+.signin-illustration .stage-glow { opacity: 0; animation: signin-stage 6s ease-in-out infinite; }
+.signin-illustration .stage-two { animation-delay: 2s; }
+.signin-illustration .stage-three { animation-delay: 4s; }
+.signin-motion-toggle { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }
+.signin-motion-toggle:checked ~ .signin-illustration .signal,
+.signin-motion-toggle:checked ~ .signin-illustration .stage-glow { animation-play-state: paused; }
+.signin-motion-control { cursor: pointer; color: var(--slate-600); text-decoration: underline; text-underline-offset: 3px; }
+.signin-motion-toggle:focus-visible ~ .signin-story-foot .signin-motion-control { outline: 2px solid var(--accent); outline-offset: 4px; }
+.signin-motion-control .resume-label { display: none; }
+.signin-motion-toggle:checked ~ .signin-story-foot .pause-label { display: none; }
+.signin-motion-toggle:checked ~ .signin-story-foot .resume-label { display: inline; }
+.signin-story-foot { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-top: 1px solid var(--border-strong); padding-top: 14px; font: 10px/1.4 var(--font-mono); color: var(--slate-600); letter-spacing: .04em; }
+.signin-story-foot span:last-child { color: var(--accent-strong); }
+@keyframes signin-stage { 0%, 38%, 100% { opacity: 0; } 12%, 24% { opacity: .8; } }
+@keyframes signin-signal {
+  0% { opacity: 0; transform: translateX(0); }
+  8% { opacity: 1; }
+  80% { opacity: 1; }
+  92%, 100% { opacity: 0; transform: translateX(324px); }
+}
+.signin-card { width: min(100%, 440px); min-width: 0; margin: auto; background: var(--paper); padding: 3rem 2.5rem; text-align: left; align-self: center; }
+.signin-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 2.25rem; }
 .signin-brand-mark { display: block; width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0; }
 .signin-brand-name { font-weight: 700; font-size: 20px; letter-spacing: -0.01em; }
-.signin-card h1 { font-size: 18px; font-weight: 650; margin: 0 0 6px; letter-spacing: -0.01em; }
+.signin-card h1 { font-size: 21px; font-weight: 700; margin: 0 0 8px; letter-spacing: -0.025em; }
 .tagline { font-size: 13px; color: var(--slate-600); margin: 0 0 1.6rem; line-height: 1.5; max-width: 30ch; }
-.gh-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--ink-900); color: var(--slate-50);
-  border: none; border-radius: 4px; font-family: var(--font-sans); font-size: 14px; font-weight: 600; padding: 12px 16px; cursor: pointer; text-decoration: none; }
-.gh-btn:hover { background: var(--ink-700); }
+.gh-btn { width: 100%; min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--ink-900); color: var(--slate-50); border: none; border-radius: 4px; font-family: var(--font-sans); font-size: 14px; font-weight: 600; padding: 12px 16px; cursor: pointer; text-decoration: none; transition: background-color .18s ease, transform .18s ease; }
+.gh-btn:hover { background: #343128; }
+.gh-btn:active { transform: scale(.985); }
 .gh-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .signin-divider { border-top: 1px solid var(--border); margin: 1.75rem 0 1.25rem; }
-.scope-list { display: flex; flex-direction: column; gap: 8px; }
-.scope-row { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--slate-600); line-height: normal; }
+.scope-list { display: flex; flex-direction: column; gap: 10px; }
+.scope-row { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--slate-600); line-height: 1.45; }
 .scope-row .mark { font-family: var(--font-mono); color: var(--slate-400); font-size: 11px; flex-shrink: 0; }
 .scope-note code { font-family: var(--font-mono); font-size: 11px; color: var(--slate-500); }
 .signin-fine-print { font-size: 11.5px; color: var(--slate-400); line-height: 1.6; margin-top: 1rem; margin-bottom: 0; text-align: center; }
 .signin-fine-print a { color: var(--slate-600); }
+@media (max-width: 760px) {
+  .signin-layout { display: flex; }
+  .signin-story { display: none; }
+  .signin-card { padding: 2.5rem 1.5rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .signin-illustration .signal, .signin-illustration .stage-glow { animation: none; }
+  .signin-motion-control, .signin-motion-toggle { display: none; }
+  .gh-btn { transition: none; }
+  .gh-btn:active { transform: none; }
+}
 
 /* ---- Repo picker ---- */
-.picker-wrap { max-width: 980px; margin: 0 auto; padding: 3.4rem 1.75rem; }
-.picker-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem; }
-.picker-head h1 { font-size: 28px; font-weight: 720; margin: 0; }
+.picker-nav { height: 70px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 max(24px, calc((100vw - 1180px) / 2)); background: var(--paper); border-bottom: 1px solid var(--border); }
+.picker-brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink-900); font-size: 17px; font-weight: 720; letter-spacing: -.02em; }
+.picker-brand img { border-radius: 6px; }
+.picker-nav-right { display: flex; align-items: center; gap: 18px; }
+.picker-nav-note { color: var(--slate-600); font: 11px/1.4 var(--font-mono); }
+.picker-signout { color: var(--slate-600); font-size: 13px; text-underline-offset: 3px; }
+.picker-signout:hover { color: var(--ink-900); }
+.picker-wrap { max-width: 1180px; margin: 0 auto; padding: 3.5rem 1.5rem 5rem; }
+.picker-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 2.25rem; }
+.picker-eyebrow { color: var(--accent-strong); font: 600 10px/1.4 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
+.picker-head h1 { margin: 10px 0 8px; font-size: clamp(28px, 3vw, 38px); font-weight: 720; line-height: 1.1; letter-spacing: -.045em; }
+.picker-subtitle { margin: 0; max-width: 55ch; color: var(--slate-600); font-size: 14px; line-height: 1.55; }
+.picker-count { color: var(--slate-600); font: 12px/1.4 var(--font-mono); white-space: nowrap; }
+.picker-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 1.75rem; }
+.picker-toolbar[hidden] { display: none; }
+.picker-search { position: relative; width: min(100%, 340px); }
+.picker-search svg { position: absolute; top: 50%; left: 14px; transform: translateY(-50%); color: var(--slate-500); pointer-events: none; }
+.picker-search input { width: 100%; min-height: 44px; padding: 0 14px 0 40px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--paper); font: 13px var(--font-sans); color: var(--ink-900); }
+.picker-search input:focus-visible, .picker-filter:focus-visible, .picker-card:focus-visible, .picker-signout:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.picker-filters { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 5px; background: var(--paper); }
+.picker-filter { min-height: 34px; padding: 0 13px; border: 0; border-radius: 3px; background: transparent; color: var(--slate-600); font: 600 12px var(--font-sans); cursor: pointer; }
+.picker-filter[aria-pressed="true"] { background: var(--ink-900); color: var(--paper); }
 .picker-org-group { margin-bottom: 2rem; }
-.picker-org-label { font-size: 11px; color: var(--slate-400); font-weight: 500; margin-bottom: 10px; }
-.picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
-.picker-card { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--ink-900); background: var(--paper); border: 1px solid var(--border);
-  border-radius: 4px; padding: 17px 18px; transition: background-color 0.12s ease, border-color 0.12s ease; }
-.picker-card:hover { border-color: var(--border-strong); background: var(--slate-100); }
-.picker-card-icon { width: 40px; height: 40px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-strong);
-  display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+.picker-org-label { display: flex; align-items: center; gap: 9px; margin: 0 0 10px; color: var(--ink-900); font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+.picker-org-label::before { content: ""; width: 6px; height: 6px; flex: none; background: var(--accent); }
+.picker-grid { overflow: hidden; border: 1px solid var(--border); border-radius: 5px; background: var(--paper); }
+.picker-card { display: flex; align-items: center; gap: 16px; min-height: 70px; padding: 14px 18px; border-bottom: 1px solid var(--border); color: var(--ink-900); text-decoration: none; transition: background-color .16s ease; }
+.picker-card:last-child { border-bottom: 0; }
+.picker-card[href]:hover { background: var(--slate-50); }
+.picker-card-icon { width: 38px; height: 38px; flex: none; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 4px; color: var(--accent-strong); background: var(--slate-50); }
+.picker-card-icon svg { width: 18px; height: 18px; }
 .picker-card-body { min-width: 0; flex: 1; }
-.picker-repo { font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.picker-plan { display: inline-block; margin-top: 7px; font-size: 11px; font-weight: 500; padding: 2px 9px; border-radius: 4px; background: var(--slate-100); color: var(--slate-600); }
-.picker-plan.paid { background: var(--accent-soft); color: var(--accent-strong); }
-.picker-card-arrow { color: var(--slate-400); font-size: 16px; flex-shrink: 0; }
+.picker-repo { font-size: 14px; font-weight: 680; overflow-wrap: anywhere; }
+.picker-repo-owner { display: block; margin-top: 4px; color: var(--slate-500); font: 11px/1.35 var(--font-mono); overflow-wrap: anywhere; }
+.picker-card-meta { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 12px; }
+.picker-plan { color: var(--slate-600); font: 11px/1.4 var(--font-mono); white-space: nowrap; }
+.picker-status { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 4px 9px; border: 1px solid #d9e6d6; border-radius: 3px; background: #f3f8f1; color: #315e35; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.picker-status::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: #4c8050; }
+.picker-status.waiting { border-color: var(--border); background: var(--slate-50); color: var(--slate-600); }
+.picker-status.waiting::before { background: var(--slate-400); }
+.picker-card-arrow { color: var(--slate-500); font-size: 19px; line-height: 1; }
 .picker-card-pending { cursor: default; }
-.picker-card-pending:hover { border-color: var(--border); background: var(--paper); }
-.picker-pending-note { margin-top: 4px; font-size: 11.5px; color: var(--slate-500); }
+.picker-pending-note { display: block; margin-top: 5px; color: var(--slate-600); font-size: 12px; line-height: 1.4; }
+.picker-no-results { padding: 28px; border: 1px solid var(--border); background: var(--paper); color: var(--slate-600); font-size: 13px; line-height: 1.5; }
+@media (max-width: 650px) {
+  .picker-nav { height: 62px; padding: 0 18px; }
+  .picker-nav-note { display: none; }
+  .picker-wrap { padding: 2.5rem 1rem 4rem; }
+  .picker-head { align-items: flex-start; gap: 12px; flex-direction: column; margin-bottom: 1.5rem; }
+  .picker-toolbar { align-items: stretch; flex-direction: column; }
+  .picker-search { width: 100%; }
+  .picker-filters { align-self: flex-start; }
+  .picker-card { align-items: flex-start; gap: 12px; flex-wrap: wrap; padding: 14px; }
+  .picker-card-body { flex-basis: calc(100% - 54px); }
+  .picker-card-meta { justify-content: flex-start; padding-left: 50px; }
+  .picker-card-arrow { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .picker-card { transition: none; } }
 
 /* ---- Shared UI atoms ---- */
 .btn { font-family: var(--font-sans); font-size: 12.5px; font-weight: 650; border-radius: 4px; padding: 8px 12px;
@@ -622,7 +704,6 @@ svg#depgraph:active { cursor: grabbing; }
   .credit-actions { align-items: flex-start; }
   .docs-module-summary, .docs-commit-card { grid-template-columns: 1fr; }
   .stat-row { justify-content: flex-start; }
-  .picker-head { align-items: flex-start; gap: 1rem; flex-direction: column; }
   .diagram-zoom-toolbar { left: 14px; right: 14px; transform: none; justify-content: center; flex-wrap: wrap; border-radius: 14px; }
   .diagram-zoom-hint { order: 2; width: 100%; text-align: center; }
 }
@@ -821,12 +902,59 @@ function renderWikiMarkdown(src) {
 """
 
 SIGNIN_HTML = f"""<!DOCTYPE html>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aletheore</title>
 <link rel="icon" type="image/png" href="{BRAND_MARK_DATA_URI}">
 {ICONS_LINK}
 {STYLE}
 <div class="signin">
+  <div class="signin-layout">
+  <aside class="signin-story" aria-label="About Aletheore">
+    <div class="signin-story-head">
+      <p class="signin-story-kicker">Evidence, connected</p>
+      <h2>From code to clarity.</h2>
+      <p class="signin-story-intro">See how your code fits together, and trace findings back to the source.</p>
+    </div>
+    <input class="signin-motion-toggle" type="checkbox" id="signin-motion" aria-label="Pause illustration animation">
+    <div class="signin-illustration" aria-hidden="true">
+      <svg viewBox="0 0 460 280" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M68 128H140M215 128H282M355 128H398" stroke="#c9c3b2" stroke-width="1.5"/>
+        <path class="path-accent" d="M68 128H398" stroke="#b6532b" stroke-width="1.5"/>
+        <g class="evidence-node">
+          <rect x="4" y="76" width="136" height="104" rx="4" fill="#fff" stroke="#c9c3b2"/>
+          <rect x="20" y="94" width="28" height="28" rx="3" fill="#f2efe8"/>
+          <path d="M28 103h12M28 108h9M28 113h11" stroke="#a64717" stroke-width="1.5"/>
+          <text x="20" y="145" fill="#17150f" font-size="12" font-family="monospace" font-weight="bold">Repository</text>
+          <text x="20" y="161" fill="#766f62" font-size="10" font-family="monospace">your code</text>
+        </g>
+        <g class="evidence-node node-two">
+          <rect x="162" y="53" width="136" height="150" rx="4" fill="#17150f" stroke="#17150f"/>
+          <circle cx="178" cy="70" r="2.5" fill="#b6532b"/><circle cx="188" cy="70" r="2.5" fill="#6b6659"/><circle cx="198" cy="70" r="2.5" fill="#6b6659"/>
+          <path d="M162 82H298" stroke="#49443a"/>
+          <path d="M186 108l12 10-12 10M206 130h24" stroke="#d57e54" stroke-width="2"/>
+          <text x="180" y="159" fill="#f8f5ee" font-size="12" font-family="monospace" font-weight="bold">Evidence</text>
+          <text x="180" y="177" fill="#bcb4a5" font-size="10" font-family="monospace">files · links</text>
+        </g>
+        <g class="evidence-node node-three">
+          <rect x="320" y="76" width="136" height="104" rx="4" fill="#fff" stroke="#c9c3b2"/>
+          <rect x="336" y="94" width="28" height="28" rx="3" fill="#edf3e9"/>
+          <path d="M343 108l5 5 9-10" stroke="#3d6b41" stroke-width="1.7"/>
+          <text x="336" y="145" fill="#17150f" font-size="12" font-family="monospace" font-weight="bold">Review</text>
+          <text x="336" y="161" fill="#766f62" font-size="10" font-family="monospace">with context</text>
+        </g>
+        <rect class="stage-glow" x="1" y="73" width="142" height="110" rx="6" stroke="#b6532b" stroke-width="2"/>
+        <rect class="stage-glow stage-two" x="159" y="50" width="142" height="156" rx="6" stroke="#b6532b" stroke-width="2"/>
+        <rect class="stage-glow stage-three" x="317" y="73" width="142" height="110" rx="6" stroke="#b6532b" stroke-width="2"/>
+        <circle cx="151" cy="128" r="4" fill="#b6532b"/><circle cx="309" cy="128" r="4" fill="#b6532b"/>
+        <path d="M72 180v48h316v-48M230 203v25" stroke="#c9c3b2" stroke-width="1.5"/>
+        <path class="path-accent" d="M72 228h316" stroke="#b6532b" stroke-width="1.5"/>
+        <g class="signal"><circle class="signal-halo" cx="68" cy="228" r="12" fill="#b6532b"/><circle cx="68" cy="228" r="5" fill="#b6532b"/></g>
+        <g class="signal signal-second"><circle class="signal-halo" cx="68" cy="228" r="12" fill="#b6532b"/><circle cx="68" cy="228" r="5" fill="#b6532b"/></g>
+      </svg>
+    </div>
+    <div class="signin-story-foot"><span>ILLUSTRATIVE EXAMPLE</span><label class="signin-motion-control" for="signin-motion"><span class="pause-label">Pause animation</span><span class="resume-label">Resume animation</span></label></div>
+  </aside>
   <div class="signin-card">
     <div class="signin-brand"><img class="signin-brand-mark" src="{BRAND_MARK_DATA_URI}" alt="" width="28" height="28"><span class="signin-brand-name">Aletheore</span></div>
     <h1>Sign in to Aletheore</h1>
@@ -853,6 +981,7 @@ SIGNIN_HTML = f"""<!DOCTYPE html>
     </div>
     <p class="signin-fine-print">By continuing you agree to the <a href="https://www.aletheore.com/terms.html">Terms</a> and <a href="https://www.aletheore.com/privacy.html">Privacy Policy</a>.</p>
   </div>
+  </div>
 </div>
 """
 
@@ -868,25 +997,48 @@ def _picker_html() -> str:
     # shape.
     install_url = escape(github_app_install_url("/dashboard"))
     return f"""<!DOCTYPE html>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your repositories — Aletheore</title>
 <link rel="icon" type="image/png" href="{BRAND_MARK_DATA_URI}">
 {ICONS_LINK}
 {STYLE}
-<div class="picker-wrap">
+<header class="picker-nav">
+  <div class="picker-brand"><img src="{BRAND_MARK_DATA_URI}" width="28" height="28" alt="">Aletheore</div>
+  <div class="picker-nav-right"><span class="picker-nav-note">YOUR WORKSPACE</span><a class="picker-signout" href="/auth/logout">Sign out</a></div>
+</header>
+<main class="picker-wrap">
   <div class="picker-head">
-    <h1>Your repositories</h1>
-    <a class="btn" href="/auth/logout">Sign out</a>
+    <div><div class="picker-eyebrow">Your workspace</div><h1>Repositories</h1><p class="picker-subtitle">Choose a repository to open its dashboard.</p></div>
+    <div class="picker-count" id="picker-count" aria-live="polite"></div>
+  </div>
+  <div class="picker-toolbar" id="picker-toolbar" hidden>
+    <div class="picker-search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m16 16 4 4"></path></svg><label class="sr-only" for="picker-search">Search repositories</label><input id="picker-search" type="search" placeholder="Search repositories" autocomplete="off"></div>
+    <div class="picker-filters" role="group" aria-label="Filter repositories">
+      <button type="button" class="picker-filter" data-filter="all" aria-pressed="true">All</button>
+      <button type="button" class="picker-filter" data-filter="available" aria-pressed="false">Available</button>
+      <button type="button" class="picker-filter" data-filter="waiting" aria-pressed="false">Awaiting setup</button>
+    </div>
   </div>
   <div id="picker-body"><div class="empty-state">Loading&hellip;</div></div>
-</div>
+</main>
 <script>
 {FETCH_HELPERS}
 (async function () {{
   const body = document.getElementById('picker-body');
-  const res = await apiGet('/app/repos');
-  if (!res) return;
-  const data = await res.json();
+  let data;
+  try {{
+    const res = await apiGet('/app/repos');
+    if (!res) {{
+      body.innerHTML = '<div class="picker-no-results" role="alert">Could not load repositories. Refresh the page to try again.</div>';
+      return;
+    }}
+    data = await res.json();
+    if (!data || !Array.isArray(data.repos) || (data.billing_accounts != null && !Array.isArray(data.billing_accounts))) throw new Error('Invalid repositories response');
+  }} catch (error) {{
+    body.innerHTML = '<div class="picker-no-results" role="alert">Could not load repositories. Refresh the page to try again.</div>';
+    return;
+  }}
   // Flash installations have no dashboard, but their owner still needs to see
   // the AI credit balance and buy more - listed here next to any AIR repos,
   // because one login can administer both (AIR on a personal account, Flash
@@ -914,50 +1066,68 @@ def _picker_html() -> str:
       '</div></div>';
     return;
   }}
-  const byOrg = {{}};
-  data.repos.forEach(function (r) {{
-    (byOrg[r.org] = byOrg[r.org] || []).push(r);
-  }});
-  body.innerHTML = '';
-  Object.keys(byOrg).sort().forEach(function (org) {{
-    const group = document.createElement('div');
-    group.className = 'picker-org-group';
-    const grid = byOrg[org].map(function (r) {{
-      const planBadge = '<span class="picker-plan' + (r.plan !== 'free' ? ' paid' : '') + '">' + escapeHtml(planDisplayName(r.plan)) + '</span>';
-      if (r.initialized === false) {{
-        const note = r.scan_limit_reached
-          ? '10 repos per month limit reached &mdash; please wait for next month'
-          : 'Initialization required &mdash; waiting for the first scan to complete';
-        return '<div class="picker-card picker-card-pending">' +
-          '<div class="picker-card-icon"><i class="ti ti-git-branch" aria-hidden="true"></i></div>' +
-          '<div class="picker-card-body"><div class="picker-repo">' + escapeHtml(r.repo) + '</div>' +
-          planBadge +
-          '<div class="picker-pending-note">' + note + '</div></div>' +
-          '</div>';
-      }}
-      return '<a class="picker-card" href="/dashboard/' + encodeURIComponent(r.org) + '/' + encodeURIComponent(r.repo) + '">' +
-        '<div class="picker-card-icon"><i class="ti ti-git-branch" aria-hidden="true"></i></div>' +
-        '<div class="picker-card-body"><div class="picker-repo">' + escapeHtml(r.repo) + '</div>' +
-        planBadge + '</div>' +
-        '<i class="ti ti-chevron-right picker-card-arrow" aria-hidden="true"></i></a>';
-    }}).join('');
-    group.innerHTML = '<div class="picker-org-label">' + escapeHtml(org) + '</div><div class="picker-grid">' + grid + '</div>';
-    body.appendChild(group);
-  }});
-  if (billingAccounts.length > 0) {{
-    const flashGroup = document.createElement('div');
-    flashGroup.className = 'picker-org-group';
-    const flashGrid = billingAccounts.map(function (a) {{
-      return '<a class="picker-card" href="/credits/' + encodeURIComponent(a.installation_id) + '">' +
-        '<div class="picker-card-icon"><i class="ti ti-coin" aria-hidden="true"></i></div>' +
-        '<div class="picker-card-body"><div class="picker-repo">' + escapeHtml(a.account_login) + '</div>' +
-        '<span class="picker-plan paid">' + escapeHtml(planDisplayName(a.plan)) + '</span>' +
-        '<div class="picker-pending-note">$' + (Number(a.credit_remaining_usd) || 0).toFixed(2) + ' AI credit &middot; buy more</div></div>' +
-        '<i class="ti ti-chevron-right picker-card-arrow" aria-hidden="true"></i></a>';
-    }}).join('');
-    flashGroup.innerHTML = '<div class="picker-org-label">Flash organizations (AI credit)</div><div class="picker-grid">' + flashGrid + '</div>';
-    body.appendChild(flashGroup);
+  const toolbar = document.getElementById('picker-toolbar');
+  const search = document.getElementById('picker-search');
+  const count = document.getElementById('picker-count');
+  const filters = [...document.querySelectorAll('.picker-filter')];
+  let selected = 'all';
+  const icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M8 4v16M11 8h7M11 12h5"></path></svg>';
+  const escape = escapeHtml;
+  function render() {{
+    const query = search.value.trim().toLowerCase();
+    const matches = data.repos.filter(function (r) {{
+      const statusMatches = selected === 'all' || (selected === 'available' ? r.initialized !== false : r.initialized === false);
+      return statusMatches && (r.org + '/' + r.repo).toLowerCase().includes(query);
+    }});
+    count.textContent = matches.length + (matches.length === 1 ? ' repository' : ' repositories') + (query || selected !== 'all' ? ' shown' : '');
+    const byOrg = Object.create(null);
+    matches.forEach(function (r) {{ (byOrg[r.org] = byOrg[r.org] || []).push(r); }});
+    body.innerHTML = '';
+    Object.keys(byOrg).sort().forEach(function (org) {{
+      const group = document.createElement('section');
+      group.className = 'picker-org-group';
+      const rows = byOrg[org].map(function (r) {{
+        const pending = r.initialized === false;
+        const status = pending ? (r.scan_limit_reached ? 'Monthly limit reached' : 'Awaiting first scan') : 'Dashboard available';
+        const note = pending && r.scan_limit_reached ? '<span class="picker-pending-note">10 repos per month limit reached &mdash; please wait for next month</span>' : '';
+        const contents = '<span class="picker-card-icon">' + icon + '</span>' +
+          '<span class="picker-card-body"><span class="picker-repo">' + escape(r.repo) + '</span><span class="picker-repo-owner">' + escape(r.org) + '</span>' + note + '</span>' +
+          '<span class="picker-card-meta"><span class="picker-plan">' + escape(planDisplayName(r.plan)) + '</span><span class="picker-status' + (pending ? ' waiting' : '') + '">' + status + '</span></span>' +
+          (pending ? '' : '<span class="picker-card-arrow" aria-hidden="true">&#8599;</span>');
+        return pending ? '<div class="picker-card picker-card-pending">' + contents + '</div>' : '<a class="picker-card" href="/dashboard/' + encodeURIComponent(r.org) + '/' + encodeURIComponent(r.repo) + '">' + contents + '</a>';
+      }}).join('');
+      group.innerHTML = '<h2 class="picker-org-label">' + escape(org) + '</h2><div class="picker-grid">' + rows + '</div>';
+      body.appendChild(group);
+    }});
+    if (!matches.length && data.repos.length) {{
+      const empty = document.createElement('div');
+      empty.className = 'picker-no-results';
+      empty.textContent = 'No repositories match your search or filter.';
+      body.appendChild(empty);
+    }}
+    if (billingAccounts.length > 0) {{
+      const flashGroup = document.createElement('section');
+      flashGroup.className = 'picker-org-group';
+      const rows = billingAccounts.map(function (a) {{
+        return '<a class="picker-card" href="/credits/' + encodeURIComponent(a.installation_id) + '">' +
+          '<span class="picker-card-icon">' + icon + '</span><span class="picker-card-body"><span class="picker-repo">' + escape(a.account_login) + '</span>' +
+          '<span class="picker-pending-note">$' + (Number(a.credit_remaining_usd) || 0).toFixed(2) + ' AI credit &middot; buy more</span></span>' +
+          '<span class="picker-card-meta"><span class="picker-plan">' + escape(planDisplayName(a.plan)) + '</span></span><span class="picker-card-arrow" aria-hidden="true">&#8599;</span></a>';
+      }}).join('');
+      flashGroup.innerHTML = '<h2 class="picker-org-label">Flash organizations (AI credit)</h2><div class="picker-grid">' + rows + '</div>';
+      body.appendChild(flashGroup);
+    }}
   }}
+  toolbar.hidden = data.repos.length === 0;
+  search.addEventListener('input', render);
+  filters.forEach(function (button) {{
+    button.addEventListener('click', function () {{
+      selected = button.dataset.filter;
+      filters.forEach(function (item) {{ item.setAttribute('aria-pressed', item === button ? 'true' : 'false'); }});
+      render();
+    }});
+  }});
+  render();
 }})();
 </script>
 """
