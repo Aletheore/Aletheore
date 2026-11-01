@@ -248,7 +248,8 @@ A cold reader asked these. None need the owner. All are **[My call]** unless mar
 - **Sensitive files in checkpoints.** Snapshots include tracked files and untracked, non-ignored
   files, minus a deny-list kept in code (not config): `.env*`, `*.env`, `*.pem`, `*.key`, `*.p12`,
   `id_rsa*`, `credentials*`, and names matching the secret scanner's file patterns. The status screen
-  lists skipped files by name. Same pattern as the apply-fix deny-list in the paid-tier spec.
+  lists skipped files by name. These basename globs are matched case-insensitively. Same pattern
+  as the apply-fix deny-list in the paid-tier spec.
 - **Check 1 scope for v1.** Manifest diffs (newly added dependency entries) are fully checked. A new
   import with no manifest change is checked only when the import name maps to a distribution name
   through a bundled map or an exact match; otherwise the outcome is "not checked: cannot map
@@ -258,7 +259,9 @@ A cold reader asked these. None need the owner. All are **[My call]** unless mar
 - **Budgets.** Pre-edit and post-edit hooks aim under 500 ms and stop at 2 s. Turn-end, session-end
   and pre-commit hooks stop at 8 s, with a 6 s guard budget. Every hook exits 0 and drops late output.
   Registry lookups run at turn-end and pre-commit, never per edit; each request gets at most 3 s
-  within the remaining guard budget. `shield check` also uses a 6 s guard budget. Checkpoint: skip files over 5 MB, stop at 100 MB total. Python 3.11 to 3.14, as the
+  within the remaining guard budget. `shield check` uses the same soft 6 s guard budget but has no
+  outer process hard stop: an already-running local evidence operation can overrun it. Late phases
+  are skipped with a time-budget reason. Checkpoint: skip files over 5 MB, stop at 100 MB total. Python 3.11 to 3.14, as the
   package supports today. **Platforms: macOS, Linux and Windows in v1 [Owner]** (owner asked for
   Windows on 2026-10-28). The existing hook snippet already has Windows quoting; the builder must
   handle Windows paths, line endings, the git hook (a shell script run by Git for Windows' bundled

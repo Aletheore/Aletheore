@@ -1,15 +1,18 @@
 """Regressions from adversarial review and checked Flash comments."""
 import io
+import errno
 import json
+import os
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
 
-from aletheore.shield import deps, guard, guard_evidence, hooks, imports, registry, setup, state, receipt, gitutil
+from aletheore.shield import deps, guard, guard_evidence, hooks, imports, registry, setup, state, receipt, gitutil, locking
 from aletheore.shield.denylist import is_denied_path
 from aletheore.evidence_diff import new_cycles
 from tests.air_fixtures import minimal_air_evidence
@@ -305,3 +308,113 @@ def test_suggested_pytest_command_quotes_space_in_test_path(repo):
     found = guard_evidence._affected_finding(repo, head, ['app.py'])
     import os
     assert ('"tests/test feature.py"' if os.name == 'nt' else "'tests/test feature.py'") in found.message
+
+
+def test_git_resolution_failure_is_a_graceful_repository_diagnostic(repo, monkeypatch):
+    monkeypatch.setattr(gitutil, 'git_executable', MagicMock(side_effect=FileNotFoundError('no git')))
+    assert 'could not be started' in gitutil.repo_state(repo).reason
+
+
+def test_old_self_imports_do_not_hide_new_mutual_cycle():
+    def ev(edges):
+        return {'repository': {'modules': [{'path': p, 'imports': values} for p, values in edges.items()]}}
+    old = ev({'a.py': ['a.py'], 'b.py': ['b.py']})
+    new = ev({'a.py': ['b.py'], 'b.py': ['a.py']})
+    assert len(new_cycles(old, new)) == 1
+
+
+def test_declared_suffix_does_not_hide_unrelated_new_import(repo):
+    (repo / 'requirements.txt').write_text('foo-bar==1\n')
+    subprocess.run(['git', '-C', str(repo), 'commit', '-qam', 'declare foo-bar'], check=True, capture_output=True)
+    (repo / 'app.py').write_text('import bar\n')
+    assert any(r.name == 'bar' for r in deps.added_dependencies(repo)[0])
+
+
+def test_receipt_state_probe_failure_still_produces_failure_receipt(repo, monkeypatch):
+    monkeypatch.setattr(state, 'session_state_path', MagicMock(side_effect=OSError('unavailable')))
+    built = receipt.build_receipt(repo, 'session', lookups=False)
+    assert built.session == 'unknown' and not built.session_known
+    assert any('receipt could not be computed' in r for r in built.report.not_checked)
+
+
+@pytest.mark.parametrize('security', [None, {'secrets': None}, {'secrets': {'findings': None}}])
+def test_malformed_secret_evidence_requests_a_scan(repo, monkeypatch, security):
+    from aletheore import evidence as evidence_io
+    head = evidence(repo)
+    head['security'] = security
+    monkeypatch.setattr(evidence_io, 'load_evidence', lambda *a: head)
+    _, skipped = guard_evidence.evidence_checks(repo, [], None)
+    assert any('unexpected shape; run aletheore scan' in x for x in skipped)
+
+
+@pytest.mark.parametrize('source,expected', [
+    (r'import x from "lodash\u002ecore";', {'lodash.core'}),
+    (r'require("foo\u002dbar");', {'foo-bar'}),
+    (r'import(`\u{40}scope\x2fpkg`);', {'@scope/pkg'}),
+    (r'import x from "bad\u{110000}";', set()),
+    (r'import x from "bad\nname";', set()),
+])
+def test_escaped_js_specifiers_are_decoded_or_safely_skipped(source, expected):
+    assert imports.js_imports(source) == expected
+
+
+def test_near_expired_listing_does_not_spawn_git(repo, monkeypatch):
+    monkeypatch.setattr(guard, '_clock', lambda: 0.999)
+    run = MagicMock(side_effect=AssertionError('must not spawn'))
+    monkeypatch.setattr(guard, 'run_git', run)
+    with pytest.raises(TimeoutError):
+        guard._changed_files(repo, 'HEAD', deadline=1.0)
+    run.assert_not_called()
+
+
+def test_listing_timeout_has_a_budget_skip_reason(repo, monkeypatch):
+    monkeypatch.setattr(guard, 'added_dependencies', lambda *a: ([], []))
+    monkeypatch.setattr(guard, '_changed_files', MagicMock(side_effect=TimeoutError()))
+    report = guard.run_guard(repo, lookups=False)
+    assert 'time budget reached; evidence checks were not run' in report.not_checked
+
+
+def test_busy_state_lock_reports_failed_save(tmp_path, monkeypatch):
+    @contextmanager
+    def busy(*args, **kwargs):
+        yield False
+    monkeypatch.setattr(hooks, 'file_lock', busy)
+    debug = MagicMock()
+    monkeypatch.setattr(hooks, '_debug', debug)
+    assert not hooks._update_state(tmp_path / 'hook-s.json', {'edited': True})
+    debug.assert_called_once()
+
+
+def test_hook_state_prune_preserves_recent_and_current_sessions(tmp_path):
+    now = time.time()
+    current, recent, stale = [tmp_path / ('hook-' + name + '.json') for name in ['current', 'recent', 'stale']]
+    for path in [current, recent, stale]:
+        path.write_text('{}')
+    for path in [current, stale]:
+        os.utime(path, (now - 8 * 86400, now - 8 * 86400))
+    hooks._prune_hook_state(current, now)
+    assert current.exists() and recent.exists() and not stale.exists()
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX lock fault injection')
+def test_unlock_failure_preserves_body_exception(tmp_path, monkeypatch):
+    import fcntl
+    def flock(handle, operation):
+        if operation == fcntl.LOCK_UN:
+            raise OSError(errno.EBADF, 'unlock failure')
+    monkeypatch.setattr(fcntl, 'flock', flock)
+    with pytest.raises(RuntimeError, match='original'):
+        with locking.file_lock(tmp_path / 'state.lock'):
+            raise RuntimeError('original')
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX lock fault injection')
+def test_noncontention_lock_failure_is_not_retried(tmp_path, monkeypatch):
+    import fcntl
+    monkeypatch.setattr(fcntl, 'flock', MagicMock(side_effect=OSError(errno.EBADF, 'bad descriptor')))
+    pause = MagicMock(side_effect=AssertionError('must not retry'))
+    monkeypatch.setattr(locking.time, 'sleep', pause)
+    with pytest.raises(OSError, match='bad descriptor'):
+        with locking.file_lock(tmp_path / 'state.lock'):
+            pass
+    pause.assert_not_called()

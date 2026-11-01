@@ -1,5 +1,6 @@
 """Small cross-process locks for Shield's read/modify/write state."""
 
+import errno
 import os
 import time
 from contextlib import contextmanager
@@ -42,7 +43,9 @@ def file_lock(path: Path, timeout: float = 0.25):
                 lock()
                 acquired = True
                 break
-            except OSError:
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                    raise
                 if time.monotonic() >= end:
                     break
                 time.sleep(0.005)
@@ -50,4 +53,8 @@ def file_lock(path: Path, timeout: float = 0.25):
             yield acquired
         finally:
             if acquired:
-                unlock()
+                try:
+                    unlock()
+                except OSError:
+                    # Closing this handle also releases the OS lock; preserve the body's outcome.
+                    pass

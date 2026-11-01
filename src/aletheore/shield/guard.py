@@ -13,7 +13,7 @@ from pathlib import Path
 
 from aletheore.shield import state
 from aletheore.shield.deps import DepRef, added_dependencies
-from aletheore.shield.gitutil import run_git
+from aletheore.shield.gitutil import _TIMED_OUT, run_git
 from aletheore.shield.guard_evidence import Finding, evidence_checks
 from aletheore.shield.nearmiss import near_miss
 from aletheore.shield.registry import lookup_package
@@ -57,9 +57,12 @@ def _changed_files(repo: Path, base: str, *, deadline: float | None = None) -> l
     """Files differing from `base` plus untracked ones; with no usable base every file counts as changed."""
     def git(*args):
         remaining = 10.0 if deadline is None else deadline - _clock()
-        if remaining <= 0:
+        if remaining < 0.01:
             raise TimeoutError("evidence file listing exceeded its budget")
-        return run_git(repo, *args, timeout=min(10.0, remaining))
+        result = run_git(repo, *args, timeout=min(10.0, remaining))
+        if result.returncode == _TIMED_OUT:
+            raise TimeoutError("evidence file listing exceeded its budget")
+        return result
 
     has_base = git("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}").returncode == 0
     if has_base:
@@ -222,6 +225,8 @@ def run_guard(
                 evidence_findings, evidence_skipped = evidence_checks(repo, changed, base_evidence)
                 findings.extend(evidence_findings)
                 not_checked.extend(evidence_skipped)
+    except TimeoutError:
+        not_checked.append("time budget reached; evidence checks were not run")
     except Exception as exc:  # noqa: BLE001
         not_checked.append(f"evidence check failed ({type(exc).__name__})")
     findings = [

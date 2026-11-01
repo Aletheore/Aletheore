@@ -1,14 +1,14 @@
 """Git helpers for Shield: one subprocess wrapper and a plain-words repository state check."""
 
 import os
-import subprocess
+import subprocess  # nosec B404 # Git is invoked as an argv list without a shell
 from dataclasses import dataclass
 from pathlib import Path
 
 from aletheore.git_exec import git_executable
 
-_TIMED_OUT = -1000
-_SPAWN_FAILED = -1001
+_TIMED_OUT = -(1 << 33)
+_SPAWN_FAILED = _TIMED_OUT - 1
 _INHERITED_GIT_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 
 
@@ -28,11 +28,12 @@ def run_git(
     timeout: float = 10.0,
 ) -> "subprocess.CompletedProcess[bytes]":
     """Run git inside repo. Wrapper failures use sentinels outside OS exit/signal codes."""
-    command = [git_executable(), *args]
-    full_env = {k: v for k, v in os.environ.items() if k not in _INHERITED_GIT_VARS}
-    full_env.update(env or {})
+    command = ["git", *args]  # diagnostic argv if resolution fails; this fallback is never executed
     try:
-        return subprocess.run(
+        command[0] = git_executable()
+        full_env = {k: v for k, v in os.environ.items() if k not in _INHERITED_GIT_VARS}
+        full_env.update(env or {})
+        return subprocess.run(  # nosec B603 # executable is resolved Git; callers supply argv, never shell commands
             command, cwd=str(repo), env=full_env, input=input, capture_output=True, timeout=timeout, check=False
         )
     except subprocess.TimeoutExpired:

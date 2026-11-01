@@ -920,7 +920,7 @@ def apply_setup(repo: Path, approved: list[SetupChange] | None = None) -> None:
         if not record_existed:
             try:
                 _remove(plan.where, purge=False, rollback=True)
-            except Exception:  # noqa: BLE001 - the original failure is the one to report
+            except Exception:  # noqa: BLE001 # nosec B110 # preserve the original error when rollback also fails
                 pass
         raise
 

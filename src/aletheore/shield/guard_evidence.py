@@ -573,10 +573,10 @@ def evidence_checks(
 
     try:
         known = {m["path"] for m in head["repository"]["modules"] if m.get("path")}
-    except (KeyError, TypeError):
+        secret_paths = {f.get("path") for f in head.get("security", {}).get("secrets", {}).get("findings", [])}
+    except (AttributeError, KeyError, TypeError):
         return [], ["scan evidence has an unexpected shape; run aletheore scan"]
 
-    secret_paths = {f.get("path") for f in head.get("security", {}).get("secrets", {}).get("findings", [])}
     newer = _files_newer_than(repo, _relevant_changed(repo, changed, known | secret_paths), head.get("scanned_at"))
     if newer is None:
         return [], ["scan evidence has no readable scan time, so its age cannot be checked; run aletheore scan"]

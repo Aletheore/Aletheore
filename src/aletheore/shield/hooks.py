@@ -63,12 +63,13 @@ SESSION_END_BUDGET_S = 6.0
 PRE_COMMIT_BUDGET_S = 6.0
 
 PRUNE_INTERVAL_S = 3600.0
+HOOK_STATE_MAX_AGE_S = 7 * 24 * 3600.0
 GUARD_MAX_LINES = 12
 MAX_PAYLOAD_CHARS = 64 * 1024 * 1024
 HEADER = "Aletheore Shield guard (working tree vs HEAD):"
 PRE_COMMIT_PREFIX = "aletheore shield: "
 STATE_DIRNAME = "aletheore-shield"
-NO_SESSION_TOKEN = "nosession"
+NO_SESSION_TOKEN = "nosession"  # nosec B105 # filename fallback label, not an authentication credential
 SETUP_DIRNAME = "setup"  # setup._SETUP_DIRNAME; not imported so the hooks stay light
 SETUP_RECORD_NAME = "setup-record.json"  # setup.RECORD_NAME
 # A post-edit guard runs without registry lookups by design, so saying so to the agent on every edit is noise.
@@ -109,7 +110,7 @@ def _debug(stderr, message: str | None = None) -> None:
             traceback.print_exc(file=target)
         else:
             target.write(message + "\n")
-    except Exception:  # noqa: BLE001 - a broken stderr must not break the hook either
+    except Exception:  # noqa: BLE001 # nosec B110 # a broken diagnostic stream must not break the hook
         pass
 
 
@@ -266,22 +267,42 @@ def _load_state(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _update_state(path: Path, updates: dict) -> None:
-    """Merge `updates` into the newest copy of the file and replace it atomically. Never raises OSError."""
+def _update_state(path: Path, updates: dict) -> bool:
+    """Merge and atomically replace state; return False on bounded lock/write failure, with debug diagnostics."""
     temporary = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
         with file_lock(path.parent / ".hook-state.lock") as acquired:
             if not acquired:
-                return
+                _debug(None, "Shield hook state was not saved: state lock is busy")
+                return False
             data = _load_state(path)
             data.update(updates)
             temporary.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
             os.replace(temporary, path)
+            return True
     except OSError:
+        _debug(None, "Shield hook state could not be saved")
         try:
             temporary.unlink()
         except OSError:
             pass
+        return False
+
+
+def _prune_hook_state(path: Path, now: float) -> None:
+    """Prune other sessions only after seven inactive days, serialized with state writers."""
+    try:
+        with file_lock(path.parent / ".hook-state.lock") as acquired:
+            if not acquired:
+                return
+            for old in path.parent.glob("hook-*.json"):
+                try:
+                    if old != path and not old.is_symlink() and now - old.stat().st_mtime > HOOK_STATE_MAX_AGE_S:
+                        old.unlink()
+                except OSError:
+                    continue
+    except OSError:
+        _debug(None, "Shield stale hook state could not be pruned")
 
 
 def _sha(text: str) -> str:
@@ -312,13 +333,15 @@ def _pre_edit(payload: dict | None) -> Output | None:
     # Written first, before any git work and before the repo-state gate: the session did edit this repository,
     # so turn-end (the only in-session guard with registry lookups) must run even in a detached-HEAD, merge or
     # rebase state where checkpoints are not taken, or when the checkpoint is cut off by the hard stop.
-    _update_state(path, {"edited": True})
+    state_saved = _update_state(path, {"edited": True})
+    warning = None if state_saved else Output(stderr=PRE_COMMIT_PREFIX +
+        "session state could not be saved; turn-end checks may be skipped.\n")
     from aletheore.shield import checkpoint, guard_evidence
     from aletheore.shield.gitutil import repo_state
 
     checked = repo_state(repo.top)
     if not checked.ok:
-        return None  # only the checkpoint, prune and base-evidence work needs a supported repository state
+        return warning  # only checkpoint/prune/base-evidence work requires a supported repository state
     now = _now()
     last = _load_state(path).get("last_prune")
     due = not isinstance(last, (int, float)) or not 0 <= now - last < PRUNE_INTERVAL_S
@@ -330,13 +353,8 @@ def _pre_edit(payload: dict | None) -> Output | None:
     if due:
         checkpoint.prune_checkpoints(repo.top)
         guard_evidence.prune_base_evidence(repo.top)  # copies left by sessions that never reached session end
-        for old in path.parent.glob("hook-*.json"):
-            try:
-                if old != path and not old.is_symlink() and now - old.stat().st_mtime > guard_evidence.BASE_EVIDENCE_MAX_AGE_S:
-                    old.unlink()
-            except OSError:
-                continue
-    return None
+        _prune_hook_state(path, now)
+    return warning
 
 
 def _guard_report(repo: _Repo, session_id: str, *, budget_s: float, lookups: bool | None):
@@ -527,7 +545,7 @@ def run_and_exit(argv: list[str] | None = None) -> NoReturn:
             try:
                 if stream is not None:
                     stream.flush()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 # nosec B110 # a broken stream must not defeat the exit-0 contract
                 pass
         os._exit(code)
 

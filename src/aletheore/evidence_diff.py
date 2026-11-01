@@ -45,7 +45,7 @@ def new_cycles(old: dict, new: dict) -> list[dict]:
         # overlaps it can contain a genuinely new cycle.
         members = set(component)
         familiar = any(members <= set(old) or set(old) <= members for old in old_groups)
-        if not familiar and not (members <= set(old_self)):
+        if not familiar:
             found.append(
                 {
                     "size": len(component),

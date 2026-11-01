@@ -116,6 +116,8 @@ def build_receipt(
 ) -> Receipt | None:
     """The session's receipt, or None when the session did nothing worth a receipt. Never raises."""
     repo = Path(repo)
+    known = False
+    created = datetime.now(timezone.utc)
     try:
         known = state.session_state_path(repo, session_id) is not None
         created = _utc(now)
@@ -146,9 +148,8 @@ def build_receipt(
         return Receipt(session, created, files, report, first.ref, known, previous)
     except Exception as exc:  # noqa: BLE001
         # Preserve an explicit failure receipt instead of making a failed session look like a no-op.
-        return Receipt(session_id if state.session_state_path(repo, session_id) is not None else "unknown",
-                       _utc(now), (), GuardReport((), (f"receipt could not be computed ({type(exc).__name__})",)),
-                       None, state.session_state_path(repo, session_id) is not None)
+        return Receipt(session_id if known else "unknown", created, (),
+                       GuardReport((), (f"receipt could not be computed ({type(exc).__name__})",)), None, known)
 
 
 def _code(text: str) -> str:
@@ -271,6 +272,6 @@ def write_receipt(repo: Path, receipt: Receipt, *, now: datetime | None = None) 
         raise
     try:
         _prune(directory, repo, _utc(now) if now is not None else _wall_clock(), target.name)
-    except Exception:  # noqa: BLE001 - failing to tidy old receipts must not fail the write
+    except Exception:  # noqa: BLE001 # nosec B110 # retention cleanup must not fail a successful receipt write
         pass
     return target

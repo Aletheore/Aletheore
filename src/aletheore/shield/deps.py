@@ -367,7 +367,7 @@ def _declared_python_names(repo: Path, working: list[str]) -> set[str]:
                 if config.has_section("options.extras_require"):
                     for value in config["options.extras_require"].values():
                         found |= _dist_names(value.splitlines())
-        except Exception:  # unparseable files are skipped silently
+        except (ValueError, TypeError, AttributeError, configparser.Error):  # malformed declarations are skipped
             continue
     return found
 
@@ -490,7 +490,7 @@ def _import_ref(imp, rel, is_py, facts, import_map, installed, declared_py, decl
         if name in declared_py or name in facts.local_py:
             return None
         # A declared foo-bar may provide foo; a declared foo does not cover a new foo-bar import.
-        if any(len(name) >= 3 and (d.startswith(name + "-") or d.endswith("-" + name)) for d in declared_py):
+        if any(len(name) >= 3 and d.startswith(name + "-") for d in declared_py):
             return None
         return DepRef("PyPI", name, "import", rel)
     lowered = imp.lower()

@@ -162,7 +162,7 @@ def _write_cache(path: Path, key: str, info: RegistryInfo, now: datetime) -> Non
 
 
 def _default_opener(request, timeout=None):
-    return urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT)
+    return urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT)  # nosec B310 # fixed HTTPS registry URLs from _url
 
 
 def lookup_package(
@@ -190,7 +190,7 @@ def lookup_package(
     except urllib.error.HTTPError as error:
         try:
             error.close()
-        except Exception:
+        except Exception:  # nosec B110 # close is best effort; the actual lookup result is handled below
             pass
         if error.code == 404:
             info = RegistryInfo(False, None, None)
