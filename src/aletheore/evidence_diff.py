@@ -31,8 +31,8 @@ def vulnerability_check_skipped_in(old: dict, new: dict) -> list[str]:
 
 
 def new_cycles(old: dict, new: dict) -> list[dict]:
-    """Import-cycle groups in `new` that share no module with any cycle group in `old`. A cycle that merely grew,
-    shrank or was found from a different start module is the same cycle, not a new one.
+    """New import-cycle groups. Pure growth/shrinkage of an existing group is familiar; replacing members
+    while merely overlapping an old group is a new group.
 
     Works on the full strongly-connected components computed from each snapshot's module graph (evidence stores the
     graph, not a cycle list), so the listing caps of `find_import_cycles` cannot hide an old cycle."""
@@ -41,7 +41,11 @@ def new_cycles(old: dict, new: dict) -> list[dict]:
     new_groups, new_self, graph = import_cycle_components(new)
     found = []
     for component in sorted(new_groups, key=lambda c: (-len(c), c[0])):
-        if not seen.intersection(component):
+        # Pure growth/shrinkage of one existing group is familiar; a replacement group that only
+        # overlaps it can contain a genuinely new cycle.
+        members = set(component)
+        familiar = any(members <= set(old) or set(old) <= members for old in old_groups)
+        if not familiar and not (members <= set(old_self)):
             found.append(
                 {
                     "size": len(component),

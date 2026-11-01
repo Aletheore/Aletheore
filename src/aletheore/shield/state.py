@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,9 +44,13 @@ def load_config(repo: Path) -> ShieldConfig:
 
 def save_config(repo: Path, config: ShieldConfig) -> None:
     directory = shield_dir(repo, create=True)
-    (directory / "config.json").write_text(
-        json.dumps({"registry_lookups": config.registry_lookups}, indent=2) + "\n", encoding="utf-8"
-    )
+    descriptor, name = tempfile.mkstemp(dir=directory, prefix=".config-", suffix=".tmp")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps({"registry_lookups": config.registry_lookups}, indent=2) + "\n")
+        os.replace(name, directory / "config.json")
+    finally:
+        Path(name).unlink(missing_ok=True)
 
 
 def registry_lookups_enabled(repo: Path) -> bool:

@@ -41,6 +41,8 @@ def _init(path):
     _git(path, "config", "user.name", "T")
     _git(path, "config", "user.email", "t@example.com")
     _git(path, "config", "commit.gpgsign", "false")
+    _git(path, "config", "maintenance.auto", "false")
+    _git(path, "config", "gc.auto", "0")
     (path / "base.txt").write_text("base\n", encoding="utf-8")
     _git(path, "add", "-A")
     _git(path, "commit", "-q", "-m", "init")

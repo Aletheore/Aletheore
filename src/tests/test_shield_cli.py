@@ -99,7 +99,10 @@ def test_first_run_states_the_network_disclosure(repo, monkeypatch):
     monkeypatch.delenv("ALETHEORE_SHIELD_OFFLINE")
     r = runner.invoke(app, ["shield", "--path", str(repo)], input="no\n")
     assert "package NAME" in r.output
-    assert "pypi.org" in r.output and "registry.npmjs.org" in r.output
+    import re
+
+    hosts = set(re.findall(r"(?<![\w.-])(?:pypi\.org|registry\.npmjs\.org)(?![\w.-])", r.output))
+    assert hosts == {"pypi.org", "registry.npmjs.org"}
     assert "ALETHEORE_SHIELD_OFFLINE=1" in r.output
     assert "registry_lookups" in r.output
 

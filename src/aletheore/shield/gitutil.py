@@ -7,8 +7,8 @@ from pathlib import Path
 
 from aletheore.git_exec import git_executable
 
-_TIMED_OUT = 124
-_SPAWN_FAILED = 127
+_TIMED_OUT = -1000
+_SPAWN_FAILED = -1001
 _INHERITED_GIT_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 
 
@@ -27,7 +27,7 @@ def run_git(
     input: bytes | None = None,
     timeout: float = 10.0,
 ) -> "subprocess.CompletedProcess[bytes]":
-    """Run git inside repo. Never raises on a non-zero exit; a timeout yields returncode 124 and empty output."""
+    """Run git inside repo. Wrapper failures use sentinels outside OS exit/signal codes."""
     command = [git_executable(), *args]
     full_env = {k: v for k, v in os.environ.items() if k not in _INHERITED_GIT_VARS}
     full_env.update(env or {})
@@ -47,10 +47,9 @@ def _unsupported(reason: str, git_dir: Path | None = None) -> RepoState:
 
 def repo_state(repo: Path) -> RepoState:
     """Say whether Shield can work in repo, and if not, why in plain words."""
-    try:
-        probe = run_git(repo, "rev-parse", "--absolute-git-dir", "--is-bare-repository")
-    except FileNotFoundError:
-        return _unsupported("git was not found on PATH")
+    probe = run_git(repo, "rev-parse", "--absolute-git-dir", "--is-bare-repository")
+    if probe.returncode == _SPAWN_FAILED:
+        return _unsupported("git could not be started; check its installation and PATH")
     if probe.returncode == _TIMED_OUT:
         return _unsupported("git did not answer in time")
     lines = probe.stdout.decode("utf-8", "replace").splitlines()

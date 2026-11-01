@@ -47,6 +47,8 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+
+from aletheore.shield.locking import file_lock
 from typing import NamedTuple, NoReturn
 
 PRE_EDIT_STOP_S = 2.0
@@ -268,11 +270,13 @@ def _update_state(path: Path, updates: dict) -> None:
     """Merge `updates` into the newest copy of the file and replace it atomically. Never raises OSError."""
     temporary = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
-        data = _load_state(path)
-        data.update(updates)
-        path.parent.mkdir(exist_ok=True)  # inside the git dir, which exists; never creates anything else
-        temporary.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
-        os.replace(temporary, path)
+        with file_lock(path.parent / ".hook-state.lock") as acquired:
+            if not acquired:
+                return
+            data = _load_state(path)
+            data.update(updates)
+            temporary.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+            os.replace(temporary, path)
     except OSError:
         try:
             temporary.unlink()
@@ -326,6 +330,12 @@ def _pre_edit(payload: dict | None) -> Output | None:
     if due:
         checkpoint.prune_checkpoints(repo.top)
         guard_evidence.prune_base_evidence(repo.top)  # copies left by sessions that never reached session end
+        for old in path.parent.glob("hook-*.json"):
+            try:
+                if old != path and not old.is_symlink() and now - old.stat().st_mtime > guard_evidence.BASE_EVIDENCE_MAX_AGE_S:
+                    old.unlink()
+            except OSError:
+                continue
     return None
 
 
@@ -453,12 +463,13 @@ def _work(event: str, args: list[str], stdin) -> Output | None:
     return _HANDLERS[event](_read_payload(stdin))
 
 
-def _write(stream, text: str) -> None:
+def _write(stream, text: str) -> bool:
     try:
         stream.write(text)
         stream.flush()
+        return True
     except Exception:  # noqa: BLE001 - a closed or broken pipe must not change the outcome
-        pass
+        return False
 
 
 def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) -> int:
@@ -491,12 +502,13 @@ def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) ->
         output = result[0]
         if output is None:
             return 0
-        if output.commit is not None:
-            output.commit()
+        delivered = True
         if output.stdout:
-            _write(stdout or sys.stdout, output.stdout)
+            delivered = _write(stdout or sys.stdout, output.stdout)
         if output.stderr:
-            _write(stderr or sys.stderr, output.stderr)
+            delivered = _write(stderr or sys.stderr, output.stderr) and delivered
+        if delivered and output.commit is not None:
+            output.commit()
     except BaseException:
         _debug(stderr)
     return 0

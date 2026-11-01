@@ -1,5 +1,6 @@
 {
  "Crypto": "pycryptodome",
+ "Cryptodome": "pycryptodomex",
  "MySQLdb": "mysqlclient",
  "OpenSSL": "pyopenssl",
  "PIL": "pillow",
@@ -105,6 +106,7 @@
  "pymongo": "pymongo",
  "pyparsing": "pyparsing",
  "pytest": "pytest",
+ "pythoncom": "pywin32",
  "pytz": "pytz",
  "redis": "redis",
  "regex": "regex",
@@ -159,6 +161,8 @@
  "werkzeug": "werkzeug",
  "wheel": "wheel",
  "win32api": "pywin32",
+ "win32com": "pywin32",
+ "win32gui": "pywin32",
  "wx": "wxpython",
  "yaml": "pyyaml",
  "yaml_include": "pyyaml-include",

@@ -23,8 +23,9 @@ Install stays `pip install aletheore` (or `pipx`); the only extra step is one co
 **[Owner]** confirmed that flow.
 
 Principle **[My call]**, consistent with `2026-10-28-paid-tier-differentiators-design.md`: free stays
-local, deterministic and stateless. Shield makes no model call, needs no account, and keeps state
-only in the user's own repo. It does not touch the paid features (review rules and memory,
+local and deterministic, with no hosted state. Shield makes no model call and needs no account.
+Checkpoints, receipts and hook state stay in the repository; a bounded package-name registry cache lives
+at `~/.cache/aletheore/shield-registry-cache.json` and survives removal. It does not touch the paid features (review rules and memory,
 apply-fix, cross-repo blast radius).
 
 ## Goals, non-goals, anti-goals
@@ -48,7 +49,8 @@ Non-goals
 
 Anti-goals (a failure even if it technically works)
 - Editing a user's agent settings or git hooks without showing the change and getting a yes, or
-  being unable to remove everything it added.
+  being unable to remove its hooks and settings. Removal keeps a one-line exclude for `.aletheore/`
+  while scan evidence remains; delete that directory and run `shield off` again to remove the line.
 - Checkpoint touching the user's branches, index, stash, working tree (except an explicit
   `undo`), or reflog-visible history.
 - A hook that breaks, slows or stalls the agent's tool call. Hooks always exit 0 and have a time
@@ -93,8 +95,9 @@ Anti-goals (a failure even if it technically works)
   state directory. On no: change nothing.
 - **Set up:** show status: what is on, the latest receipt, the checkpoint count.
 - `aletheore shield undo`: list checkpoints and restore one (see Checkpoint).
-- `aletheore shield off`: remove exactly what setup added, and say what it removed. Checkpoints
-  are kept unless `--purge` is passed.
+- `aletheore shield off`: remove its hooks and settings, and say what it removed. Pre-existing config
+  is preserved. Checkpoints and receipts are kept unless `--purge` is passed. Scan evidence stays;
+  a one-line `.aletheore/` exclude is retained while that directory exists.
 - `aletheore shield check`: run guard on the current diff on demand, the same code the hooks call.
 
 Decisions
@@ -243,7 +246,7 @@ A cold reader asked these. None need the owner. All are **[My call]** unless mar
   manifests directly, so it never depends on evidence freshness. If refreshing evidence turns out to
   be cheap, the builder may add it; it is not required.
 - **Sensitive files in checkpoints.** Snapshots include tracked files and untracked, non-ignored
-  files, minus a deny-list kept in code (not config): `.env*`, `*.pem`, `*.key`, `*.p12`,
+  files, minus a deny-list kept in code (not config): `.env*`, `*.env`, `*.pem`, `*.key`, `*.p12`,
   `id_rsa*`, `credentials*`, and names matching the secret scanner's file patterns. The status screen
   lists skipped files by name. Same pattern as the apply-fix deny-list in the paid-tier spec.
 - **Check 1 scope for v1.** Manifest diffs (newly added dependency entries) are fully checked. A new
@@ -252,9 +255,10 @@ A cold reader asked these. None need the owner. All are **[My call]** unless mar
   <import> to a package". No guessing. Workspace and local packages are identified from the
   manifests `manifests.py` already discovers plus workspace declarations (npm and pnpm
   workspaces, Poetry and uv path dependencies); anything uncertain is treated as local and skipped.
-- **Budgets (starting guesses).** Agent hooks: aim under 500 ms, hard stop at 2 s then exit 0 with no
-  output. Registry lookups run only in guard at turn-end and pre-commit, never per edit, with a 3 s
-  timeout. Checkpoint: skip files over 5 MB, stop at 100 MB total. Python 3.11 to 3.14, as the
+- **Budgets.** Pre-edit and post-edit hooks aim under 500 ms and stop at 2 s. Turn-end, session-end
+  and pre-commit hooks stop at 8 s, with a 6 s guard budget. Every hook exits 0 and drops late output.
+  Registry lookups run at turn-end and pre-commit, never per edit; each request gets at most 3 s
+  within the remaining guard budget. `shield check` also uses a 6 s guard budget. Checkpoint: skip files over 5 MB, stop at 100 MB total. Python 3.11 to 3.14, as the
   package supports today. **Platforms: macOS, Linux and Windows in v1 [Owner]** (owner asked for
   Windows on 2026-10-28). The existing hook snippet already has Windows quoting; the builder must
   handle Windows paths, line endings, the git hook (a shell script run by Git for Windows' bundled

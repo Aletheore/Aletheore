@@ -50,6 +50,8 @@ def _index(ecosystem: str) -> tuple[frozenset[str], tuple[tuple[str, str], ...]]
 
 def near_miss(ecosystem: str, name: str) -> str | None:
     """The popular package `name` is one edit away from, or None."""
+    if ecosystem not in ("PyPI", "npm"):
+        return None
     target = _near_norm(ecosystem, name)
     if len(target) < MIN_LENGTH:
         return None

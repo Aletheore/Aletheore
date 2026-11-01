@@ -15,6 +15,11 @@ T0 = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture(autouse=True)
+def fixed_retention_clock(monkeypatch):
+    monkeypatch.setattr(receipt, "_wall_clock", lambda: T0)
+
+
+@pytest.fixture(autouse=True)
 def _hermetic(monkeypatch, tmp_path):
     def boom(*args, **kwargs):
         raise AssertionError("test tried to reach the network")
@@ -211,7 +216,9 @@ def test_git_failure_yields_could_not_compute_note(tmp_path, monkeypatch):
     assert built is not None and built.files == ()
     assert any("could not compute" in n for n in built.report.not_checked)
     monkeypatch.setattr(receipt, "list_checkpoints", boom)
-    assert receipt.build_receipt(repo, "s1", now=T0, lookups=False) is None
+    failed = receipt.build_receipt(repo, "s1", now=T0, lookups=False)
+    assert failed is not None
+    assert any("receipt could not be computed" in note for note in failed.report.not_checked)
 
 
 def test_works_when_repo_has_no_commits(tmp_path, monkeypatch):
@@ -283,11 +290,12 @@ def test_retention_removes_old_receipts(tmp_path):
     now = T0 + timedelta(days=100)
     for i in range(60):  # 60 receipts, all older than 7 days
         receipt.write_receipt(
-            repo, receipt.Receipt(f"s{i:02}", T0 + timedelta(minutes=i), (), _empty_report(), None)
+            repo, receipt.Receipt(f"s{i:02}", T0 + timedelta(minutes=i), (), _empty_report(), None),
+            now=T0 + timedelta(minutes=i),
         )
     directory = repo / ".aletheore" / "shield" / "receipts"
     assert len(list(directory.iterdir())) == 60  # each recent at write time, so all kept
-    receipt.write_receipt(repo, receipt.Receipt("fresh", now, (), _empty_report(), None))
+    receipt.write_receipt(repo, receipt.Receipt("fresh", now, (), _empty_report(), None), now=now)
     names = sorted(p.name for p in directory.iterdir())
     assert len(names) == 50  # the newest 50 (fresh + 49 newest old ones); none of the old ones is young
     assert any(n.endswith("-fresh.md") for n in names)
@@ -300,7 +308,8 @@ def test_retention_keeps_receipts_younger_than_seven_days(tmp_path):
     repo.mkdir()
     for i in range(55):
         receipt.write_receipt(
-            repo, receipt.Receipt(f"s{i:02}", T0 + timedelta(minutes=i), (), _empty_report(), None)
+            repo, receipt.Receipt(f"s{i:02}", T0 + timedelta(minutes=i), (), _empty_report(), None),
+            now=T0 + timedelta(minutes=i),
         )
     assert len(list((repo / ".aletheore" / "shield" / "receipts").iterdir())) == 55
 

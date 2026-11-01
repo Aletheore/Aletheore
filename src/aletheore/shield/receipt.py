@@ -144,8 +144,11 @@ def build_receipt(
             report = GuardReport(report.findings, tuple(extra) + tuple(report.not_checked))
         session = session_id if known else "unknown"
         return Receipt(session, created, files, report, first.ref, known, previous)
-    except Exception:  # noqa: BLE001
-        return None
+    except Exception as exc:  # noqa: BLE001
+        # Preserve an explicit failure receipt instead of making a failed session look like a no-op.
+        return Receipt(session_id if state.session_state_path(repo, session_id) is not None else "unknown",
+                       _utc(now), (), GuardReport((), (f"receipt could not be computed ({type(exc).__name__})",)),
+                       None, state.session_state_path(repo, session_id) is not None)
 
 
 def _code(text: str) -> str:
@@ -238,7 +241,11 @@ def _prune(directory: Path, repo: Path, now: datetime, keep_name: str) -> None:
             pass
 
 
-def write_receipt(repo: Path, receipt: Receipt) -> Path:
+def _wall_clock() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def write_receipt(repo: Path, receipt: Receipt, *, now: datetime | None = None) -> Path:
     """Write the receipt atomically and prune old ones. Raises OSError only when the write itself fails."""
     repo = Path(repo)
     directory = _receipts_dir(repo)
@@ -263,7 +270,7 @@ def write_receipt(repo: Path, receipt: Receipt) -> Path:
             pass
         raise
     try:
-        _prune(directory, repo, created, target.name)
+        _prune(directory, repo, _utc(now) if now is not None else _wall_clock(), target.name)
     except Exception:  # noqa: BLE001 - failing to tidy old receipts must not fail the write
         pass
     return target

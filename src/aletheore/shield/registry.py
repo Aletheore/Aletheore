@@ -23,9 +23,12 @@ from pathlib import Path
 import certifi
 
 from aletheore.user_paths import user_home
+from aletheore.shield.locking import file_lock
 
 DEFAULT_REGISTRY_CACHE_PATH = user_home() / ".cache" / "aletheore" / "shield-registry-cache.json"
 CACHE_TTL = timedelta(hours=24)
+MAX_CACHE_BYTES = 1024 * 1024
+MAX_CACHE_ENTRIES = 2048
 USER_AGENT = "aletheore-shield"
 _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
@@ -92,6 +95,8 @@ def _first_published(ecosystem: str, data: dict) -> datetime | None:
 
 def _read_cache(path: Path) -> dict:
     try:
+        if path.stat().st_size > MAX_CACHE_BYTES:
+            return {}
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
@@ -111,22 +116,49 @@ def _from_cache(entry, now: datetime) -> RegistryInfo | None:
     return RegistryInfo(exists, parsed_first, None)
 
 
-def _write_cache(path: Path, key: str, info: RegistryInfo, now: datetime) -> None:
+def _write_cache_unlocked(path: Path, key: str, info: RegistryInfo, now: datetime) -> None:
     cache = {k: v for k, v in _read_cache(path).items() if _from_cache(v, now) is not None}
-    cache[key] = {
+    current = {
         "cached_at": now.isoformat(),
         "exists": info.exists,
         "first_published": info.first_published.isoformat() if info.first_published else None,
     }
+    cache.pop(key, None)
+    ordered = [(key, current), *sorted(cache.items(), key=lambda item: item[1]["cached_at"], reverse=True)]
+    cache = {}
+    size = 2  # braces
+    for name, entry in ordered[:MAX_CACHE_ENTRIES]:
+        entry_size = len(json.dumps(name).encode("utf-8")) + 2 + len(json.dumps(entry).encode("utf-8"))
+        if size + entry_size + (2 if cache else 0) > MAX_CACHE_BYTES:
+            continue
+        size += entry_size + (2 if cache else 0)
+        cache[name] = entry
+    temporary = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             "w", dir=path.parent, prefix=path.name + ".", suffix=".tmp", delete=False, encoding="utf-8"
         ) as handle:
+            temporary = Path(handle.name)
             handle.write(json.dumps(cache))
         os.replace(handle.name, path)
     except OSError:
         pass  # caching is best effort
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _write_cache(path: Path, key: str, info: RegistryInfo, now: datetime) -> None:
+    try:
+        with file_lock(path.with_suffix(".lock")) as acquired:
+            if acquired:
+                _write_cache_unlocked(path, key, info, now)
+    except OSError:
+        pass  # a cache failure must never fail the dependency check
 
 
 def _default_opener(request, timeout=None):

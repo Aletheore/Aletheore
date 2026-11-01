@@ -4,6 +4,7 @@ Precision beats coverage: anything uncertain is treated as local (skipped) or re
 as NotChecked with a plain-words reason. This module never contacts a registry.
 """
 
+import configparser
 import importlib.metadata
 import json
 import re
@@ -12,6 +13,7 @@ import tomllib
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 from aletheore.manifests import EXTRA_SKIPPED_DIRS, MANIFEST_FILENAMES, MANIFEST_SUFFIXES
 from aletheore.scanner.detect import IGNORED_DIRS
@@ -26,6 +28,12 @@ _ECOSYSTEM_LABEL = {
 _PUBLIC_NPM_HOSTS = ("registry.npmjs.org", "registry.yarnpkg.com")
 _MAX_BASE_MANIFESTS = 300
 _MAX_SOURCE_BYTES = 2_000_000
+_REGISTRY_CONFIG_NAMES = (".npmrc", ".yarnrc.yml", ".yarnrc.yaml", "pip.conf", "pip.ini")
+_AMBIGUOUS_IMPORTS = frozenset({"bson", "jwt", "fitz", "multipart", "magic"})
+
+
+class _BaseManifestLimit(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -131,7 +139,9 @@ def _base_pins(repo: Path, base: str, has_base: bool) -> list[tuple[str, str, st
     if not has_base:
         return []
     listing = run_git(repo, "ls-tree", "-r", "-z", "--name-only", base, timeout=30.0)
-    wanted = [p for p in _paths(listing.stdout) if _is_manifest(p) and not _skipped_dir(p)][:_MAX_BASE_MANIFESTS]
+    wanted = [p for p in _paths(listing.stdout) if _is_manifest(p) and not _skipped_dir(p)]
+    if len(wanted) > _MAX_BASE_MANIFESTS:
+        raise _BaseManifestLimit("base manifest limit reached; new manifest dependencies were not checked")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         for rel in wanted:
@@ -175,7 +185,13 @@ def _gather(repo: Path, working: list[str]) -> _Facts:
     facts = _Facts(set(), set(), set(), set(), set(), {})
     pip_hits: list[str] = []
     npm_hits: list[str] = []
+    # Registry configs often contain credentials and are intentionally ignored by git.
+    directories = {"."}
     for rel in working:
+        directories.update(str(p) for p in PurePosixPath(rel).parents if not _skipped_dir(str(p / "x")))
+    configs = {str(PurePosixPath(d) / name) for d in directories for name in _REGISTRY_CONFIG_NAMES
+               if (repo / d / name).is_file()}
+    for rel in sorted(set(working) | configs):
         pure = PurePosixPath(rel)
         name = pure.name
         if not _skipped_dir(rel):
@@ -227,8 +243,13 @@ def _npmrc_private(text: str) -> bool:
         key, value = key.strip(), value.strip().strip("'\"")
         if key.startswith("@") and key.endswith(":registry"):
             return True
-        if key == "registry" and not any(host in value for host in _PUBLIC_NPM_HOSTS):
-            return True
+        if key == "registry":
+            try:
+                public = urlsplit(value).hostname in _PUBLIC_NPM_HOSTS
+            except ValueError:
+                public = False
+            if not public:
+                return True
     return False
 
 
@@ -313,8 +334,8 @@ def _declared_python_names(repo: Path, working: list[str]) -> set[str]:
         try:
             if name.startswith("requirements") and name.endswith(".txt") or (
                     PurePosixPath(rel).parent.name == "requirements" and name.endswith(".txt")):
-                found |= _dist_names(l for l in (_read(repo, rel) or "").splitlines()
-                                     if not l.strip().startswith(("#", "-")))
+                found |= _dist_names(line for line in (_read(repo, rel) or "").splitlines()
+                                     if not line.strip().startswith(("#", "-")))
             elif name == "pyproject.toml":
                 data = _toml(_read(repo, rel))
                 project = data.get("project") if isinstance(data.get("project"), dict) else {}
@@ -340,10 +361,12 @@ def _declared_python_names(repo: Path, working: list[str]) -> set[str]:
                     if isinstance(data.get(key), dict):
                         found |= _dist_names(data[key])
             elif name == "setup.cfg":
-                text = _read(repo, rel) or ""
-                found |= _dist_names(
-                    l for m in re.finditer(r"(?ms)^(?:install_requires|[\w-]+)\s*=\s*\n((?:[ \t]+.*\n?)+)", text)
-                    for l in m.group(1).splitlines() if l.strip())
+                config = configparser.ConfigParser(interpolation=None)
+                config.read_string(_read(repo, rel) or "")
+                found |= _dist_names(config.get("options", "install_requires", fallback="").splitlines())
+                if config.has_section("options.extras_require"):
+                    for value in config["options.extras_require"].values():
+                        found |= _dist_names(value.splitlines())
         except Exception:  # unparseable files are skipped silently
             continue
     return found
@@ -367,7 +390,11 @@ def added_dependencies(repo: Path, base: str = "HEAD") -> tuple[list[DepRef], li
             pins_now, owners_by_pin, _ = collect_pins(repo)
         except Exception:
             not_checked.append(NotChecked("dependency manifests", "a dependency manifest could not be read, so new dependencies were not checked"))
-        base_pins = _base_pins(repo, base, has_base)
+        try:
+            base_pins = _base_pins(repo, base, has_base)
+        except _BaseManifestLimit as exc:
+            not_checked.append(NotChecked("dependency manifests", str(exc)))
+            pins_now = []  # a partial base must never make unchanged names look new
     # With no manifest in the change, import-only additions are judged against the names the manifests in the
     # working tree declare (read directly by _declared_python_names and _gather), not against parsed pins.
     known = {(eco, _norm(eco, name)) for name, _v, eco in base_pins}
@@ -413,6 +440,11 @@ def added_dependencies(repo: Path, base: str = "HEAD") -> tuple[list[DepRef], li
         parse = imports.python_imports if is_py else imports.js_imports
         new_names = parse(text) - (parse(_base_text(repo, base, rel)) if has_base else set())
         for imp in sorted(new_names):
+            if is_py and imp in _AMBIGUOUS_IMPORTS and imp not in installed:
+                mapped = _norm_py(import_map.get(imp, imp))
+                if mapped not in declared_py and _norm_py(imp) not in declared_py:
+                    not_checked.append(NotChecked(imp, "the import name maps to multiple distributions"))
+                    continue
             ref = _import_ref(imp, rel, is_py, facts, import_map, installed, declared_py, declared_npm)
             if ref and (ref.ecosystem, _norm(ref.ecosystem, ref.name)) not in known:
                 candidates.setdefault((ref.ecosystem, _norm(ref.ecosystem, ref.name)), ref)
@@ -457,9 +489,8 @@ def _import_ref(imp, rel, is_py, facts, import_map, installed, declared_py, decl
         name = _norm_py(imp)
         if name in declared_py or name in facts.local_py:
             return None
-        # Heuristic: import name and distribution name often differ only by a prefix/suffix
-        # (foo-bar provides `foo`), so a declared name containing or contained in it counts as declared.
-        if any(len(name) >= 3 and (name in d or d in name) for d in declared_py if len(d) >= 3):
+        # A declared foo-bar may provide foo; a declared foo does not cover a new foo-bar import.
+        if any(len(name) >= 3 and (d.startswith(name + "-") or d.endswith("-" + name)) for d in declared_py):
             return None
         return DepRef("PyPI", name, "import", rel)
     lowered = imp.lower()

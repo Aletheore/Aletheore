@@ -240,4 +240,4 @@ def test_npm_cache_key_preserves_case_and_expired_entries_are_pruned(tmp_path):
     assert cache["npm:JSONStream"]["exists"] is True and cache["npm:jsonstream"]["exists"] is False
     lookup_package("npm", "other", cache_path=path, opener=_Opener({"time": {}}), now=NOW + timedelta(hours=30))
     assert set(json.loads(path.read_text())) == {"npm:other"}
-    assert [p.name for p in tmp_path.iterdir() if p.name != "c.json"] == []
+    assert [p.name for p in tmp_path.iterdir() if p.name not in ("c.json", "c.lock")] == []

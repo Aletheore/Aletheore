@@ -22,6 +22,8 @@ import json
 import math
 import os
 import shutil
+import shlex
+import stat
 import subprocess  # nosec B404 - starts this package's own refresh module with a fixed argument list, no shell
 import sys
 import time
@@ -30,6 +32,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from aletheore.shield import state
+from aletheore.shield.locking import file_lock
 
 # The evidence readers and diff helpers (aletheore.evidence, dependents, evidence_diff, signature_diff, tests_for)
 # cost about 400 ms to import. They are imported inside the functions that use them, so the per-edit hook can call
@@ -198,7 +201,7 @@ def _write_marker(marker: Path, started: float) -> bool:
             pass
 
 
-def _claim_marker(marker: Path, newest_edit: float | None = None) -> bool:
+def _claim_marker_unlocked(marker: Path, newest_edit: float | None = None) -> bool:
     """Atomically take the refresh marker and record the start time in it; False when a refresh may not start.
 
     A previous refresh blocks a new one while it is still running (it has not written its completion record; see
@@ -227,6 +230,14 @@ def _claim_marker(marker: Path, newest_edit: float | None = None) -> bool:
     except FileNotFoundError:
         pass
     return _write_marker(marker, now)
+
+
+def _claim_marker(marker: Path, newest_edit: float | None = None) -> bool:
+    try:
+        with file_lock(marker.with_suffix(".lock")) as acquired:
+            return acquired and _claim_marker_unlocked(marker, newest_edit)
+    except OSError:
+        return False
 
 
 def start_background_refresh(repo: Path, changed: list[str] | None = None, scanned_at: object = None) -> bool:
@@ -372,19 +383,29 @@ def prune_base_evidence(repo: Path, *, max_age_s: float = BASE_EVIDENCE_MAX_AGE_
 
 
 def _relevant_changed(repo: Path, changed: list[str], known: set[str]) -> list[str]:
-    """Changed files the scan would have looked at: modules it knows, or paths of a language it parses."""
+    """Inputs to source and secret checks, including known files deleted since the scan."""
     from aletheore.scanner.detect import IGNORED_DIRS
-    from aletheore.scanner.graph import LANGUAGE_BY_EXTENSION
+    from aletheore.secrets import BINARY_EXTENSIONS, MAX_SCANNED_FILE_BYTES
+    from aletheore.repo_config import is_ignored, load_repo_config
 
+    patterns = load_repo_config(repo)["ignored_paths"]
     relevant = []
     for raw in changed:
         rel = _safe_relative(raw)
         if rel is None:
             continue
         path = PurePosixPath(rel)
-        if rel in known or (path.suffix in LANGUAGE_BY_EXTENSION and not set(path.parts) & set(IGNORED_DIRS)):
-            if (Path(repo) / rel).exists():
-                relevant.append(rel)
+        if set(path.parts) & set(IGNORED_DIRS) or is_ignored(rel, patterns):
+            continue
+        if rel in known:
+            relevant.append(rel)
+            continue
+        try:
+            info = (Path(repo) / rel).lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and path.suffix not in BINARY_EXTENSIONS and info.st_size <= MAX_SCANNED_FILE_BYTES:
+            relevant.append(rel)
     return relevant
 
 
@@ -397,7 +418,7 @@ def _files_newer_than(repo: Path, files: list[str], scanned_at: object) -> list[
     newer = []
     for rel in files:
         modified = _mtime(Path(repo) / rel)
-        if modified is not None and modified > covered:
+        if modified is None or modified > covered:
             newer.append(rel)
     return newer
 
@@ -447,7 +468,8 @@ def _affected_finding(repo: Path, head: dict, targets: list[str]) -> Finding | N
         text = f"Test files that import it or are named for it: {_cap(high_list)}."
         python_tests = [p for p in high_list if p.endswith(".py")]
         if python_tests and _has_pytest_config(repo):
-            command = "pytest " + " ".join(python_tests[:_LIST_CAP])
+            argv = ["pytest", *python_tests[:_LIST_CAP]]
+            command = subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
             if len(python_tests) > _LIST_CAP:
                 command += f" (and {len(python_tests) - _LIST_CAP} more test files)"
             text += f" Command: {command}."
@@ -554,7 +576,8 @@ def evidence_checks(
     except (KeyError, TypeError):
         return [], ["scan evidence has an unexpected shape; run aletheore scan"]
 
-    newer = _files_newer_than(repo, _relevant_changed(repo, changed, known), head.get("scanned_at"))
+    secret_paths = {f.get("path") for f in head.get("security", {}).get("secrets", {}).get("findings", [])}
+    newer = _files_newer_than(repo, _relevant_changed(repo, changed, known | secret_paths), head.get("scanned_at"))
     if newer is None:
         return [], ["scan evidence has no readable scan time, so its age cannot be checked; run aletheore scan"]
     if newer:

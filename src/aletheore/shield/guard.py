@@ -53,14 +53,22 @@ def _paths(out: bytes) -> list[str]:
     return [p.decode("utf-8", "replace") for p in out.split(b"\0") if p]
 
 
-def _changed_files(repo: Path, base: str) -> list[str]:
+def _changed_files(repo: Path, base: str, *, deadline: float | None = None) -> list[str]:
     """Files differing from `base` plus untracked ones; with no usable base every file counts as changed."""
-    has_base = run_git(repo, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}").returncode == 0
+    def git(*args):
+        remaining = 10.0 if deadline is None else deadline - _clock()
+        if remaining <= 0:
+            raise TimeoutError("evidence file listing exceeded its budget")
+        return run_git(repo, *args, timeout=min(10.0, remaining))
+
+    has_base = git("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}").returncode == 0
     if has_base:
-        tracked = run_git(repo, "diff", "--name-only", "-z", base)
+        tracked = git("diff", "--name-only", "-z", base)
     else:
-        tracked = run_git(repo, "ls-files", "-z", "--cached")
-    untracked = run_git(repo, "ls-files", "--others", "--exclude-standard", "-z")
+        tracked = git("ls-files", "-z", "--cached")
+    untracked = git("ls-files", "--others", "--exclude-standard", "-z")
+    if tracked.returncode != 0 or untracked.returncode != 0:
+        raise OSError("git could not list changed files")
     seen: dict[str, None] = {}
     for result in (tracked, untracked):
         if result.returncode == 0:
@@ -149,8 +157,10 @@ def _dependency_findings(
                 note = f"; no {label} package of that name exists"
             elif recent:
                 note = f"; {age}"
-            elif info is None or exists is None:
+            elif info is None:
                 note = "; registry was not checked"
+            elif exists is None:
+                note = "; registry lookup failed"
             findings.append(
                 Finding(
                     "dependencies",
@@ -202,10 +212,16 @@ def run_guard(
     except Exception as exc:  # noqa: BLE001 - the guard must never break a hook
         not_checked.append(f"dependency check failed ({type(exc).__name__})")
     try:
-        changed = _changed_files(repo, base)
-        evidence_findings, evidence_skipped = evidence_checks(repo, changed, base_evidence)
-        findings.extend(evidence_findings)
-        not_checked.extend(evidence_skipped)
+        if _clock() >= deadline:
+            not_checked.append("time budget reached; evidence checks were not run")
+        else:
+            changed = _changed_files(repo, base, deadline=deadline)
+            if _clock() >= deadline:
+                not_checked.append("time budget reached; evidence checks were not run")
+            else:
+                evidence_findings, evidence_skipped = evidence_checks(repo, changed, base_evidence)
+                findings.extend(evidence_findings)
+                not_checked.extend(evidence_skipped)
     except Exception as exc:  # noqa: BLE001
         not_checked.append(f"evidence check failed ({type(exc).__name__})")
     findings = [

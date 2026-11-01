@@ -16,14 +16,6 @@ NODE_BUILTINS = frozenset(
 PY_NAMESPACE_ROOTS = frozenset({"google", "azure", "zope", "jaraco", "ruamel", "sphinxcontrib", "backports"})
 
 _NPM_NAME = re.compile(r"^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
-_JS_PATTERNS = (
-    re.compile(r"""\bimport\s+(?:type\s+)?(?:[^'"();]*?\sfrom\s*)?['"]([^'"\n]+)['"]"""),
-    re.compile(r"""\bexport\s+(?:type\s+)?[^'"();]*?\sfrom\s*['"]([^'"\n]+)['"]"""),
-    re.compile(r"""\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)"""),
-    re.compile(r"""\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)"""),
-)
-_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-_LINE_COMMENT = re.compile(r"(?m)(^|\s)//[^\n]*")
 
 
 def python_imports(source: str) -> set[str]:
@@ -52,12 +44,32 @@ def _package_of(specifier: str) -> str | None:
 
 
 def js_imports(source: str) -> set[str]:
-    """Bare package names from import/export-from/require/dynamic import."""
-    text = _LINE_COMMENT.sub(r"\1", _BLOCK_COMMENT.sub(" ", source))
+    """Bare package names from actual syntax, excluding comments and string contents."""
+    import tree_sitter_typescript
+    from tree_sitter import Language, Parser
+
+    raw = source.encode("utf-8", "replace")
+    parser = Parser(Language(tree_sitter_typescript.language_tsx()))
+    tree = parser.parse(raw)
     found: set[str] = set()
-    for pattern in _JS_PATTERNS:
-        for match in pattern.finditer(text):
-            package = _package_of(match.group(1))
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        literal = None
+        if node.type in ("import_statement", "export_statement"):
+            literal = node.child_by_field_name("source")
+        elif node.type == "import_require_clause":
+            literal = next((n for n in node.named_children if n.type == "string"), None)
+        elif node.type == "call_expression":
+            fn = node.child_by_field_name("function")
+            args = node.child_by_field_name("arguments")
+            if fn is not None and (fn.type == "import" or
+                    fn.type == "identifier" and raw[fn.start_byte:fn.end_byte] == b"require"):
+                literal = args.named_children[0] if args is not None and args.named_children else None
+        if literal is not None and (literal.type == "string" or literal.type == "template_string"
+                and not any(c.type == "template_substitution" for c in literal.named_children)):
+            package = _package_of(raw[literal.start_byte + 1:literal.end_byte - 1].decode("utf-8", "replace"))
             if package:
                 found.add(package)
+        stack.extend(node.named_children)
     return found

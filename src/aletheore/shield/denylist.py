@@ -6,6 +6,7 @@ import re
 
 _PATTERNS = (
     ".env*",
+    "*.env",
     "*.pem",
     "*.key",
     "*.p12",
