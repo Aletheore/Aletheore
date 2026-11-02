@@ -24,6 +24,10 @@
 </p>
 
 <p align="center">
+  <a href="https://trendshift.io/repositories/221622?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-221622" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/221622/daily?language=Python" alt="Aletheore/Aletheore | Trendshift" width="250" height="55"></a>
+</p>
+
+<p align="center">
   <a href="src/README.md"><img src="https://img.shields.io/badge/Docs-CLI_reference-3276b8?style=flat-square&amp;logo=readthedocs&amp;logoColor=white" alt="CLI documentation"></a>
   <a href="https://github.com/apps/aletheore/installations/new"><img src="https://img.shields.io/badge/GitHub_App-Install-dd8034?style=flat-square&amp;logo=github&amp;logoColor=white" alt="Install the GitHub App"></a>
   <a href="https://github.com/marketplace/actions/aletheore"><img src="https://img.shields.io/badge/Marketplace-Action-2088ff?style=flat-square&amp;logo=githubactions&amp;logoColor=white" alt="GitHub Marketplace Action"></a>
