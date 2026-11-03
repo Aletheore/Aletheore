@@ -18,13 +18,13 @@ it("the site says open source, never source-available, while the license is AGPL
   for (const file of ["src/components/scenes/hero.tsx", "src/content/home.ts", "public/llms.txt"]) {
     expect(siteFile(file), file).not.toMatch(/source[- ]available/i);
   }
-  expect(siteFile("src/components/scenes/hero.tsx")).toContain("<span>Open source</span>");
-  expect(siteFile("src/content/home.ts")).toContain("Open source (AGPL-3.0) and local-first.");
+  expect(siteFile("src/components/scenes/hero.tsx")).toContain("<span>Open-source CLI</span>");
+  expect(siteFile("src/content/home.ts")).toContain("Open-source CLI (AGPL-3.0) and local-first.");
   expect(siteFile("public/llms.txt")).toContain("open source under AGPL-3.0");
   expect(legal.terms.html).toContain("open source, local-first CLI under the");
   expect(legal.terms.html).toContain("GNU Affero General Public License v3.0");
 });
 
 it("the structured data declares the license for search engines", () => {
-  expect((ld as { license?: string }).license).toBe("https://github.com/Aletheore/Aletheore/blob/master/LICENSE");
+  expect((ld as { hasPart: { license: string } }).hasPart.license).toBe("https://github.com/Aletheore/Aletheore/blob/master/LICENSE");
 });

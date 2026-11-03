@@ -76,7 +76,7 @@ export function ResolutionScene() {
           </h2>
           <p className="mt-4 max-w-[48ch] text-[15px] leading-[1.65] text-muted">
             Every alert Aletheore raises is a resolved path, not a guess. This one is real: it was read from a scan of
-            Aletheore&apos;s own repository.
+            Aletheore&apos;s repository at an earlier commit.
           </p>
           <ol className="mt-8 flex flex-col gap-2">
             {steps.map((s, i) => (

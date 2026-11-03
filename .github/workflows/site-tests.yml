@@ -4,13 +4,11 @@ on:
   pull_request:
     paths:
       - "site/**"
-      - "github-app/app_server/companion_limit_scripts.json"
       - ".github/workflows/site-tests.yml"
   push:
     branches: [master]
     paths:
       - "site/**"
-      - "github-app/app_server/companion_limit_scripts.json"
       - ".github/workflows/site-tests.yml"
 
 permissions:

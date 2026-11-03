@@ -5,7 +5,6 @@
   "url": "https://www.aletheore.com/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows",
-  "license": "https://github.com/Aletheore/Aletheore/blob/master/LICENSE",
   "description": "Evidence-grounded repository audits: a free deterministic CLI scanner plus a hosted GitHub App with automated PR reviews, dead code detection, live endpoint health monitoring, AIRview (an AI-generated architecture map), and Slack/Teams alerts.",
   "offers": [
     {
@@ -45,5 +44,10 @@
     "AIRview: an AI-generated, always-current map of your repo's architecture with dependency diagrams",
     "AI-generated Docs: grounded, per-symbol descriptions written and kept current automatically, marked AI-generated or AI-polished, exportable as a single Markdown file",
     "Team seat management, up to 3 seats included on Aletheore AIR"
-  ]
+  ],
+  "hasPart": {
+    "@type": "SoftwareApplication",
+    "name": "Aletheore CLI",
+    "license": "https://github.com/Aletheore/Aletheore/blob/master/LICENSE"
+  }
 }

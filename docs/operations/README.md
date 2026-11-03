@@ -3,7 +3,7 @@
 **Purpose:** Define operational expectations for the hosted Aletheore service.
 **Status:** Active baseline
 **Owner:** Arihant Kaul
-**Related Documents:** [../../STARTUP_AUDIT_REPORT.md](../../STARTUP_AUDIT_REPORT.md), [../../github-app/README.md](../../github-app/README.md), [../../SECURITY.md](../../SECURITY.md)
+**Related Documents:** [../../STARTUP_AUDIT_REPORT.md](../../STARTUP_AUDIT_REPORT.md), [../../SECURITY.md](../../SECURITY.md)
 **Last Updated:** 2026-07-23
 
 ## Purpose
@@ -35,4 +35,4 @@ This directory contains concise runbooks and policies for operating the hosted A
 
 ## Relationship to Other Directories
 
-The hosted service implementation lives in [../../github-app](../../github-app). Security disclosure policy lives in [../../SECURITY.md](../../SECURITY.md). Startup-readiness tracking lives in [../../STARTUP_AUDIT_REPORT.md](../../STARTUP_AUDIT_REPORT.md).
+The hosted service implementation is maintained separately from this public repository. Security disclosure policy lives in [../../SECURITY.md](../../SECURITY.md). Startup-readiness tracking lives in [../../STARTUP_AUDIT_REPORT.md](../../STARTUP_AUDIT_REPORT.md).

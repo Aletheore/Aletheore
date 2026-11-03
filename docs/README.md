@@ -4,6 +4,6 @@
   Read this before touching anything `scan_repository` emits.
 - `superpowers/specs/` and `superpowers/plans/` — design specs and implementation plans, written
   during development. Historical record of what was decided and why, not living documentation -
-  read the code and `src/README.md` / `github-app/README.md` for current behavior.
+  read the code and `src/README.md` for current public CLI behavior.
 - `operations/` — current operational baselines: incident response, data handling, SLOs,
   deployment verification, branch protection, support process.

@@ -2,7 +2,7 @@ export type Interval = "month" | "year";
 export type TierKey = "flash" | "air";
 
 // Live Paddle price ids. These are public identifiers (they appear in Paddle.js calls on the page); the
-// authoritative copy for the backend is github-app/app_server/paddle_pricing.py.
+// hosted backend maintains the corresponding server-side mapping.
 export const TIERS: Record<TierKey, { name: string; priceId: Partial<Record<Interval, string>> }> = {
   flash: { name: "Aletheore Flash", priceId: { month: "pri_01m3xpabbam5t2gkzwzmg0y9eq" } },
   air: { name: "Aletheore AIR", priceId: { month: "pri_01kyhevc8bkcghfpwjymz16y2h", year: "pri_01kyhevc9xn6z2nghmy8057jvp" } },

@@ -1,11 +1,13 @@
 # Deployment Verification
 
+This document is a historical record. Current hosted deployment procedures are maintained with the hosted application.
+
 **Purpose:** Define the minimum verification required before treating hosted deployment as current.
-**Status:** Active baseline
+**Status:** Historical snapshot
 **Owner:** Arihant Kaul
-**Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
+**Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [historical hosted application README](https://github.com/Aletheore/Aletheore/blob/fe9cb484370b82c0f10cf8828566474eaad0278d/github-app/README.md)
 **Last Updated:** 2026-10-29
-**Snapshot Freshness:** CURRENT as of 2026-10-29 - all six app services (`app-server`, both scan workers,
+**Snapshot Freshness:** Recorded as of 2026-10-29 - all six app services (`app-server`, both scan workers,
 `health-worker`, `scheduler` and `jina-embed`) run `master` at commit `5f279db3` (tag `github-app-deploy-2026-10-29`);
 `postgres`, `caddy` and `autoheal` were not touched, and `redis` was moved to a named volume with AOF persistence (below).
 Four PRs since the previous deploy (`31959d9e`): #1155, #1157, #1158 and #1159. No migration (newest applied row is still
@@ -1703,10 +1705,6 @@ If any deployed state differs from repository expectations, treat production as 
 
 ## Deploy History
 
-This file is a snapshot of *current* production state — it gets overwritten on every redeploy, so
-it never shows what was live last week. For that, every production deploy is tagged
-`github-app-deploy-YYYY-MM-DD` (append `-N` for a second same-day deploy), and
-[`../../github-app/CHANGELOG.md`](../../github-app/CHANGELOG.md) has a dated, human-readable entry
-per deploy. `git tag -l 'github-app-deploy-*'` lists every tracked deploy point;
-`git log <prev-tag>..<tag>` gives the exact commit range for any one of them.
+The [historical hosted application changelog](https://github.com/Aletheore/Aletheore/blob/fe9cb484370b82c0f10cf8828566474eaad0278d/github-app/CHANGELOG.md) records earlier deployments.
+Public tags named `github-app-deploy-YYYY-MM-DD` identify the recorded historical deploy points.
 

@@ -26,7 +26,7 @@ export function Hero() {
           Watch the developer walkthrough →
         </a>
         <p className="mt-5 flex flex-wrap gap-x-5 font-display text-[11.5px] text-faint">
-          <span>Open source</span><span>Local-first CLI</span><span>Hosted GitHub App</span>
+          <span>Open-source CLI</span><span>Local-first</span><span>Hosted GitHub App</span>
         </p>
       </div>
       <div className="relative">
@@ -37,7 +37,7 @@ export function Hero() {
           alt="Dependency graph of the Aletheore repository, drawn as a rotating wireframe"
         />
         <aside
-          aria-label="A real resolved path from Aletheore's own repository"
+          aria-label="A real resolved path from a historical Aletheore repository scan"
           className="crop-marks absolute bottom-2 left-0 w-[min(100%,300px)] border border-line bg-raised/95 p-4 shadow-[0_18px_40px_rgba(22,20,15,0.08)] md:-left-6"
         >
           <p className="eyebrow mb-2">Resolved to code</p>
@@ -48,7 +48,7 @@ export function Hero() {
             <dt className="text-faint">owner</dt><dd className="font-display">{owner.value}</dd>
             <dt className="text-faint">commit</dt><dd className="font-display">{touched.value}</dd>
           </dl>
-          <p className="mt-2 text-[10.5px] text-faint">From a scan of Aletheore&apos;s own repository.</p>
+          <p className="mt-2 text-[10.5px] text-faint">From a historical scan of Aletheore&apos;s repository.</p>
         </aside>
       </div>
     </section>

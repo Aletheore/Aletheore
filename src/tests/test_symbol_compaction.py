@@ -3,7 +3,6 @@ when null and is_pure_declaration when false. Every reader must produce exactly
 the same output from the compact form as from the old explicit-null form."""
 
 import copy
-import sys
 from pathlib import Path
 
 from aletheore.docs_reference import build_module_reference
@@ -84,23 +83,3 @@ def test_signature_diff_reads_both_shapes_the_same(tmp_path):
         for fn in module["symbols"].get("functions", []):
             fn["params"] = "(a, b, c)"
     assert find_changed_signatures(evidence, changed) == find_changed_signatures(_expand(evidence), changed)
-
-
-def test_hosted_live_docs_reads_both_shapes_the_same(tmp_path):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "github-app"))
-    try:
-        from scan_worker.live_docs import _build_request_items, _symbols_needing_work
-    except ImportError:  # github-app deps not installed in this environment
-        import pytest
-
-        pytest.skip("github-app not importable here")
-    repo = _repo(tmp_path)
-    evidence = _evidence(repo)
-    old = _expand(evidence)
-    for new_module, old_module in zip(evidence["repository"]["modules"], old["repository"]["modules"]):
-        lines = (repo / new_module["path"]).read_text().splitlines()
-        for polish in (True, False):
-            new_syms = _symbols_needing_work(new_module, polish)
-            old_syms = _symbols_needing_work(old_module, polish)
-            assert [s["name"] for s in new_syms] == [s["name"] for s in old_syms]
-            assert _build_request_items(new_syms, lines, polish) == _build_request_items(old_syms, lines, polish)
