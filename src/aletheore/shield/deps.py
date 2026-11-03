@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import tomllib
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -927,9 +928,20 @@ def added_dependencies(
         text = _read(repo, rel)
         if text is None:
             continue
-        parse = imports.python_imports if is_py else imports.js_imports
         before = base_texts.get(rel)
-        new_names = parse(text) - (parse(before.decode("utf-8", "replace")) if before is not None else set())
+        if is_py:
+            parse = imports.python_imports
+        else:
+            # Both sides together get at most JS_PARSE_TIMEOUT_S, and never more than the budget has left.
+            parse_deadline = time.monotonic() + min(imports.JS_PARSE_TIMEOUT_S, max(budget.left(), MIN_STAGE_S))
+
+            def parse(source: str) -> set[str]:
+                return imports.js_imports(source, timeout=max(parse_deadline - time.monotonic(), 0.001))
+        try:
+            new_names = parse(text) - (parse(before.decode("utf-8", "replace")) if before is not None else set())
+        except imports.ParseTimeout:
+            not_checked.append(NotChecked("", f"imports in {rel} were not checked: it could not be parsed in time"))
+            continue
         for imp in sorted(new_names):
             if is_py and imp in _AMBIGUOUS_IMPORTS and imp not in installed and not any(
                     _norm_py(d) in declared_py for d in (*import_map.get(imp, ()), imp)):

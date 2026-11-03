@@ -471,3 +471,24 @@ def test_renaming_one_member_of_an_old_cycle_is_not_a_new_cycle():
     old = _graph({'a.py': ['b.py'], 'b.py': ['c.py'], 'c.py': ['a.py']})
     new = _graph({'a.py': ['b.py'], 'b.py': ['util.py'], 'util.py': ['a.py']})  # c.py renamed to util.py
     assert new_cycles(old, new) == []
+
+
+_PATHOLOGICAL_JS = "import 'first-package';\n" + "x=/[" * 12_000 + "\nrequire('last-package');\n"  # about 48 KB
+
+
+def test_js_parsing_is_bounded_in_time_on_pathological_input():
+    # tree-sitter's error recovery is quadratic on this input (about 6 s for 48 KB unbounded).
+    started = time.monotonic()
+    with pytest.raises(imports.ParseTimeout):
+        imports.js_imports(_PATHOLOGICAL_JS, timeout=0.2)
+    assert time.monotonic() - started < 1.5
+    assert imports.js_imports("import a from 'still-works';") == {'still-works'}  # the parser is usable again
+
+
+def test_a_js_file_that_cannot_be_parsed_in_time_is_not_checked_and_the_guard_keeps_its_budget(repo):
+    (repo / 'web.js').write_text(_PATHOLOGICAL_JS, encoding='utf-8', newline='\n')
+    started = time.monotonic()
+    report = guard.run_guard(repo, lookups=False, budget_s=1.5)
+    assert time.monotonic() - started < 2.0  # inside the post-edit hook's 2 s hard stop
+    assert not any('first-package' in f.message for f in report.findings)
+    assert any('web.js' in line and 'in time' in line for line in report.not_checked), report.not_checked

@@ -12,6 +12,7 @@ import io
 import re
 import sys
 import threading
+import time
 import tokenize
 
 PY_SUFFIXES = (".py",)
@@ -150,10 +151,33 @@ def _js_specifier(text: str) -> str | None:
         return None
 
 
-def js_imports(source: str) -> set[str]:
-    """Bare package names from actual syntax, excluding comments and string contents."""
+class ParseTimeout(Exception):
+    """The source could not be parsed within the time given; nothing is known about its imports."""
+
+
+JS_PARSE_TIMEOUT_S = 1.0
+_READ_CHUNK = 64 * 1024
+
+
+def _parse_js(raw: bytes, timeout: float):
+    """The tree for `raw`, or ParseTimeout after `timeout` seconds. tree-sitter is linear on real code, but its error
+    recovery can go quadratic on hostile text (`x=/[` repeated: about 6 s for 48 KB), so the parse is stopped from
+    its progress callback, which tree-sitter calls only when reading through a callback."""
+    parser = _js_parser()
+    deadline = time.monotonic() + timeout
+    try:
+        return parser.parse(lambda offset, _point: raw[offset:offset + _READ_CHUNK],
+                            progress_callback=lambda *_: time.monotonic() > deadline)
+    except ValueError:  # tree-sitter's "Parsing failed": the callback stopped it
+        parser.reset()
+        raise ParseTimeout(f"not parsed within {timeout:g} s") from None
+
+
+def js_imports(source: str, timeout: float = JS_PARSE_TIMEOUT_S) -> set[str]:
+    """Bare package names from actual syntax, excluding comments and string contents. Raises ParseTimeout when the
+    source cannot be parsed within `timeout` seconds."""
     raw = source.encode("utf-8", "replace")
-    tree = _js_parser().parse(raw)
+    tree = _parse_js(raw, timeout)
     found: set[str] = set()
     stack = [tree.root_node]
     while stack:
