@@ -26,7 +26,7 @@ export function Hero() {
           Watch the developer walkthrough →
         </a>
         <p className="mt-5 flex flex-wrap gap-x-5 font-display text-[11.5px] text-faint">
-          <span>Source-available</span><span>Local-first CLI</span><span>Hosted GitHub App</span>
+          <span>Open source</span><span>Local-first CLI</span><span>Hosted GitHub App</span>
         </p>
       </div>
       <div className="relative">

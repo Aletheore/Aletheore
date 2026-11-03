@@ -19,6 +19,7 @@ by the caller, but this module never imports a cache or database client.
 
 import json
 import logging
+import os
 import re
 import statistics
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
@@ -228,9 +229,11 @@ FILE_PAGE_WRITING_SYSTEM_PROMPT = (
 You are given the file's path, its key functions/classes with line numbers, the subsystem it
 belongs to, the files it imports and is imported by, and - in `related_symbols` - a few named
 functions/classes with line numbers from those related files. You may also be given
-`repo_context`: repo-wide facts from other scanners (database schema, API endpoints, dependency
-vulnerabilities/licenses, dead code, infrastructure, environment variables) - see the "How it
-works"/"Gotchas" guidance below for when to use it. Respond with ONLY a JSON object:
+`repo_context`: facts from other scanners (database schema, API endpoints, dependency
+vulnerabilities/licenses, dead code, infrastructure, environment variables), which may be narrowed
+to entries about this file and the files it imports or is imported by - an entry missing from it does
+not mean the repository has none. See the "How it works"/"Gotchas" guidance below for when to use
+it. Respond with ONLY a JSON object:
 {"detail": "<markdown, 250-400 words>"}
 
 Structure the markdown with these headings, in order:
@@ -1575,6 +1578,7 @@ def build_file_page_record(
         "imported_by": list(module.get("imported_by", []) or [])[:MAX_RELATED_FILES],
         "related_symbols": related_symbols,
     }
+    repo_context = _trim_file_page_repo_context(repo_context, [file_page_payload])
     if repo_context is not None:
         file_page_payload["repo_context"] = repo_context
     user_prompt = json.dumps(file_page_payload)
@@ -1637,9 +1641,11 @@ key in your response - never invent your own id), the file's path, its key funct
 line numbers, the subsystem it belongs to, the files it imports and is imported by, and - in
 `related_symbols` - a few named functions/classes with line numbers from those related files.
 
-"repo_context", when present, is repo-wide facts from other scanners - the same value applies to
-every item, not just one. Use it in an item's own page only when genuinely relevant to THAT item's
-file - never force it in, and never use it to write content for a different item. Exactly three
+"repo_context", when present, is facts from other scanners, which may be narrowed to entries about
+the files in this request and the files they import or are imported by - an entry missing from it
+does not mean the repository has none. The same value applies to every item, not just one. Use it in
+an item's own page only when genuinely relevant to THAT item's file - never force it in, and never
+use it to write content for a different item. Exactly three
 kinds of entry inside it carry a real, citable `file`/`line` and may be cited the same as any other
 citation: `database_schema.tables` (where the table itself was created), `database_schema.relations`
 (each foreign-key relation), and `api_endpoints` (each HTTP route). Every other field -
@@ -1750,6 +1756,69 @@ def _file_page_request_item(evidence: dict, path: str, subsystem_name: str) -> d
     }
 
 
+def _trim_file_page_repo_context(repo_context: dict | None, request_items: list[dict]) -> dict | None:
+    """Narrows the repo-wide scanner context to what these file pages can use.
+
+    The full context is resent on every file-page call and was ~79% of a
+    call's input tokens on a mid-size repo (34 KB against ~2.4 KB per file
+    item). Entries carrying a "file" key (endpoints, schema tables and
+    relations) are kept only when that file is one of the batch's own files
+    or one it imports / is imported by - the same neighbourhood the item
+    itself already describes. Only "file" is read, never "path": an endpoint's
+    "path" is its URL route, not a source file. Everything else (counts,
+    totals, flags, plain strings such as env var names and unreachable
+    modules) is kept: with nothing to match against, dropping it would be a
+    guess.
+
+    AIRVIEW_FILE_PAGE_TRIM_CONTEXT=off restores the full context, as a kill
+    switch if the narrower context ever reads worse.
+    """
+    if not repo_context or os.environ.get("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", "").lower() == "off":
+        return repo_context
+
+    relevant: set[str] = set()
+    for item in request_items:
+        if item.get("path"):
+            relevant.add(item["path"])
+        relevant.update(item.get("imports") or [])
+        relevant.update(item.get("imported_by") or [])
+
+    def keep(entry) -> bool:
+        if not isinstance(entry, dict):
+            return True
+        ref = entry.get("file")
+        return ref is None or ref in relevant
+
+    # build_repo_context omits a field rather than sending it empty, so a
+    # section whose entries were ALL trimmed away is dropped the same way,
+    # instead of reaching the model as `[]` or as orphaned totals.
+    dropped = object()
+
+    def trim(value):
+        if isinstance(value, list):
+            kept = [trim(v) for v in value if keep(v)]
+            return dropped if value and not kept else kept
+        if isinstance(value, dict):
+            out, dropped_keys = {}, []
+            for k, v in value.items():
+                trimmed = trim(v)
+                if trimmed is dropped:
+                    dropped_keys.append(k)
+                else:
+                    out[k] = trimmed
+            # build_repo_context names a truncated list's real total
+            # `<list>_total_count`; with the list gone the total is an orphan.
+            for k in dropped_keys:
+                out.pop(f"{k}_total_count", None)
+            if dropped_keys and not any(isinstance(v, (list, dict)) and v for v in out.values()):
+                return dropped
+            return out
+        return value
+
+    trimmed_context = trim(repo_context)
+    return None if trimmed_context is dropped else (trimmed_context or None)
+
+
 def _write_file_page_batch(
     evidence: dict,
     targets: list[_FilePageWriteTarget],
@@ -1768,6 +1837,7 @@ def _write_file_page_batch(
     on why.
     """
     items = [{"id": t.path, **t.request_item} for t in targets]
+    repo_context = _trim_file_page_repo_context(repo_context, [t.request_item for t in targets])
     request_body = {"items": items, "repo_context": repo_context} if repo_context is not None else items
     raw = writing_adapter.simple_completion(
         BATCH_FILE_PAGE_WRITING_SYSTEM_PROMPT, json.dumps(request_body), cwd="."

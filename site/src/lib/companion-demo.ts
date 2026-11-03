@@ -4,6 +4,10 @@ export type { CompanionAnswer } from "./companion/types";
 export { COMPANION_STARTERS } from "./companion/types";
 export function companionDemoAnswer(question: string): CompanionAnswer {
   question = question.trim();
+  if (/\b(?:open[- ]?source|licen[sc]e|agpl)\b/i.test(question)) return {
+    text: "Aletheore's CLI is open source under the GNU Affero General Public License v3.0. A separate commercial license is available. The Terms have the details.",
+    sources: [{ label: "What Aletheore is", href: "/terms" }],
+  };
   if (/\b(?:install(?:ation)?|cli|windows|linux|mac(?:os)?)\b/i.test(question)) return {
     text: "Start with the CLI to build evidence locally. Install it with pip, then run aletheore in your project folder to open the menu. The developer guide covers prerequisites and setup.",
     command: "pip install aletheore",

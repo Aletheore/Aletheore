@@ -21,13 +21,14 @@ from pathlib import Path
 import certifi
 
 from aletheore.user_paths import user_home
+from aletheore.shield.locking import file_lock
 
 DEFAULT_REGISTRY_CACHE_PATH = user_home() / ".cache" / "aletheore" / "shield-registry-cache.json"
 CACHE_TTL = timedelta(hours=24)
-# The cache is shared by every repository on the machine: bounded in entries (newest kept) and in the size of file it
-# will read at all (a larger one is ignored as corrupt and replaced).
-REGISTRY_CACHE_MAX_ENTRIES = 2000
-_CACHE_MAX_BYTES = 4 * 1024 * 1024
+# The cache is shared by every repository on the machine. A file larger than MAX_CACHE_BYTES is ignored as corrupt and
+# replaced; a write keeps the new entry and the newest others, at most MAX_CACHE_ENTRIES and MAX_CACHE_BYTES of them.
+MAX_CACHE_BYTES = 1024 * 1024
+MAX_CACHE_ENTRIES = 2048
 USER_AGENT = "aletheore-shield"
 _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
@@ -95,7 +96,7 @@ def _first_published(ecosystem: str, data: dict) -> datetime | None:
 def _read_cache(path: Path) -> dict:
     """The cache file as a dict; empty when it is missing, unreadable, oversized or not a JSON object."""
     try:
-        if path.stat().st_size > _CACHE_MAX_BYTES:
+        if path.stat().st_size > MAX_CACHE_BYTES:
             return {}
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, RecursionError):
@@ -116,35 +117,45 @@ def _from_cache(entry, now: datetime) -> RegistryInfo | None:
     return RegistryInfo(exists, parsed_first, None)
 
 
+def _write_cache_unlocked(path: Path, key: str, info: RegistryInfo, now: datetime) -> None:
+    """Add one entry (the caller holds the cache lock): re-read the file, drop expired and invalid entries, put the
+    new entry first and the others newest first, keep at most MAX_CACHE_ENTRIES and MAX_CACHE_BYTES of them (so the
+    file written is never larger than the file `_read_cache` accepts) and replace the file atomically."""
+    from aletheore.shield.fsutil import atomic_write_text, debug_note
+
+    cache = {k: v for k, v in _read_cache(path).items() if _from_cache(v, now) is not None}
+    current = {
+        "cached_at": now.isoformat(),
+        "exists": info.exists,
+        "first_published": info.first_published.isoformat() if info.first_published else None,
+    }
+    cache.pop(key, None)
+    ordered = [(key, current), *sorted(cache.items(), key=lambda item: item[1]["cached_at"], reverse=True)]
+    cache = {}
+    size = 2  # braces
+    for name, entry in ordered[:MAX_CACHE_ENTRIES]:
+        entry_size = len(json.dumps(name).encode("utf-8")) + 2 + len(json.dumps(entry).encode("utf-8"))
+        if size + entry_size + (2 if cache else 0) > MAX_CACHE_BYTES:
+            continue
+        size += entry_size + (2 if cache else 0)
+        cache[name] = entry
+    try:
+        atomic_write_text(path, json.dumps(cache))
+    except OSError as error:
+        debug_note("could not write the registry cache", error)
+
+
 def _write_cache(path: Path, key: str, info: RegistryInfo, now: datetime) -> None:
-    """Add one entry: under `<cache>.lock`, re-read the file, drop expired and invalid entries, keep the newest
-    REGISTRY_CACHE_MAX_ENTRIES and replace the file atomically. Best effort: a failure only means no caching."""
-    from aletheore.shield.fsutil import atomic_write_text, debug_note, exclusive
+    """`_write_cache_unlocked` under a bounded OS lock; best effort: a busy lock or a failure only means no caching."""
+    from aletheore.shield.fsutil import debug_note
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        with file_lock(path.with_suffix(".lock")) as acquired:
+            if acquired:
+                _write_cache_unlocked(path, key, info, now)
     except OSError as error:
-        debug_note("could not create the registry cache folder", error)
-        return
-    with exclusive(path.with_name(f"{path.name}.lock")) as held:
-        if not held:
-            return  # another lookup is writing it right now; this entry is simply not cached
-        live = {}
-        for k, v in _read_cache(path).items():
-            entry = _from_cache(v, now)
-            if entry is not None and k != key:
-                live[k] = (_parse_time(v["cached_at"]), v)
-        newest = sorted(live.items(), key=lambda item: item[1][0], reverse=True)[: REGISTRY_CACHE_MAX_ENTRIES - 1]
-        cache = {k: v for k, (_, v) in reversed(newest)}  # oldest first, the new entry last
-        cache[key] = {
-            "cached_at": now.isoformat(),
-            "exists": info.exists,
-            "first_published": info.first_published.isoformat() if info.first_published else None,
-        }
-        try:
-            atomic_write_text(path, json.dumps(cache))
-        except OSError as error:
-            debug_note("could not write the registry cache", error)
+        debug_note("could not update the registry cache", error)
 
 
 def _default_opener(request, timeout=None):

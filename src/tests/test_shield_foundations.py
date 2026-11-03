@@ -173,7 +173,7 @@ def test_run_git_timeout_and_spawn_failure_do_not_raise(tmp_path, monkeypatch):
 
     monkeypatch.setattr(gitutil.subprocess, "run", timeout)
     result = gitutil.run_git(tmp_path, "status", timeout=0.01)
-    assert result.returncode == 124 and result.stdout == b""
+    assert result.returncode == gitutil._TIMED_OUT and result.stdout == b""
     st = gitutil.repo_state(tmp_path)
     assert st.ok is False and "not a git repository" not in st.reason
 
@@ -182,7 +182,7 @@ def test_run_git_timeout_and_spawn_failure_do_not_raise(tmp_path, monkeypatch):
 
     monkeypatch.setattr(gitutil.subprocess, "run", broken)
     result = gitutil.run_git(tmp_path, "status")
-    assert result.returncode == 127 and result.stdout == b""
+    assert result.returncode == gitutil._SPAWN_FAILED and result.stdout == b""
 
 
 def test_run_git_drops_inherited_git_vars_but_keeps_explicit_env(tmp_path, monkeypatch):
@@ -292,7 +292,7 @@ def test_run_git_flags_say_timed_out_and_spawn_failed(tmp_path, monkeypatch):
     monkeypatch.setattr(gitutil.subprocess, "run", missing)
     result = gitutil.run_git(tmp_path, "status")
     assert result.spawn_failed is True and result.timed_out is False and result.returncode != 0
-    assert gitutil.repo_state(tmp_path).reason == "git was not found or could not be started"
+    assert gitutil.repo_state(tmp_path).reason == "git could not be started; check its installation and PATH"
 
     def not_on_path():
         raise FileNotFoundError("git was not found on PATH")
@@ -300,7 +300,7 @@ def test_run_git_flags_say_timed_out_and_spawn_failed(tmp_path, monkeypatch):
     monkeypatch.setattr(gitutil, "git_executable", not_on_path)
     result = gitutil.run_git(tmp_path, "status")
     assert result.spawn_failed is True and result.returncode != 0
-    assert gitutil.repo_state(tmp_path).reason == "git was not found or could not be started"
+    assert gitutil.repo_state(tmp_path).reason == "git could not be started; check its installation and PATH"
 
 
 def test_repo_state_with_a_git_that_exits_124_is_not_reported_as_slow(tmp_path, monkeypatch):

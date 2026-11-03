@@ -1210,9 +1210,11 @@ def test_removal_report_sorts_every_path_by_what_happened(tmp_path):
 
 
 def test_control_characters_are_exactly_c0_without_tab_del_and_c1():
-    expected = {c for c in range(0x20) if c != 0x09} | set(range(0x7F, 0xA0))
-    found = {c for c in range(0x3000) if setup._CONTROL.fullmatch(chr(c))}
+    breaks = {0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85}  # shown as "?" before controls are escaped
+    expected = ({c for c in range(0x20) if c not in (0x09, 0x0A)} | set(range(0x7F, 0xA0))) - breaks
+    found = {c for c in range(0x3000) if setup._clean(chr(c)) == f"\\x{c:02x}"}
     assert found == expected
+    assert setup._clean("a\tb\nc") == "a\tb\nc"  # tab and the one line break kept
     assert {c for c in range(0x3000) if setup._BREAKS.fullmatch(chr(c))} == {
         0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029
     }

@@ -1,15 +1,17 @@
 """Extract the third-party package names a Python or JS/TS source file imports.
 
 Neither language is matched with a regex over the raw text: Python goes through `ast` (and `tokenize` for a file that
-does not parse, such as one in the middle of an edit), JS/TS through a small tokenizer that knows strings, template
-literals, comments and regular-expression literals. Import-shaped text inside a string, docstring or comment is never
-an import, and a comment marker inside a string (`"//"`, `"/*"`, `"#"`) never hides the code after it.
+does not parse, such as one in the middle of an edit), JS/TS through the tree-sitter TSX grammar, a real parser that
+knows strings, template literals, comments, regular-expression literals and JSX and runs in time linear in the file.
+Import-shaped text inside a string, docstring or comment is never an import, and a comment marker inside a string
+(`"//"`, `"/*"`, `"#"`) never hides the code after it.
 """
 
 import ast
 import io
 import re
 import sys
+import threading
 import tokenize
 
 PY_SUFFIXES = (".py",)
@@ -24,6 +26,8 @@ NODE_BUILTINS = frozenset(
 PY_NAMESPACE_ROOTS = frozenset({"google", "azure", "zope", "jaraco", "ruamel", "sphinxcontrib", "backports"})
 
 _NPM_NAME = re.compile(r"^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
+_JS_ESCAPE = re.compile(r"\\(?:u\{[0-9a-fA-F]{1,6}\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|\r\n|[\s\S])")
+_JS_PARSERS = threading.local()
 
 
 # ---- Python ------------------------------------------------------------------------------------
@@ -106,117 +110,6 @@ def _python_imports_from_tokens(source: str) -> set[str]:
 
 # ---- JavaScript / TypeScript ------------------------------------------------------------------
 
-_JS_TOKEN = re.compile(
-    r"""
-    (?P<space>\s+)
-    | (?P<comment>//[^\n]*|/\*.*?(?:\*/|\Z))
-    | (?P<string>'(?:[^'\\\n]|\\.)*(?:'|(?=\n)|\Z)|"(?:[^"\\\n]|\\.)*(?:"|(?=\n)|\Z))
-    | (?P<name>[A-Za-z_$][\w$]*)
-    | (?P<number>\d[\w.]*)
-    | (?P<punct>.)
-    """,
-    re.S | re.X,
-)
-_JS_REGEX_BODY = re.compile(r"(?:[^/\\\[\n]|\\.|\[(?:[^\]\\\n]|\\.)*\])*/[A-Za-z]*")
-# After these words a "/" starts a regular expression, not a division.
-_JS_REGEX_AFTER_WORDS = frozenset(
-    "return typeof instanceof in of new delete void throw case do else yield await".split()
-)
-_STRING, _NAME, _PUNCT = "s", "n", "p"
-_CONTROL_WORDS = frozenset((_NAME, word) for word in ("if", "while", "for", "with"))
-
-
-def _template(text: str, position: int, last_tick: int) -> tuple[int, bool, str] | None:
-    """Scan a template literal from just after its opening backtick: (end position, ends at a `${`, its raw text).
-    None when it never ends: no closing backtick and no `${` before the end of the file. `last_tick` is the position
-    of the file's last backtick, so a template opened after it is known to be unclosed without scanning."""
-    if position > last_tick and text.find("${", position) < 0:
-        return None
-    start = position
-    while position < len(text):
-        char = text[position]
-        if char == "\\":
-            position += 2
-        elif char == "`":
-            return position + 1, False, text[start:position]
-        elif char == "$" and text.startswith("${", position):
-            return position + 2, True, text[start:position]
-        else:
-            position += 1
-    return None
-
-
-def _js_tokens(text: str) -> list[tuple[str, str]]:
-    """(kind, text) for every string, name and punctuation token; comments, regex literals and template text are
-    dropped (a template with no substitution is a string token, like a quoted one). Never raises."""
-    tokens: list[tuple[str, str]] = []
-    braces: list[int] = []  # for each open `${`, the depth of plain braces inside it
-    parens: list[bool] = []  # for each open "(", whether it is the condition of if/while/for/with
-    control_closes: set[int] = set()  # token indexes of ")" that close such a condition: a "/" after one is a regex
-    last_tick = text.rfind("`")
-    position = 0
-    while position < len(text):
-        match = _JS_TOKEN.match(text, position)
-        if match is None:  # cannot happen ("." matches any character), but never loop forever
-            break
-        kind = match.lastgroup
-        value = match.group()
-        position = match.end()
-        if kind in ("space", "comment", "number"):
-            if kind == "number":
-                tokens.append((_PUNCT, "0"))  # a value: a following "/" divides
-            continue
-        if kind == "string":
-            tokens.append((_STRING, value[1:-1] if len(value) > 1 and value[-1] == value[0] else value[1:]))
-            continue
-        if kind == "name":
-            tokens.append((_NAME, value))
-            continue
-        if value == "`" or (value == "}" and braces and braces[-1] == 0):
-            scanned = _template(text, position, last_tick)
-            if scanned is None:
-                if value == "`":
-                    # A backtick that opens nothing that ever closes is not a template: most likely one inside a
-                    # regex or JSX text the tokenizer could not tell apart. Read on as code, so it hides nothing.
-                    tokens.append((_PUNCT, "`"))
-                    continue
-                scanned = (len(text), False, text[position:])
-            if value == "}":
-                braces.pop()  # end of a `${...}`: back inside the template
-            position, opened, raw = scanned
-            if opened:
-                braces.append(0)
-                tokens.append((_PUNCT, "`"))  # a template is a value, but its text is never a specifier
-            elif value == "`":
-                tokens.append((_STRING, raw))
-            else:
-                tokens.append((_PUNCT, "`"))
-            continue
-        if value == "{" and braces:
-            braces[-1] += 1
-        elif value == "}" and braces:
-            braces[-1] -= 1
-        elif value == "(":
-            parens.append(bool(tokens) and tokens[-1] in _CONTROL_WORDS)
-        elif value == ")" and parens and parens.pop():
-            control_closes.add(len(tokens))
-        if value == "/":
-            previous = tokens[-1] if tokens else None
-            regex_allowed = (
-                previous is None
-                or (previous[0] == _PUNCT and previous[1] not in (")", "]", "}", "0", "`"))
-                or (previous[0] == _NAME and previous[1] in _JS_REGEX_AFTER_WORDS)
-                or len(tokens) - 1 in control_closes  # if (...) /re/
-            )
-            if regex_allowed:
-                body = _JS_REGEX_BODY.match(text, position)
-                if body is not None:
-                    position = body.end()
-                    tokens.append((_PUNCT, "0"))  # a value
-                    continue
-        tokens.append((_PUNCT, value))
-    return tokens
-
 
 def _package_of(specifier: str) -> str | None:
     if not specifier or specifier[0] in "./~#!" or ":" in specifier or specifier.startswith("@/"):
@@ -228,57 +121,59 @@ def _package_of(specifier: str) -> str | None:
     return name
 
 
-_STATEMENT_LOOKAHEAD = 400  # tokens an import/export clause may span before "from"
+def _js_parser():
+    """Reuse a parser within a thread; parsers must not be shared across concurrent checks."""
+    import tree_sitter_typescript
+    from tree_sitter import Language, Parser
+
+    if not hasattr(_JS_PARSERS, "parser"):
+        _JS_PARSERS.parser = Parser(Language(tree_sitter_typescript.language_tsx()))
+    return _JS_PARSERS.parser
 
 
-def _from_specifier(tokens: list[tuple[str, str]], start: int) -> str | None:
-    """The string after the first `from` at or after `start` within the same import/export clause."""
-    for index in range(start, min(len(tokens) - 1, start + _STATEMENT_LOOKAHEAD)):
-        kind, value = tokens[index]
-        if kind == _PUNCT and value in (";", "=", "(", ")"):
-            return None
-        if kind == _NAME and value in ("import", "export") and index > start:
-            return None
-        if kind == _NAME and value == "from" and tokens[index + 1][0] == _STRING:
-            return tokens[index + 1][1]
-    return None
+def _js_specifier(text: str) -> str | None:
+    def decode(match):
+        escape = match.group()[1:]
+        if escape.startswith("u{"):
+            return chr(int(escape[2:-1], 16))
+        if escape[0] in "ux":
+            return chr(int(escape[1:], 16))
+        if escape in ("\n", "\r", "\r\n", "\u2028", "\u2029"):
+            return ""
+        if escape in "0123456789bfnrtv":
+            raise ValueError("control/octal escape cannot be a package name")
+        return escape
 
-
-def _js_specifiers(tokens: list[tuple[str, str]]):
-    for index, (kind, value) in enumerate(tokens):
-        if kind != _NAME or (index and tokens[index - 1] == (_PUNCT, ".")):
-            continue  # obj.require("x") / loader.import("x") are method calls, not module imports
-        following = tokens[index + 1 : index + 4]
-        call = (
-            len(following) >= 3 and following[0] == (_PUNCT, "(") and following[1][0] == _STRING
-            and following[2][0] == _PUNCT and following[2][1] in (")", ",")
-        )
-        if value == "require" and call:
-            yield following[1][1]
-        elif value == "import":
-            if call:
-                yield following[1][1]  # import("x")
-            elif following and following[0][0] == _STRING:
-                yield following[0][1]  # import "x"
-            elif following and following[0] not in ((_PUNCT, "("), (_PUNCT, ".")):  # not import(expr) or import.meta
-                specifier = _from_specifier(tokens, index + 1)
-                if specifier is not None:
-                    yield specifier
-        elif value == "export" and following:
-            first = following[0]
-            if first in ((_PUNCT, "*"), (_PUNCT, "{")) or first == (_NAME, "type"):
-                specifier = _from_specifier(tokens, index + 1)
-                if specifier is not None:
-                    yield specifier
+    try:
+        return _JS_ESCAPE.sub(decode, text)
+    except ValueError:
+        return None
 
 
 def js_imports(source: str) -> set[str]:
-    """Bare package names from import/export-from/require/dynamic import."""
-    if "import" not in source and "require" not in source and "export" not in source:
-        return set()
+    """Bare package names from actual syntax, excluding comments and string contents."""
+    raw = source.encode("utf-8", "replace")
+    tree = _js_parser().parse(raw)
     found: set[str] = set()
-    for specifier in _js_specifiers(_js_tokens(source)):
-        package = _package_of(specifier)
-        if package:
-            found.add(package)
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        literal = None
+        if node.type in ("import_statement", "export_statement"):
+            literal = node.child_by_field_name("source")
+        elif node.type == "import_require_clause":
+            literal = next((n for n in node.named_children if n.type == "string"), None)
+        elif node.type == "call_expression":
+            fn = node.child_by_field_name("function")
+            args = node.child_by_field_name("arguments")
+            if fn is not None and (fn.type == "import" or
+                    fn.type == "identifier" and raw[fn.start_byte:fn.end_byte] == b"require"):
+                literal = args.named_children[0] if args is not None and args.named_children else None
+        if literal is not None and (literal.type == "string" or literal.type == "template_string"
+                and not any(c.type == "template_substitution" for c in literal.named_children)):
+            specifier = _js_specifier(raw[literal.start_byte + 1:literal.end_byte - 1].decode("utf-8", "replace"))
+            package = _package_of(specifier) if specifier is not None else None
+            if package:
+                found.add(package)
+        stack.extend(node.named_children)
     return found

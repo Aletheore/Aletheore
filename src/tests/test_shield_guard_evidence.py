@@ -793,9 +793,12 @@ def test_a_stale_refresh_marker_is_replaced_by_exactly_one_of_many_concurrent_ca
         return value
 
     monkeypatch.setattr(guard_evidence, "_refresh_started_at", slow)
-    from aletheore.shield import fsutil
+    import functools
 
-    monkeypatch.setattr(fsutil, "LOCK_WAIT_S", 60.0)  # every caller gets its turn, however loaded the machine
+    from aletheore.shield import locking
+
+    # Every caller gets its turn, however loaded the machine.
+    monkeypatch.setattr(guard_evidence, "file_lock", functools.partial(locking.file_lock, timeout=60.0))
     barrier = threading.Barrier(6)
     won = []
 

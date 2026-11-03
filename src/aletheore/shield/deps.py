@@ -25,6 +25,7 @@ import tomllib
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from aletheore.manifests import EXTRA_SKIPPED_DIRS, MANIFEST_FILENAMES, MANIFEST_SUFFIXES
 from aletheore.scanner.detect import IGNORED_DIRS
@@ -40,6 +41,13 @@ _ECOSYSTEM_LABEL = {
 }
 _PUBLIC_NPM_HOSTS = ("registry.npmjs.org", "registry.yarnpkg.com")
 _MAX_SOURCE_BYTES = 2_000_000
+# Registry configs often hold credentials, so they are usually git-ignored: they are read from disk wherever they sit
+# in a folder of the working tree, whether git lists them or not, so a private registry is never missed.
+_REGISTRY_CONFIG_NAMES = (".npmrc", ".yarnrc.yml", ".yarnrc.yaml", "pip.conf", "pip.ini")
+# Import names that two unrelated distributions provide (pyjwt and jwt, pymongo and bson, ...): with neither declared
+# nor installed, which one the change means cannot be told, so the import is reported as not checked.
+_AMBIGUOUS_IMPORTS = frozenset({"bson", "jwt", "fitz", "multipart", "magic"})
+AMBIGUOUS_REASON = "the import name maps to multiple distributions"
 _SKIPPED_DIRS = frozenset(IGNORED_DIRS) | frozenset(EXTRA_SKIPPED_DIRS)
 _SOURCE_SUFFIXES = (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
 _GIT_TIMEOUT_S = 30.0
@@ -370,12 +378,33 @@ class _Facts:
     npm_remote: set[str] = field(default_factory=set)  # git host or URL specs: not registry packages
 
 
+def _with_registry_configs(repo: Path, working: list[str]) -> list[str]:
+    """`working` plus every registry config git does not list (an ignored .npmrc or pip.conf) in a folder of the
+    working tree or one above it, outside skipped folders."""
+    folders = {"."}
+    for rel in working:
+        folder = rel.rpartition("/")[0]
+        while folder and folder not in folders:
+            folders.add(folder)
+            folder = folder.rpartition("/")[0]
+    listed = set(working)
+    extra = []
+    for folder in sorted(folders):
+        if folder != "." and any(part in _SKIPPED_DIRS for part in folder.split("/")):
+            continue
+        for name in _REGISTRY_CONFIG_NAMES:
+            rel = name if folder == "." else f"{folder}/{name}"
+            if rel not in listed and os.path.isfile(repo / rel):
+                extra.append(rel)
+    return [*working, *extra] if extra else working
+
+
 def _gather(repo: Path, working: list[str]) -> _Facts:
     facts = _Facts(set(), set(), set(), set(), set(), {})
     pip_hits: list[str] = []
     npm_hits: list[str] = []
     folders_seen: set[str] = set()
-    for rel in working:
+    for rel in _with_registry_configs(repo, working):
         folder, _, name = rel.rpartition("/")
         skipped = False
         if folder:
@@ -530,8 +559,13 @@ def _npmrc_private(text: str) -> bool:
         key, value = key.strip(), value.strip().strip("'\"")
         if key.startswith("@") and key.endswith(":registry"):
             return True
-        if key == "registry" and not any(host in value for host in _PUBLIC_NPM_HOSTS):
-            return True
+        if key == "registry":
+            try:
+                public = urlsplit(value).hostname in _PUBLIC_NPM_HOSTS
+            except ValueError:
+                public = False
+            if not public:  # compared by host name: registry.npmjs.org.corp.example is not the public registry
+                return True
     return False
 
 
@@ -897,6 +931,10 @@ def added_dependencies(
         before = base_texts.get(rel)
         new_names = parse(text) - (parse(before.decode("utf-8", "replace")) if before is not None else set())
         for imp in sorted(new_names):
+            if is_py and imp in _AMBIGUOUS_IMPORTS and imp not in installed and not any(
+                    _norm_py(d) in declared_py for d in (*import_map.get(imp, ()), imp)):
+                not_checked.append(NotChecked(imp, AMBIGUOUS_REASON))
+                continue
             ref = _import_ref(imp, rel, is_py, facts, import_map, installed, declared_py, declared_npm)
             if ref and (ref.ecosystem, _norm(ref.ecosystem, ref.name)) not in known:
                 candidates.setdefault((ref.ecosystem, _norm(ref.ecosystem, ref.name)), ref)
@@ -944,9 +982,9 @@ def _import_ref(imp, rel, is_py, facts, import_map, installed, declared_py, decl
         name = _norm_py(imp)
         if name in declared_py or name in facts.local_py:
             return None
-        # Heuristic: import name and distribution name often differ only by a prefix/suffix
-        # (foo-bar provides `foo`), so a declared name containing or contained in it counts as declared.
-        if any(len(name) >= 3 and (name in d or d in name) for d in declared_py if len(d) >= 3):
+        # A declared foo-bar may provide `foo`; a declared foo does not cover a new foo-bar (or foo_extra) import, and a
+        # declared foo-bar does not cover a new `bar`.
+        if len(name) >= 3 and any(d.startswith(name + "-") for d in declared_py):
             return None
         return DepRef("PyPI", name, "import", rel)
     lowered = imp.lower()

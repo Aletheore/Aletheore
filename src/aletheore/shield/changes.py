@@ -14,6 +14,7 @@ from pathlib import Path
 from aletheore.shield.gitutil import UNLIMITED, Budget, run_git, run_git_pair
 
 LIST_TIMEOUT_S = 30.0
+MIN_SPAWN_S = 0.01
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class ChangeSet:
     changed: tuple[str, ...]  # differ from the base (deletions included) plus untracked; every file with no base
     deleted: frozenset[str] = field(default_factory=frozenset)  # changed paths missing from the working tree
     complete: bool = True  # False when a listing failed or ran out of time; the lists may then be partial
+    spawn_failed: bool = False  # git could not be resolved or started at all
 
     @property
     def working(self) -> list[str]:
@@ -44,8 +46,11 @@ def _paths(out: bytes) -> list[str]:
 
 def compute(repo: Path, base: str = "HEAD", *, budget: Budget = UNLIMITED) -> ChangeSet:
     """List the change of the working tree against `base`. Never raises; `complete` is False when git did not
-    answer (in time), and the guard then says so instead of reporting from partial lists."""
+    answer (in time), and the guard then says so instead of reporting from partial lists. With less than
+    MIN_SPAWN_S left no git process is started at all."""
     repo = Path(repo)
+    if budget.left() < MIN_SPAWN_S:  # git could not finish anything useful in the time left: do not start it
+        return ChangeSet(False, "", None, (), (), (), complete=False)
     probe = run_git(
         repo, "rev-parse", "--absolute-git-dir", "--verify", "-q", f"{base}^{{commit}}",
         timeout=budget.timeout(10.0),
@@ -101,4 +106,5 @@ def compute(repo: Path, base: str = "HEAD", *, budget: Budget = UNLIMITED) -> Ch
         changed=changed_list,
         deleted=frozenset(deleted),
         complete=complete,
+        spawn_failed=probe.spawn_failed,
     )

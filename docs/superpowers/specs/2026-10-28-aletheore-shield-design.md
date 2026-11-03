@@ -27,7 +27,8 @@ Install stays `pip install aletheore` (or `pipx`); the only extra step is one co
 Principle **[My call]**, consistent with `2026-10-28-paid-tier-differentiators-design.md`: free stays
 local, deterministic and stateless. Shield makes no model call, needs no account, and keeps state
 in the user's own repository (its working tree and its Git directory). The one exception is a bounded
-cache of registry answers outside the repository (see "Where state lives"). It does not touch the paid features (review rules and memory,
+cache of registry answers outside the repository, at `~/.cache/aletheore/shield-registry-cache.json`,
+which survives removal (see "Where state lives"). It does not touch the paid features (review rules and memory,
 apply-fix, cross-repo blast radius).
 
 ## Goals, non-goals, anti-goals
@@ -51,7 +52,8 @@ Non-goals
 
 Anti-goals (a failure even if it technically works)
 - Editing a user's agent settings or git hooks without showing the change and getting a yes, or
-  being unable to remove everything it added.
+  being unable to remove its hooks and settings. Removal keeps a one-line exclude for `.aletheore/`
+  while scan evidence remains; delete that directory and run `shield off` again to remove the line.
 - Checkpoint touching the user's branches, index, stash, working tree (except an explicit
   `undo`), or reflog-visible history.
 - A hook that breaks, slows or stalls the agent's tool call. Hooks always exit 0 and have a time
@@ -101,10 +103,11 @@ Anti-goals (a failure even if it technically works)
   needs updating (for example hook entries in the old string form), or says there is nothing to
   change.
 - `aletheore shield undo`: list checkpoints and restore one (see Checkpoint).
-- `aletheore shield off`: remove exactly what setup added, and say what it removed. Checkpoints
-  are kept unless `--purge` is passed. One exception: while scan evidence remains in `.aletheore/`,
-  `off` keeps a one-line `/.aletheore/` block in `.git/info/exclude`, so the evidence does not show up
-  in `git status`; delete `.aletheore/` and run `off` again to drop it.
+- `aletheore shield off`: remove exactly what setup added, and say what it removed. A config file
+  that existed before setup is preserved. Checkpoints and receipts are kept unless `--purge` is passed.
+  One exception: while scan evidence remains in `.aletheore/`, `off` keeps a one-line `/.aletheore/`
+  block in `.git/info/exclude`, so the evidence does not show up in `git status`; delete `.aletheore/`
+  and run `off` again to drop it.
 - `aletheore shield check`: run guard on the current diff on demand, the same code the hooks call.
 
 Decisions
@@ -254,9 +257,10 @@ A cold reader asked these. None need the owner. All are **[My call]** unless mar
   manifests directly, so it never depends on evidence freshness. If refreshing evidence turns out to
   be cheap, the builder may add it; it is not required.
 - **Sensitive files in checkpoints.** Snapshots include tracked files and untracked, non-ignored
-  files, minus a deny-list kept in code (not config): `.env*`, `*.pem`, `*.key`, `*.p12`,
-  `id_rsa*`, `credentials*` and more (the full list is under "As built"). The status screen
-  lists skipped files by name. Same pattern as the apply-fix deny-list in the paid-tier spec.
+  files, minus a deny-list kept in code (not config): `.env*`, `*.env`, `*.pem`, `*.key`, `*.p12`,
+  `id_rsa*`, `credentials` files and more (the full list is under "As built"). These basename patterns
+  are matched case-insensitively. The status screen lists skipped files by name. Same pattern as the
+  apply-fix deny-list in the paid-tier spec.
 - **Check 1 scope for v1.** Manifest diffs (newly added dependency entries) are fully checked. A new
   import with no manifest change is checked only when the import name maps to a distribution name
   through a bundled map or an exact match; otherwise the outcome is "not checked: cannot map
@@ -270,7 +274,9 @@ A cold reader asked these. None need the owner. All are **[My call]** unless mar
   - turn end, session end and pre-commit: hard stop 8 s, guard budget 6 s.
   A step that would start with no time left is reported as "time budget reached; ... skipped", never as
   a pass. Registry lookups run only at turn end, at pre-commit and in `shield check`, never per edit
-  and not at session end, with a 3 s timeout each, after the local checks. Checkpoint: skip files over
+  and not at session end, with a 3 s timeout each within what is left of the guard budget, after the
+  local checks. `shield check` uses the same soft 6 s guard budget but has no outer hard stop: a local
+  evidence operation already running can overrun it. Checkpoint: skip files over
   5 MB, stop at 100 MB total. Python 3.11 to 3.14, as the package supports today. **Platforms: macOS,
   Linux and Windows in v1 [Owner]** (owner asked for Windows on 2026-10-28). Agent hooks use the exec
   form, so no shell quoting is involved on any platform; only the Git pre-commit block (a `sh` script,

@@ -22,6 +22,8 @@ import json
 import math
 import os
 import shutil
+import shlex
+import stat
 import subprocess  # nosec B404 - starts this package's own refresh module with a fixed argument list, no shell
 import sys
 import time
@@ -32,6 +34,7 @@ from pathlib import Path, PurePosixPath
 from aletheore.shield import state
 from aletheore.shield.fsutil import debug_note
 from aletheore.shield.gitutil import UNLIMITED, Budget
+from aletheore.shield.locking import file_lock
 
 # The evidence readers and diff helpers (aletheore.evidence, dependents, evidence_diff, signature_diff, tests_for)
 # cost about 400 ms to import. They are imported inside the functions that use them, so the per-edit hook can call
@@ -206,7 +209,7 @@ def _write_marker(marker: Path, started: float) -> bool:
             debug_note(f"could not remove {temporary}", error)
 
 
-def _claim_marker(marker: Path, newest_edit: float | None = None) -> bool:
+def _claim_marker_unlocked(marker: Path, newest_edit: float | None = None) -> bool:
     """Atomically take the refresh marker and record the start time in it; False when a refresh may not start.
 
     A previous refresh blocks a new one while it is still running (it has not written its completion record; see
@@ -214,34 +217,40 @@ def _claim_marker(marker: Path, newest_edit: float | None = None) -> bool:
     after that. One that has finished blocks a new one for REFRESH_MIN_INTERVAL_S, unless a changed file was
     modified after it started (`newest_edit`). A marker without a readable start time falls back to its mtime.
 
-    Creating a missing marker is an exclusive create. Replacing an existing one happens under `<marker>.lock` and
-    judges the marker as it is inside the lock, so of many callers that all saw the same dead marker only the first
-    replaces it; the others then see its fresh start and decline."""
-    from aletheore.shield.fsutil import atomic_write_text, exclusive
+    Called under `<marker>.lock` (see `_claim_marker`) and judges the marker as it is inside the lock, so of many
+    callers that all saw the same dead marker only the first replaces it; the others then see its fresh start and
+    decline."""
+    from aletheore.shield.fsutil import atomic_write_text
 
     now = time.time()
     if _write_marker(marker, now):
         return True
-    with exclusive(marker.with_name(f"{marker.name}.lock")) as held:
-        if not held:
-            return False  # another caller is deciding right now
-        now = time.time()  # after the wait: a marker written meanwhile must not look like it is from the future
-        started = _refresh_started_at(marker)
-        if started is None:
-            started = _mtime(marker)
-        if started is None:
-            return _write_marker(marker, now)  # gone meanwhile: create it exclusively, as above
-        age = now - started
-        # marker.parent is <repo>/.aletheore/shield
-        running = not _refresh_finished(marker.parent.parent.parent, started)
-        if running:
-            if 0 <= age < REFRESH_RUNNING_TIMEOUT_S:
-                return False
-        elif not (newest_edit is not None and newest_edit > started):
-            if 0 <= age < REFRESH_MIN_INTERVAL_S:
-                return False
-        atomic_write_text(marker, repr(now))  # replaced in one step: never absent, never without its start time
-        return True
+    started = _refresh_started_at(marker)
+    if started is None:
+        started = _mtime(marker)
+    if started is None:
+        return _write_marker(marker, now)  # gone meanwhile: create it, as above
+    age = now - started
+    # marker.parent is <repo>/.aletheore/shield
+    running = not _refresh_finished(marker.parent.parent.parent, started)
+    if running:
+        if 0 <= age < REFRESH_RUNNING_TIMEOUT_S:
+            return False
+    elif not (newest_edit is not None and newest_edit > started):
+        if 0 <= age < REFRESH_MIN_INTERVAL_S:
+            return False
+    atomic_write_text(marker, repr(now))  # replaced in one step: never absent, never without its start time
+    return True
+
+
+def _claim_marker(marker: Path, newest_edit: float | None = None) -> bool:
+    """`_claim_marker_unlocked` under a bounded OS lock; False when the lock is busy (another caller is deciding)."""
+    try:
+        with file_lock(marker.with_suffix(".lock")) as acquired:
+            return acquired and _claim_marker_unlocked(marker, newest_edit)
+    except OSError as error:
+        debug_note("could not lock the refresh marker", error)
+        return False
 
 
 def start_background_refresh(
@@ -399,19 +408,29 @@ def prune_base_evidence(repo: Path, *, max_age_s: float = BASE_EVIDENCE_MAX_AGE_
 
 
 def _relevant_changed(repo: Path, changed: list[str], known: set[str]) -> list[str]:
-    """Changed files the scan would have looked at: modules it knows, or paths of a language it parses."""
+    """Inputs to source and secret checks, including known files deleted since the scan."""
     from aletheore.scanner.detect import IGNORED_DIRS
-    from aletheore.scanner.graph import LANGUAGE_BY_EXTENSION
+    from aletheore.secrets import BINARY_EXTENSIONS, MAX_SCANNED_FILE_BYTES
+    from aletheore.repo_config import is_ignored, load_repo_config
 
+    patterns = load_repo_config(repo)["ignored_paths"]
     relevant = []
     for raw in changed:
         rel = _safe_relative(raw)
         if rel is None:
             continue
         path = PurePosixPath(rel)
-        if rel in known or (path.suffix in LANGUAGE_BY_EXTENSION and not set(path.parts) & set(IGNORED_DIRS)):
-            if (Path(repo) / rel).exists():
-                relevant.append(rel)
+        if set(path.parts) & set(IGNORED_DIRS) or is_ignored(rel, patterns):
+            continue
+        if rel in known:
+            relevant.append(rel)
+            continue
+        try:
+            info = (Path(repo) / rel).lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and path.suffix not in BINARY_EXTENSIONS and info.st_size <= MAX_SCANNED_FILE_BYTES:
+            relevant.append(rel)
     return relevant
 
 
@@ -424,7 +443,7 @@ def _files_newer_than(repo: Path, files: list[str], scanned_at: object) -> list[
     newer = []
     for rel in files:
         modified = _mtime(Path(repo) / rel)
-        if modified is not None and modified > covered:
+        if modified is None or modified > covered:
             newer.append(rel)
     return newer
 
@@ -442,15 +461,6 @@ def _has_pytest_config(repo: Path) -> bool:
         or "[pytest]" in text("tox.ini")
         or "[tool:pytest]" in text("setup.cfg")
     )
-
-
-def _shell_join(paths: list[str]) -> str:
-    """Paths quoted for the shell the user will paste them into: POSIX quoting, or cmd.exe quoting on Windows."""
-    if os.name == "nt":
-        return subprocess.list2cmdline(paths)
-    import shlex
-
-    return " ".join(shlex.quote(p) for p in paths)
 
 
 def _affected_finding(repo: Path, head: dict, targets: list[str]) -> Finding | None:
@@ -483,7 +493,8 @@ def _affected_finding(repo: Path, head: dict, targets: list[str]) -> Finding | N
         text = f"Test files that import it or are named for it: {_cap(high_list)}."
         python_tests = [p for p in high_list if p.endswith(".py")]
         if python_tests and _has_pytest_config(repo):
-            command = "pytest " + _shell_join(python_tests[:_LIST_CAP])
+            argv = ["pytest", *python_tests[:_LIST_CAP]]
+            command = subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
             if len(python_tests) > _LIST_CAP:
                 command += f" (and {len(python_tests) - _LIST_CAP} more test files)"
             text += f" Command: {command}."
@@ -563,6 +574,7 @@ def _risk_findings(base: dict, head: dict) -> list[Finding]:
 
 
 MIN_STAGE_S = 0.05  # with less time than this left, a check is not started
+EVIDENCE_NOT_RUN = "time budget reached; evidence checks were not run (dependents, signature and new-risk checks)"
 
 
 def _out_of_time(stages: str) -> str:
@@ -580,7 +592,7 @@ def evidence_checks(
     """
     repo = Path(repo)
     if budget.spent(MIN_STAGE_S):
-        return [], [_out_of_time("dependents, signature and new-risk checks")]
+        return [], [EVIDENCE_NOT_RUN]
     try:
         if not (repo / _EVIDENCE_REL).exists():
             raise FileNotFoundError(str(repo / _EVIDENCE_REL))  # answered without importing the evidence reader
@@ -597,18 +609,13 @@ def evidence_checks(
 
     try:
         known = {m["path"] for m in head["repository"]["modules"] if m.get("path")}
-    except (KeyError, TypeError):
+        secret_paths = {f.get("path") for f in head.get("security", {}).get("secrets", {}).get("findings", [])}
+    except (AttributeError, KeyError, TypeError):
         return [], ["scan evidence has an unexpected shape; run aletheore scan"]
 
-    newer = _files_newer_than(repo, _relevant_changed(repo, changed, known), head.get("scanned_at"))
+    newer = _files_newer_than(repo, _relevant_changed(repo, changed, known | secret_paths), head.get("scanned_at"))
     if newer is None:
         return [], ["scan evidence has no readable scan time, so its age cannot be checked; run aletheore scan"]
-    # A scanned module that was deleted since: the evidence still describes it, so it is as stale as a newer edit.
-    deleted = [
-        rel for rel in (_safe_relative(c) for c in changed)
-        if rel is not None and rel in known and not (repo / rel).exists()
-    ]
-    newer = newer + [rel for rel in deleted if rel not in newer]
     if newer:
         started = start_background_refresh(repo, newer, head.get("scanned_at"), scanned_modules=known)
         followup = "a refresh was started" if started else "run aletheore scan"

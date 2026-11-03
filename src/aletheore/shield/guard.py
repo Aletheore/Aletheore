@@ -13,8 +13,9 @@ from pathlib import Path
 
 from aletheore.shield import changes, state
 from aletheore.shield.deps import DepRef, added_dependencies
-from aletheore.shield.gitutil import Budget
-from aletheore.shield.guard_evidence import Finding, evidence_checks
+from aletheore.shield.gitutil import GIT_NOT_FOUND, Budget
+from aletheore.shield.guard_evidence import EVIDENCE_NOT_RUN, Finding, evidence_checks
+from aletheore.shield.guard_evidence import MIN_STAGE_S as EVIDENCE_MIN_STAGE_S
 from aletheore.shield.nearmiss import near_miss
 from aletheore.shield.registry import lookup_package
 
@@ -132,7 +133,7 @@ def _dependency_findings(
             elif info is None:
                 note = "; registry was not checked"
             elif exists is None:
-                note = "; the registry lookup failed, so whether it exists is unknown"
+                note = "; registry lookup failed"
             findings.append(
                 Finding(
                     "dependencies",
@@ -183,8 +184,11 @@ def run_guard(
     except Exception as exc:  # noqa: BLE001 - the guard must never break a hook
         not_checked.append(f"changed files could not be listed ({type(exc).__name__})")
     if change is not None and not change.complete:
-        reason = "time budget reached" if budget.spent() else "git did not answer"
-        not_checked.append(f"{reason}; changed files could not be listed, so every check was skipped")
+        if change.spawn_failed:
+            not_checked.append(GIT_NOT_FOUND)
+        else:
+            reason = "time budget reached" if budget.spent() else "git did not answer"
+            not_checked.append(f"{reason}; changed files could not be listed, so every check was skipped")
         change = None
     if change is not None:
         # Order of work: the local steps first (new dependency names, then the evidence checks), the registry
@@ -210,9 +214,12 @@ def run_guard(
         evidence_findings: list[Finding] = []
         evidence_skipped: list[str] = []
         try:
-            evidence_findings, evidence_skipped = evidence_checks(
-                repo, list(change.changed), base_evidence, budget=budget
-            )
+            if budget.spent(EVIDENCE_MIN_STAGE_S):  # no evidence work starts after the deadline
+                evidence_skipped = [EVIDENCE_NOT_RUN]
+            else:
+                evidence_findings, evidence_skipped = evidence_checks(
+                    repo, list(change.changed), base_evidence, budget=budget
+                )
         except Exception as exc:  # noqa: BLE001
             evidence_skipped = [f"evidence check failed ({type(exc).__name__})"]
         if refs is not None:

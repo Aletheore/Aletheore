@@ -240,7 +240,7 @@ def test_npm_cache_key_preserves_case_and_expired_entries_are_pruned(tmp_path):
     assert cache["npm:JSONStream"]["exists"] is True and cache["npm:jsonstream"]["exists"] is False
     lookup_package("npm", "other", cache_path=path, opener=_Opener({"time": {}}), now=NOW + timedelta(hours=30))
     assert set(json.loads(path.read_text())) == {"npm:other"}
-    assert [p.name for p in tmp_path.iterdir() if p.name != "c.json"] == []
+    assert [p.name for p in tmp_path.iterdir() if p.name not in ("c.json", "c.lock")] == []
 
 
 def _fresh_entry(minutes_ago):
@@ -251,11 +251,11 @@ def test_registry_cache_stays_bounded_and_keeps_the_newest_entries(tmp_path):
     from aletheore.shield import registry
 
     cache = tmp_path / "reg.json"
-    many = registry.REGISTRY_CACHE_MAX_ENTRIES + 500
+    many = registry.MAX_CACHE_ENTRIES + 500
     cache.write_text(json.dumps({f"PyPI:p{i}": _fresh_entry(i % 600) for i in range(many)}), encoding="utf-8")
     _lookup(tmp_path, "PyPI", "newname", _http_error("u", 404))
     data = json.loads(cache.read_text(encoding="utf-8"))
-    assert len(data) == registry.REGISTRY_CACHE_MAX_ENTRIES
+    assert len(data) == registry.MAX_CACHE_ENTRIES
     assert "PyPI:newname" in data
     kept_ages = sorted(NOW - datetime.fromisoformat(v["cached_at"]) for k, v in data.items() if k != "PyPI:newname")
     dropped_youngest = min(
@@ -286,7 +286,7 @@ def test_registry_cache_write_failure_leaves_no_temporary_file(tmp_path, monkeyp
     monkeypatch.setattr(os, "replace", refuse)
     info, _ = _lookup(tmp_path, "PyPI", "x", _http_error("u", 404))
     assert info.exists is False
-    assert list(tmp_path.iterdir()) == []
+    assert [p.name for p in tmp_path.iterdir() if p.name != "reg.lock"] == []  # the OS lock file stays, empty
 
 
 def test_concurrent_registry_cache_writers_keep_every_entry(tmp_path, monkeypatch):

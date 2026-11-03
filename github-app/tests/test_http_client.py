@@ -1,12 +1,26 @@
+import types
+
 import httpx
 
 from app_server.http_client import (
-    _RateLimitRetryTransport,
     _rate_limit_wait_seconds,
+    _RateLimitRetryTransport,
     get_generic_http_client,
     get_github_api_client,
     get_github_oauth_client,
 )
+
+
+def _fake_clock(monkeypatch, *, now, sleeps=None):
+    # Replace http_client's own reference to `time`, never attributes of the shared `time`
+    # module: patching `time.sleep` globally also catches sleeps from any other thread alive
+    # in the test process (a leftover ticker's 0.05s sleep landed in `sleeps` and failed CI).
+    import app_server.http_client as http_client_module
+
+    record = sleeps.append if sleeps is not None else (lambda seconds: None)
+    monkeypatch.setattr(
+        http_client_module, "time", types.SimpleNamespace(time=lambda: now, sleep=record)
+    )
 
 
 def test_get_github_api_client_returns_the_same_instance_across_calls():
@@ -60,9 +74,8 @@ def test_rate_limit_wait_seconds_prefers_retry_after_when_present():
 
 
 def test_rate_limit_wait_seconds_uses_reset_time_when_remaining_is_zero(monkeypatch):
-    import app_server.http_client as http_client_module
 
-    monkeypatch.setattr(http_client_module.time, "time", lambda: 1000.0)
+    _fake_clock(monkeypatch, now=1000.0)
     headers = httpx.Headers({"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1045"})
     assert _rate_limit_wait_seconds(headers) == 45.0
 
@@ -86,9 +99,8 @@ def test_rate_limit_wait_seconds_never_negative(monkeypatch):
     # A reset timestamp already in the past (clock drift, or this call
     # itself raced the reset) must floor at 0, not return a negative
     # sleep duration.
-    import app_server.http_client as http_client_module
 
-    monkeypatch.setattr(http_client_module.time, "time", lambda: 2000.0)
+    _fake_clock(monkeypatch, now=2000.0)
     headers = httpx.Headers({"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1000"})
     assert _rate_limit_wait_seconds(headers) == 0.0
 
@@ -127,11 +139,9 @@ def test_rate_limit_retry_transport_passes_through_a_non_rate_limit_403():
 
 
 def test_rate_limit_retry_transport_retries_once_after_waiting(monkeypatch):
-    import app_server.http_client as http_client_module
 
     sleeps = []
-    monkeypatch.setattr(http_client_module.time, "sleep", lambda seconds: sleeps.append(seconds))
-    monkeypatch.setattr(http_client_module.time, "time", lambda: 1000.0)
+    _fake_clock(monkeypatch, now=1000.0, sleeps=sleeps)
 
     calls = []
 
@@ -159,8 +169,7 @@ def test_rate_limit_retry_transport_caps_the_wait_at_the_max_backoff(monkeypatch
     import app_server.http_client as http_client_module
 
     sleeps = []
-    monkeypatch.setattr(http_client_module.time, "sleep", lambda seconds: sleeps.append(seconds))
-    monkeypatch.setattr(http_client_module.time, "time", lambda: 0.0)
+    _fake_clock(monkeypatch, now=0.0, sleeps=sleeps)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

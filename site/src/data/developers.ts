@@ -137,6 +137,18 @@ export const mcpTools = {
     { name: "aletheore_managed_audit", why: "Requires ALETHEORE_MCP_ALLOW to include 'external'. Off by default." },
   ].filter((o) => (tools.optional as string[]).includes(o.name)),
 };
+// Wording from the README ("Give your coding agent repository evidence" and "What the scanner understands"); the
+// target list matches `aletheore mcp-install --target` in the CLI.
+export const mcpSetup = {
+  title: "Connect your coding agent",
+  code: "aletheore mcp-install . --target cursor",
+  body: "This writes client configuration so Cursor can launch the repository's MCP server. Restart or reload the client as needed. Other supported targets include Claude Code, VS Code, Kiro, Opencode, Antigravity, Codex CLI, and Claude Desktop; list the current options with aletheore mcp-install --help.",
+};
+export const languageSupport = {
+  title: "Languages",
+  body: "Dependency graphs support Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Kotlin, Ruby, PHP, C, C++, C#, and Swift, with language-specific resolution limits. Secrets and Git analysis can still apply to other source files. Dependency checks depend on supported manifests, resolved versions, and registry coverage.",
+};
+
 export const mcpToolNote = `${mcpTools.defaults.length} tools are registered by default in aletheore ${mcpTools.version}. aletheore_answer is added when the server is started with --agent, and aletheore_managed_audit only with explicit consent to transmit evidence externally (ALETHEORE_MCP_ALLOW=...,external).`;
 
 export const contract = {

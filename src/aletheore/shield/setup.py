@@ -87,10 +87,7 @@ _SETUP_DIRNAME = "setup"
 _BREAKS = re.compile("[\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
 # Bidi and invisible format characters that can make text read differently from what it is: shown as "?".
 _FORMAT = re.compile("[" + state.FORMAT_CHARACTERS + "]")
-# Remaining C0 controls (tab kept), DEL and C1 controls: shown as \xNN.
-# An explicit character list rather than a range written in the pattern, so no character is in it by accident.
-_CONTROL_CHARACTERS = "".join(map(chr, [*range(0x00, 0x09), *range(0x0A, 0x20), *range(0x7F, 0xA0)]))
-_CONTROL = re.compile("[" + re.escape(_CONTROL_CHARACTERS) + "]")
+# Remaining C0 controls (tab kept), DEL and C1 controls are escaped by numeric code below.
 
 
 @dataclass(frozen=True)
@@ -246,7 +243,11 @@ def _clean(text: str) -> str:
     """Text safe to show in a terminal: format characters and stray line breaks become "?", other controls become
     \\xNN escapes. "\\n" is kept as the only line break."""
     lines = [_BREAKS.sub("?", _FORMAT.sub("?", line)) for line in text.split("\n")]
-    return "\n".join(_CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", line) for line in lines)
+    return "\n".join(
+        "".join(f"\\x{ord(char):02x}" if (ord(char) < 32 and char != "\t") or 127 <= ord(char) <= 159 else char
+                for char in line)
+        for line in lines
+    )
 
 
 def _clean_line(text: str) -> str:
@@ -1155,7 +1156,7 @@ def _remove(where: _Where, *, purge: bool, rollback: bool = False) -> Removal:
     setup_folder = _setup_dir(where)
     config_path = shield / "config.json"
     removable = [(setup_folder / BACKUP_NAME, where.git_dir), (setup_folder / RECORD_NAME, where.git_dir)]
-    if not rollback or _record_name(where, config_path) in record.created:
+    if _record_name(where, config_path) in record.created:
         removable.insert(0, (config_path, where.top))
     for path, root in removable:
         if path.is_file() and _contained(path, root):

@@ -37,10 +37,12 @@ groups those checkpoints); its hook state is kept under the token `nosession`.
 
 Hook state is a small JSON dict per session in `<git dir>/aletheore-shield/hook-<token>.json`, outside the
 working tree, so it works in repositories that were never scanned and never creates `.aletheore/`. A corrupt
-file reads as empty; writes take the file's lock (`<file>.lock`, an exclusive create), re-read the file, merge only the
-keys the writer owns and replace it atomically, so concurrent hooks never lose each other's keys. The hourly prune is
-claimed in one locked read-and-write, so concurrent hooks prune once. A session's first write removes other sessions'
-state files a week old (sessions that never reached session end).
+file reads as empty. Every read-modify-write takes one bounded OS lock for the folder (`.hook-state.lock`, see
+`locking.file_lock`), re-reads the file, merges only the keys the writer owns and replaces it atomically, so
+concurrent hooks never lose each other's keys; a lock still busy after its wait means the write is skipped and
+pre-edit says the turn-end checks may be skipped. The hourly prune is claimed in one locked read-and-write, so
+concurrent hooks prune once; it also removes other sessions' state files a week old (sessions that never reached
+session end).
 """
 
 from __future__ import annotations
@@ -50,8 +52,11 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple, NoReturn
+
+from aletheore.shield.locking import file_lock
 
 PRE_EDIT_STOP_S = 2.0
 POST_EDIT_STOP_S = 2.0
@@ -65,7 +70,7 @@ SESSION_END_BUDGET_S = 6.0
 PRE_COMMIT_BUDGET_S = 6.0
 
 PRUNE_INTERVAL_S = 3600.0
-STATE_MAX_AGE_S = 7 * 24 * 3600.0  # hook state files of sessions that never ended are removed after this
+HOOK_STATE_MAX_AGE_S = 7 * 24 * 3600.0
 GUARD_MAX_LINES = 12
 MAX_PAYLOAD_CHARS = 64 * 1024 * 1024
 HEADER = "Aletheore Shield guard (working tree vs HEAD):"
@@ -273,77 +278,79 @@ def _load_state(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _state_lock(path: Path) -> Path:
-    return path.with_name(f"{path.name}.lock")
+def _state_lock(path: Path):
+    """The one bounded OS lock (see locking.file_lock) every read-modify-write of the hook state folder takes."""
+    return file_lock(path.parent / ".hook-state.lock")
 
 
-def _merge_into(path: Path, updates: dict) -> None:
-    """Merge `updates` into the newest copy of the file and replace it atomically. The caller holds the lock (or
-    could not get it). Never raises OSError."""
-    from aletheore.shield.fsutil import atomic_write_text, debug_note
+def _merge_into(path: Path, updates: dict) -> bool:
+    """Merge `updates` into the newest copy of the file and replace it atomically; the caller holds the state lock.
+    False (with a debug note) when it could not be written."""
+    from aletheore.shield.fsutil import atomic_write_text
 
     try:
-        path.parent.mkdir(exist_ok=True)  # inside the git dir, which exists; never creates anything else
         data = _load_state(path)
         data.update(updates)
         # Private (0600) like the rest of the git dir's state; its own leftovers go with the week-old prune.
         atomic_write_text(path, json.dumps(data, sort_keys=True), mode=0o600, cleanup=False)
-    except OSError as error:
-        debug_note(f"could not write the hook state {path}", error)
+        return True
+    except OSError:
+        _debug(None, "Shield hook state could not be saved")
+        return False
 
 
-def _state_dir_ready(path: Path) -> bool:
-    from aletheore.shield.fsutil import debug_note
-
+def _update_state(path: Path, updates: dict) -> bool:
+    """Merge `updates` into the state file under the state lock, so two hooks writing different keys at once both
+    land. False, with a debug note, when the lock stayed busy for its bounded wait or the write failed."""
     try:
         path.parent.mkdir(exist_ok=True)  # inside the git dir, which exists; never creates anything else
-    except OSError as error:
-        debug_note(f"could not create {path.parent}", error)
+        with _state_lock(path) as acquired:
+            if not acquired:
+                _debug(None, "Shield hook state was not saved: state lock is busy")
+                return False
+            return _merge_into(path, updates)
+    except OSError:
+        _debug(None, "Shield hook state could not be saved")
         return False
-    return True
 
 
-def _update_state(path: Path, updates: dict) -> None:
-    """Merge `updates` into the state file under its lock, so two hooks writing different keys at once both land.
-    A lock that cannot be had in time (a stuck holder) does not stop the write: losing a concurrent key is better
-    than losing this one. Never raises OSError."""
-    from aletheore.shield.fsutil import debug_note, exclusive
-
-    if not _state_dir_ready(path):
-        return
-    if not path.exists():
-        _prune_old_state(path.parent)
-    with exclusive(_state_lock(path)) as held:
-        if not held:
-            debug_note(f"writing {path.name} without its lock")
-        _merge_into(path, updates)
-
-
-def _prune_old_state(folder: Path) -> None:
-    """Remove hook state (and its lock and temporary files) a week old: sessions that never reached session end
-    leave theirs behind. Runs only when a session writes its first state file, so it costs one folder listing per
-    session."""
-    from aletheore.shield.fsutil import remove_older_than
-
-    remove_older_than(folder, ("hook-", ".hook-"), (".json", ".json.lock", ".tmp"), STATE_MAX_AGE_S)
+def _claim_prune(path: Path) -> float | None:
+    """The time of this hook's hourly prune, or None when it is not due: of concurrent hooks exactly one claims it,
+    recording the time in the same locked step that read the last one. A busy lock means another hook is in there."""
+    try:
+        with _state_lock(path) as acquired:
+            if not acquired:
+                return None
+            now = _now()  # read after the wait: a time from before it could look older than the claim it waited on
+            last = _load_state(path).get("last_prune")
+            if isinstance(last, (int, float)) and 0 <= now - last < PRUNE_INTERVAL_S:
+                return None
+            return now if _merge_into(path, {"last_prune": now}) else None
+    except OSError:
+        _debug(None, "Shield prune could not be claimed")
+        return None
 
 
-def _claim_prune(path: Path) -> bool:
-    """Whether this hook should run the hourly prune: True for exactly one caller per interval, which records the
-    time in the same locked step that read it. A lock that cannot be had means another hook is in there: skip."""
-    from aletheore.shield.fsutil import exclusive
-
-    if not _state_dir_ready(path):
-        return False
-    with exclusive(_state_lock(path)) as held:
-        if not held:
-            return False
-        now = _now()  # read after the wait: a time from before it could look older than the claim it waited on
-        last = _load_state(path).get("last_prune")
-        if isinstance(last, (int, float)) and 0 <= now - last < PRUNE_INTERVAL_S:
-            return False
-        _merge_into(path, {"last_prune": now})
-        return True
+def _prune_hook_state(path: Path, now: float) -> None:
+    """Remove other sessions' state files (and temporary files killed writers left) after seven inactive days,
+    serialized with state writers. Sessions that never reached session end leave theirs behind."""
+    try:
+        with _state_lock(path) as acquired:
+            if not acquired:
+                _debug(None, "Shield stale hook state was not pruned: state lock is busy")
+                return
+            for old in path.parent.iterdir():
+                name = old.name
+                if not (name.startswith("hook-") and name.endswith(".json")) and not (
+                        name.startswith(".hook-") and name.endswith(".tmp")):
+                    continue
+                try:
+                    if old != path and not old.is_symlink() and now - old.stat().st_mtime > HOOK_STATE_MAX_AGE_S:
+                        old.unlink()
+                except OSError:
+                    continue
+    except OSError:
+        _debug(None, "Shield stale hook state could not be pruned")
 
 
 def _sha(text: str) -> str:
@@ -358,7 +365,8 @@ def _sha(text: str) -> str:
 
 
 class Said(NamedTuple):
-    """What to record once the output is known to have been delivered: `digest` under `key` in the state `path`."""
+    """A dedupe record: `digest` under `key` in the state `path`, written once the output is known to be delivered.
+    The caller's thread checks it again and writes it under the state lock (see `_deliver`)."""
 
     path: Path
     key: str
@@ -368,7 +376,8 @@ class Said(NamedTuple):
 class Output(NamedTuple):
     stdout: str = ""
     stderr: str = ""
-    said: Said | None = None  # recorded by the caller's thread only after stdout was written
+    # State to record once the output is known to be emitted: a Said (the dedupe hashes) or any other callable.
+    commit: "Said | Callable[[], None] | None" = None
 
 
 def _pre_edit(payload: dict | None) -> Output | None:
@@ -382,21 +391,24 @@ def _pre_edit(payload: dict | None) -> Output | None:
     # Written first, before any git work and before the repo-state gate: the session did edit this repository,
     # so turn-end (the only in-session guard with registry lookups) must run even in a detached-HEAD, merge or
     # rebase state where checkpoints are not taken, or when the checkpoint is cut off by the hard stop.
-    _update_state(path, {"edited": True})
+    state_saved = _update_state(path, {"edited": True})
+    warning = None if state_saved else Output(stderr=PRE_COMMIT_PREFIX +
+        "session state could not be saved; turn-end checks may be skipped.\n")
     from aletheore.shield import checkpoint, guard_evidence
     from aletheore.shield.gitutil import repo_state
 
     checked = repo_state(repo.top)
     if not checked.ok:
-        return None  # only the checkpoint, prune and base-evidence work needs a supported repository state
-    due = _claim_prune(path)  # claimed before pruning, so a parallel call skips it
+        return warning  # only checkpoint/prune/base-evidence work requires a supported repository state
+    pruned_at = _claim_prune(path)  # claimed before pruning, so a parallel call skips it
     if session_id:
         guard_evidence.save_base_evidence(repo.top, session_id)  # idempotent: keeps the first copy
     checkpoint.take_checkpoint(repo.top, session_id, checked=checked)
-    if due:
+    if pruned_at is not None:
         checkpoint.prune_checkpoints(repo.top)
         guard_evidence.prune_base_evidence(repo.top)  # copies left by sessions that never reached session end
-    return None
+        _prune_hook_state(path, pruned_at)
+    return warning
 
 
 def _guard_report(repo: _Repo, session_id: str, *, budget_s: float, lookups: bool | None):
@@ -430,7 +442,7 @@ def _post_edit(payload: dict | None) -> Output | None:
     # in them alone is not worth interrupting the agent for.
     said = _dedupe(_state_path(repo, session_id), "last_edit_sha", _sha(findings) if findings else "")
     if not findings or said is None:
-        return Output(said=said)
+        return Output(commit=said)
     reasons = tuple(r for r in report.not_checked if not r.startswith(_POST_EDIT_DROPPED_REASON))
     text = render_report(GuardReport(report.findings, reasons), max_lines=GUARD_MAX_LINES)
     return Output(json.dumps(agent_output("post-edit", text)), "", said)
@@ -452,7 +464,7 @@ def _turn_end(payload: dict | None) -> Output | None:
     text = render_report(report, max_lines=GUARD_MAX_LINES)
     said = _dedupe(path, "last_turn_sha", _sha(text) if text else "")
     if not text or said is None:
-        return Output(said=said)
+        return Output(commit=said)
     return Output(json.dumps(agent_output("turn-end", text)), "", said)
 
 
@@ -469,13 +481,12 @@ def _session_end(payload: dict | None) -> Output | None:
     try:
         # lookups=False: session end never waits on the network; registry lookups belong to turn end, commit and
         # `aletheore shield check`.
-        try:
-            built = receipt.build_receipt(repo.top, session_id, budget_s=SESSION_END_BUDGET_S, lookups=False)
-        except receipt.ReceiptError as error:
-            built = None
-            # SessionEnd has no stdout channel; stderr reaches the user's hook log (and stays out of the protocol).
-            failure = f"{PRE_COMMIT_PREFIX}receipt could not be built: {error}\n"
+        built = receipt.build_receipt(repo.top, session_id, budget_s=SESSION_END_BUDGET_S, lookups=False)
         if built is not None:
+            failed = [n for n in built.report.not_checked if n.startswith(receipt.FAILED_NOTE)]
+            if failed and not built.files:
+                # SessionEnd has no stdout channel; stderr reaches the user's hook log (and stays out of the protocol).
+                failure = f"{PRE_COMMIT_PREFIX}{failed[0]}\n"
             receipt.write_receipt(repo.top, built)
     finally:
         # The session's copy of the evidence is only needed until its receipt is written, even a failed one.
@@ -534,34 +545,39 @@ def _work(event: str, args: list[str], stdin) -> Output | None:
 
 def _write(stream, text: str) -> bool:
     """Write and flush; False when the stream refused (a closed or broken pipe must not change the outcome)."""
-    from aletheore.shield.fsutil import debug_note
-
     try:
         stream.write(text)
         stream.flush()
-    except Exception as error:  # noqa: BLE001
-        debug_note("could not write the hook output", error)
+    except Exception:  # noqa: BLE001
+        _debug(None, "Shield hook output could not be written")
         return False
     return True
 
 
-def _deliver(output: Output, stdout) -> None:
-    """Write `output.stdout` and only then record it as said. Both happen under the state lock, after checking the
-    record again, so of two hooks with the same text at once only one says it, and text that never reached the agent
-    (a broken pipe) is said again next time."""
-    said = output.said
-    if said is None:
-        if output.stdout:
-            _write(stdout, output.stdout)
+def _deliver(output: Output, stdout, stderr) -> None:
+    """Write the output, and record its state only when every write succeeded, so text a broken pipe swallowed is
+    said again next time. A dedupe record (Said) is checked again and written under the state lock: of two hooks
+    with the same text at once only one says it."""
+    commit = output.commit
+    if not isinstance(commit, Said):
+        delivered = _write(stdout, output.stdout) if output.stdout else True
+        if output.stderr:
+            delivered = _write(stderr, output.stderr) and delivered
+        if delivered and commit is not None:
+            commit()
         return
-    from aletheore.shield.fsutil import exclusive
-
-    _state_dir_ready(said.path)
-    with exclusive(_state_lock(said.path)) as held:
-        if held and _load_state(said.path).get(said.key) == said.digest:
-            return  # a concurrent hook said it already
-        if not output.stdout or _write(stdout, output.stdout):
-            _merge_into(said.path, {said.key: said.digest})
+    try:
+        commit.path.parent.mkdir(exist_ok=True)
+        with _state_lock(commit.path) as acquired:
+            if acquired and _load_state(commit.path).get(commit.key) == commit.digest:
+                return  # a concurrent hook said it already
+            delivered = _write(stdout, output.stdout) if output.stdout else True
+            if output.stderr:
+                delivered = _write(stderr, output.stderr) and delivered
+            if delivered and acquired:
+                _merge_into(commit.path, {commit.key: commit.digest})
+    except OSError:
+        _debug(None, "Shield hook output state could not be recorded")
 
 
 def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) -> int:
@@ -594,9 +610,7 @@ def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) ->
         output = result[0]
         if output is None:
             return 0
-        _deliver(output, stdout or sys.stdout)
-        if output.stderr:
-            _write(stderr or sys.stderr, output.stderr)
+        _deliver(output, stdout or sys.stdout, stderr or sys.stderr)
     except BaseException:
         _debug(stderr)
     return 0

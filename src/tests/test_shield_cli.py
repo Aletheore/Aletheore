@@ -120,6 +120,8 @@ def test_first_run_states_the_network_disclosure(repo, monkeypatch):
     named = re.search(r"package NAME to (\S+) / (\S+)\s", " ".join(r.output.split()))
     assert named is not None, r.output
     assert named.groups() == ("pypi.org", "registry.npmjs.org")
+    hosts = set(re.findall(r"(?<![\w.-])(?:pypi\.org|registry\.npmjs\.org)(?![\w.-])", r.output))
+    assert hosts == {"pypi.org", "registry.npmjs.org"}
     assert "ALETHEORE_SHIELD_OFFLINE=1" in r.output
     assert "registry_lookups" in r.output
 

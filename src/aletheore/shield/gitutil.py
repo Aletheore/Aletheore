@@ -1,17 +1,17 @@
 """Git helpers for Shield: one subprocess wrapper and a plain-words repository state check."""
 
 import os
-import subprocess  # nosec B404 - runs git only, with fixed argument lists and never a shell
+import subprocess  # nosec B404 - runs git only, with an argv list and never a shell
 from dataclasses import dataclass
 from pathlib import Path
 
 from aletheore.git_exec import git_executable
 
-# Exit codes of the results run_git makes up itself (git never ran to the end). They only keep `returncode != 0`
-# checks right; whether a call timed out or could not start is said by GitResult's flags, since a real git (or a
-# git alias, or a wrapper script) can exit with these codes too.
-_TIMED_OUT = 124
-_SPAWN_FAILED = 127
+# Return codes of the results run_git makes up itself (git never ran to the end). They lie outside every process exit
+# and signal code on any platform, so a real git (or a git alias or wrapper script) exiting 124 or 127 is never
+# mistaken for a timeout or a git that could not start.
+_TIMED_OUT = -(1 << 33)
+_SPAWN_FAILED = _TIMED_OUT - 1
 _INHERITED_GIT_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 
 
@@ -31,13 +31,20 @@ class RepoState:
 
 
 class GitResult(subprocess.CompletedProcess):
-    """A finished git call. `timed_out`: stopped at its timeout; `spawn_failed`: git could not be started (not
-    found, not executable, no such folder). Either way the output is empty and returncode is non-zero."""
+    """A finished git call. `timed_out`: stopped at its timeout; `spawn_failed`: git could not be resolved or
+    started (not found, not executable, no such folder). Either way the output is empty and returncode is the
+    matching sentinel."""
 
-    def __init__(self, args, returncode, stdout=b"", stderr=b"", *, timed_out=False, spawn_failed=False):
+    def __init__(self, args, returncode, stdout=b"", stderr=b""):
         super().__init__(args, returncode, stdout, stderr)
-        self.timed_out = timed_out
-        self.spawn_failed = spawn_failed
+
+    @property
+    def timed_out(self) -> bool:
+        return self.returncode == _TIMED_OUT
+
+    @property
+    def spawn_failed(self) -> bool:
+        return self.returncode == _SPAWN_FAILED
 
 
 def run_git(
@@ -46,23 +53,22 @@ def run_git(
     env: dict[str, str] | None = None,
     input: bytes | None = None,
     timeout: float = 10.0,
-) -> GitResult:
-    """Run git inside repo. Never raises: a non-zero exit is in returncode, a timeout or a git that cannot start
-    is said by the result's `timed_out` / `spawn_failed` (with empty output)."""
+) -> "GitResult":
+    """Run git inside repo. Never raises: a non-zero exit is in returncode; a timeout or a git that cannot be
+    resolved or started gives the _TIMED_OUT / _SPAWN_FAILED sentinel (see `timed_out` / `spawn_failed`) and empty
+    output."""
+    command = ["git", *args]  # diagnostic argv if resolution fails; this fallback is never executed
     try:
-        command = [git_executable(), *args]
-    except FileNotFoundError:  # not on PATH
-        return GitResult(["git", *args], _SPAWN_FAILED, spawn_failed=True)
-    full_env = {k: v for k, v in os.environ.items() if k not in _INHERITED_GIT_VARS}
-    full_env.update(env or {})
-    try:
-        done = subprocess.run(  # noqa: S603  # nosec B603 - absolute git from git_executable, argv list, no shell
+        command[0] = git_executable()
+        full_env = {k: v for k, v in os.environ.items() if k not in _INHERITED_GIT_VARS}
+        full_env.update(env or {})
+        done = subprocess.run(  # noqa: S603  # nosec B603 - see git_executable; argv list, no shell
             command, cwd=str(repo), env=full_env, input=input, capture_output=True, timeout=timeout, check=False
         )
     except subprocess.TimeoutExpired:
-        return GitResult(command, _TIMED_OUT, timed_out=True)
-    except OSError:
-        return GitResult(command, _SPAWN_FAILED, spawn_failed=True)
+        return GitResult(command, _TIMED_OUT)
+    except OSError:  # FileNotFoundError from resolution, or the spawn itself failed
+        return GitResult(command, _SPAWN_FAILED)
     return GitResult(done.args, done.returncode, done.stdout, done.stderr)
 
 
@@ -157,11 +163,11 @@ def run_git_pair(
     helper.start()
     one = run(repo, *first, env=env, timeout=timeout)
     helper.join(timeout + 5.0)
-    two = box[0] if box else GitResult(["git", *second], _TIMED_OUT, timed_out=True)
+    two = box[0] if box else GitResult(["git", *second], _TIMED_OUT)
     return one, two
 
 
-GIT_NOT_FOUND = "git was not found or could not be started"
+GIT_NOT_FOUND = "git could not be started; check its installation and PATH"
 
 
 def _unsupported(reason: str, git_dir: Path | None = None) -> RepoState:
@@ -174,9 +180,9 @@ def repo_state(repo: Path) -> RepoState:
         repo, "rev-parse", "--absolute-git-dir", "--is-bare-repository", "--show-toplevel", "--git-common-dir",
         "--git-path", "index",
     )
-    if getattr(probe, "spawn_failed", False):
+    if probe.returncode == _SPAWN_FAILED:
         return _unsupported(GIT_NOT_FOUND)
-    if getattr(probe, "timed_out", False):
+    if probe.returncode == _TIMED_OUT:
         return _unsupported("git did not answer in time")
     lines = probe.stdout.decode("utf-8", "surrogateescape").splitlines()
     # rev-parse prints each answer in turn and stops at the first it cannot give: a bare repository has no top.

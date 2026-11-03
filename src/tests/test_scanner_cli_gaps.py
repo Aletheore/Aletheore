@@ -638,7 +638,8 @@ def test_mcp_argument_names_are_unchanged(tmp_path):
     for tool in _all_tools(tmp_path, "full"):
         schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema")
         names[tool.name] = set(schema.get("properties", {}))
-    assert names["aletheore_imports"] == {"target", "section", "offset", "limit", "filter"}
+    assert names["aletheore_imports"] == {"target"}
+    assert names["aletheore_page"] == {"tool", "target", "section", "offset", "limit", "filter"}
     assert names["aletheore_search"] == {"pattern", "regex", "path_glob"}
     assert names["aletheore_symbol_source"] == {"module", "symbol", "max_lines"}
     assert names["aletheore_branch"] >= {"target"}

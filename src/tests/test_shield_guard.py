@@ -334,7 +334,7 @@ def test_evidence_checks_are_skipped_when_the_dependency_stage_used_the_budget(t
     monkeypatch.setattr(guard, "added_dependencies", slow)
     monkeypatch.setattr(guard_evidence, "_files_newer_than", lambda *a: loaded.append(a) or [])
     report = run_guard(repo, lookups=False, budget_s=2.0)
-    assert "time budget reached; dependents, signature and new-risk checks skipped" in report.not_checked
+    assert guard_evidence.EVIDENCE_NOT_RUN in report.not_checked
     assert loaded == []  # the evidence was never read
 
 

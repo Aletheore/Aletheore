@@ -28,10 +28,8 @@ _FUTURE_TOLERANCE = timedelta(minutes=5)
 # Pruning deletes, so it is far more patient: a receipt stamped up to a day ahead (another machine's clock, or this one
 # before an NTP step back) is a real receipt, ranked and aged like any other; only one stamped later is removed.
 _PRUNE_FUTURE_TOLERANCE = timedelta(days=1)
-
-
-class ReceiptError(Exception):
-    """The receipt could not be built. Distinct from None ("nothing worth a receipt"); str() is the reason."""
+# The only "not checked" line of a receipt that could not be built.
+FAILED_NOTE = "receipt could not be computed"
 
 
 @dataclass(frozen=True)
@@ -122,15 +120,17 @@ def build_receipt(
     budget_s: float = 6.0,
     opener: Callable | None = None,
 ) -> Receipt | None:
-    """The session's receipt, or None when the session did nothing worth a receipt.
+    """The session's receipt, or None when the session did nothing worth a receipt. Never raises.
 
     The files touched and the guard report degrade on their own (a "not checked" line says what failed). Anything
-    else that fails raises ReceiptError with the reason, so a caller can say the receipt could not be built rather
-    than stay silent as if there were nothing to report."""
+    else that fails gives a receipt with no files whose only "not checked" line says the receipt could not be
+    computed, so a failed session never looks like one with nothing to report."""
     repo = Path(repo)
+    known = False
+    created = datetime.now(timezone.utc)
     try:
-        known = state.session_state_path(repo, session_id) is not None
         created = _utc(now)
+        known = state.session_state_path(repo, session_id) is not None
         checkpoints, previous = _session_checkpoints(repo, session_id, created)
         if not checkpoints:
             return None
@@ -156,9 +156,10 @@ def build_receipt(
             report = GuardReport(report.findings, tuple(extra) + tuple(report.not_checked))
         session = session_id if known else "unknown"
         return Receipt(session, created, files, report, first.ref, known, previous)
-    except Exception as exc:  # noqa: BLE001 - every cause becomes the one error type callers handle
-        detail = clean_text(str(exc), _NAME_CAP)
-        raise ReceiptError(f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__) from exc
+    except Exception as exc:  # noqa: BLE001
+        # Preserve an explicit failure receipt instead of making a failed session look like a no-op.
+        return Receipt(session_id if known else "unknown", created, (),
+                       GuardReport((), (f"{FAILED_NOTE} ({type(exc).__name__})",)), None, known)
 
 
 def _code(text: str) -> str:
@@ -251,7 +252,11 @@ def _prune(directory: Path, repo: Path, now: datetime, keep_name: str) -> None:
             debug_note(f"could not remove the old receipt {path}", error)
 
 
-def write_receipt(repo: Path, receipt: Receipt) -> Path:
+def _wall_clock() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def write_receipt(repo: Path, receipt: Receipt, *, now: datetime | None = None) -> Path:
     """Write the receipt atomically and prune old ones. Raises OSError only when the write itself fails."""
     repo = Path(repo)
     directory = _receipts_dir(repo)
@@ -276,7 +281,7 @@ def write_receipt(repo: Path, receipt: Receipt) -> Path:
             debug_note(f"could not remove {temp_name}", error)
         raise
     try:
-        _prune(directory, repo, created, target.name)
-    except Exception as error:  # noqa: BLE001 - failing to tidy old receipts must not fail the write
+        _prune(directory, repo, _utc(now) if now is not None else _wall_clock(), target.name)
+    except Exception as error:  # noqa: BLE001 - retention cleanup must not fail a successful receipt write
         debug_note("could not prune old receipts", error)
     return target

@@ -337,6 +337,7 @@ body {
 .companion-chat__welcome p { margin: 0 0 18px; font-size: 13px; color: var(--color-muted); }
 .companion-chat__starters { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .companion-chat__starters button { display: flex; justify-content: space-between; gap: 8px; min-height: 49px; padding: 9px; border: 1px solid var(--color-line-strong); background: var(--color-raised); text-align: left; font: 10px/1.5 var(--font-display); cursor: pointer; }
+.companion-chat__starters button:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .companion-chat__starters button:hover:not(:disabled) { border-color: var(--color-stamp); color: var(--color-stamp); }
 .companion-chat button:focus-visible, .companion-chat a:focus-visible { outline: 2px solid var(--color-stamp); outline-offset: 3px; }
 .companion-chat button:disabled { opacity: .5; cursor: default; }

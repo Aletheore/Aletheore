@@ -927,21 +927,24 @@ def test_session_end_reports_a_receipt_that_could_not_be_built_on_stderr_and_exi
     repo = _init(tmp_path / "r", aletheore=True)
 
     def broken(*a, **k):
-        raise receipt.ReceiptError("OSError: refs unreadable")
+        raise OSError("refs unreadable")
 
-    monkeypatch.setattr(receipt, "build_receipt", broken)
+    monkeypatch.setattr(receipt, "list_checkpoints", broken)
     code, out, err = _run("session-end", _payload(repo, event="SessionEnd"))
     assert code == 0 and out == ""
-    assert err == "aletheore shield: receipt could not be built: OSError: refs unreadable\n"
+    assert err == "aletheore shield: receipt could not be computed (OSError)\n"
+    written = list((repo / ".aletheore" / "shield" / "receipts").glob("*.md"))
+    assert len(written) == 1 and "receipt could not be computed" in written[0].read_text(encoding="utf-8")
 
 
 def _slow_state_reads(monkeypatch, seconds=0.03):
     """Widen the race window, and let a waiter wait as long as it takes, so a loaded machine cannot turn a lock wait
-    that runs out (which writes without the lock, by design) into a test failure."""
-    from aletheore.shield import fsutil
+    that runs out (which skips the write, by design) into a test failure."""
+    import functools
 
-    monkeypatch.setattr(fsutil, "LOCK_WAIT_S", 60.0)
-    monkeypatch.setattr(fsutil, "LOCK_STALE_S", 600.0)
+    from aletheore.shield import locking
+
+    monkeypatch.setattr(hooks, "file_lock", functools.partial(locking.file_lock, timeout=60.0))
     real = hooks._load_state
 
     def slow(path):
@@ -969,7 +972,8 @@ def test_concurrent_state_updates_never_lose_a_key(tmp_path, monkeypatch):
     for t in threads:
         t.join(30)
     assert _state(repo) == {f"k{i}": i for i in range(4)}
-    assert sorted(p.name for p in path.parent.iterdir()) == [path.name]  # no temporary or lock file left
+    # No temporary file left; the folder's OS lock file stays (empty, released).
+    assert sorted(p.name for p in path.parent.iterdir()) == [".hook-state.lock", path.name]
 
 
 def test_concurrent_pre_edits_prune_once(tmp_path, monkeypatch):
@@ -1030,7 +1034,7 @@ def test_a_new_session_state_file_prunes_week_old_ones_left_by_sessions_that_nev
     folder = _state_file(repo).parent
     folder.mkdir()
     week_ago = time.time() - 8 * 24 * 3600
-    old = [folder / "hook-gone.json", folder / "hook-gone.json.lock", folder / ".hook-gone.json.abc.tmp"]
+    old = [folder / "hook-gone.json", folder / ".hook-gone.json.abc.tmp"]
     kept = [folder / "hook-recent.json", folder / "pins-cache.json", folder / "notes.json"]
     for path in old + kept:
         path.write_text("{}", encoding="utf-8")
