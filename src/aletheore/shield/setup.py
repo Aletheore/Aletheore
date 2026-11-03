@@ -328,8 +328,12 @@ _PYTHON_NAME = re.compile(r"(?:python|pypy)(?:\d+(?:\.\d+)*t?)?w?(?:\.exe)?", re
 
 
 def _is_python(path: str) -> bool:
-    name = re.split(r"[\\/]", path.strip().strip("'\""))[-1]
-    return bool(_PYTHON_NAME.fullmatch(name))
+    """A Python interpreter by its file name, or exactly the interpreter Shield writes into its hooks (sys.executable
+    can have any name: python3.14-intel64, python3.12-dbg, ...), so status, a re-run of setup and `off` always
+    recognise Shield's own entries."""
+    path = path.strip().strip("'\"")
+    name = re.split(r"[\\/]", path)[-1]
+    return bool(_PYTHON_NAME.fullmatch(name)) or path in {sys.executable, _interpreter()}
 
 
 def _our_event(hook: object) -> str | None:

@@ -141,6 +141,27 @@ def test_our_event_recognises_the_exec_form_and_every_legacy_string_form(hook, e
 
 
 @pytest.mark.parametrize(
+    "executable",
+    ["/usr/local/bin/python3.14-intel64", "/usr/bin/python3.12-dbg", "/opt/venv/bin/python3.13-arm64",
+     "C:\\Tools\\python3.12-debug.exe"],
+)
+def test_shields_own_hook_is_recognised_whatever_the_interpreter_is_called(monkeypatch, executable):
+    # setup writes sys.executable as the command; status, a re-run of setup and `off` must recognise it again.
+    monkeypatch.setattr(setup, "_interpreter", lambda: executable)
+    monkeypatch.setattr(setup.sys, "executable", executable)
+    for _name, _matcher, event in setup.AGENT_EVENTS:
+        hook = setup._hook(event)
+        assert setup._our_event(hook) == event and setup._is_ours(hook)
+
+
+def test_an_unusual_interpreter_name_counts_only_when_it_is_this_python(monkeypatch):
+    monkeypatch.setattr(setup.sys, "executable", "/usr/bin/python3.12-dbg")
+    other = {"type": "command", "command": "/usr/bin/my-python-wrapper",
+             "args": ["-X", "utf8", "-m", "aletheore.shield.hooks", "turn-end"]}
+    assert setup._our_event(other) is None
+
+
+@pytest.mark.parametrize(
     "hook",
     [
         {"type": "command", "command": "my-wrapper --note aletheore.shield.hooks turn-end"},
