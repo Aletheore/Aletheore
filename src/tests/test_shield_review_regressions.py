@@ -440,3 +440,34 @@ def test_noncontention_lock_failure_is_not_retried(tmp_path, monkeypatch):
         with locking.file_lock(tmp_path / 'state.lock'):
             pass
     pause.assert_not_called()
+
+
+def _graph(edges):
+    return {'repository': {'modules': [{'path': p, 'imports': values} for p, values in edges.items()]}}
+
+
+def test_moving_a_whole_cycle_to_another_folder_is_not_a_new_cycle():
+    # git mv pkg new: every member is a new path, none of the old ones is left.
+    old = _graph({'pkg/a.py': ['pkg/b.py'], 'pkg/b.py': ['pkg/c.py'], 'pkg/c.py': ['pkg/a.py']})
+    new = _graph({'new/a.py': ['new/b.py'], 'new/b.py': ['new/c.py'], 'new/c.py': ['new/a.py']})
+    assert new_cycles(old, new) == []
+
+
+def test_a_brand_new_cycle_after_an_old_one_was_deleted_is_still_new():
+    old = _graph({'a.py': ['b.py'], 'b.py': ['a.py']})
+    new = _graph({'x.py': ['y.py'], 'y.py': ['x.py']})  # different files, not a move
+    assert [c['members'] for c in new_cycles(old, new)] == [['x.py', 'y.py']]
+
+
+def test_a_deleted_member_does_not_hide_a_new_loop_through_a_new_file():
+    # Old a -> b -> c -> a. c is deleted, b stays in the repository but leaves the loop, and a new file x closes
+    # a <-> x: a new cycle, not the old one renamed.
+    old = _graph({'a.py': ['b.py'], 'b.py': ['c.py'], 'c.py': ['a.py'], 'd.py': []})
+    new = _graph({'a.py': ['x.py'], 'x.py': ['a.py'], 'b.py': [], 'd.py': []})
+    assert [c['members'] for c in new_cycles(old, new)] == [['a.py', 'x.py']]
+
+
+def test_renaming_one_member_of_an_old_cycle_is_not_a_new_cycle():
+    old = _graph({'a.py': ['b.py'], 'b.py': ['c.py'], 'c.py': ['a.py']})
+    new = _graph({'a.py': ['b.py'], 'b.py': ['util.py'], 'util.py': ['a.py']})  # c.py renamed to util.py
+    assert new_cycles(old, new) == []
