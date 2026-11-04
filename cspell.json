@@ -11,9 +11,7 @@
     "**/__pycache__/**",
     "docs/superpowers/**",
     "docs/audits/**",
-    "src/.aletheore/**",
-    "github-app/backups/**",
-    "STARTUP_AUDIT_REPORT.md"
+    "src/.aletheore/**"
   ],
   "files": [
     "README.md",

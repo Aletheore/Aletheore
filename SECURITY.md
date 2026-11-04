@@ -3,7 +3,7 @@
 **Purpose:** Define how security issues should be reported and handled.
 **Status:** Active baseline
 **Owner:** TODO
-**Related Documents:** [.github/ISSUE_TEMPLATE/security-report.md](.github/ISSUE_TEMPLATE/security-report.md), [docs/operations/DATA-HANDLING.md](docs/operations/DATA-HANDLING.md), [docs/operations/INCIDENT-RESPONSE.md](docs/operations/INCIDENT-RESPONSE.md)
+**Related Documents:** [.github/ISSUE_TEMPLATE/security-report.md](.github/ISSUE_TEMPLATE/security-report.md), [docs/operations/DATA-HANDLING.md](docs/operations/DATA-HANDLING.md)
 **Last Updated:** 2026-08-10
 
 ## Purpose
