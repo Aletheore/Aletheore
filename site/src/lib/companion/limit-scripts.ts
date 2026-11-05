@@ -1,3 +1,3 @@
 import scripts from "./limit-scripts.json";
-// Kept byte-identical to the backend snapshot by the parity test.
+// Hosted CI checks parity against its pinned public repository snapshot.
 export const { RESERVE_SCRIPT, SETTLE_SCRIPT, DISABLE_SCRIPT } = scripts;

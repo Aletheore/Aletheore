@@ -1,3 +1,5 @@
+Historical recording: repository paths shown are from the recorded scan and may have moved.
+
 Aletheore — follow the evidence
 About 95 seconds; on-screen explanations over background music. No narration.
 Actual captured outputs are replayed with motion annotations. The earlier graph and MCP views are evidence diagrams. The GitHub PR section uses a user-provided graph screenshot and actual public review captures.

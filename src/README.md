@@ -14,7 +14,7 @@ anything it can't cite back to a specific field in it.
 
 This is the real, working CLI package — the same code that runs in CI (a real test suite,
 1,600+ tests across this package and the hosted service) and in production behind the hosted
-GitHub App (see `../github-app/`). Full project overview: [`../README.md`](../README.md).
+GitHub App, which is maintained separately. Full project overview: [`../README.md`](../README.md).
 
 ## Quickstart
 
@@ -131,6 +131,8 @@ A scanned repo can commit a `.aletheore.json` at its root to extend the architec
 it's read as part of `scan`/`audit`, the same deterministic way `requirements.txt` or a policy
 doc already is (repo-declared conventions are themselves a fact about the repo, so this
 doesn't break reproducibility: same repo content in, same evidence out).
+
+<!-- cspell:ignore AKIA MNOP -->
 
 ```json
 {

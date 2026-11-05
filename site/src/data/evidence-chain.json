@@ -1,5 +1,5 @@
 {
-  "source": "aletheore scan and queries run against the Aletheore repository itself",
+  "source": "aletheore scan and queries run against the Aletheore repository at historical commit 3c09867",
   "commit": "3c09867",
   "file": "github-app/app_server/admin.py",
   "steps": [

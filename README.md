@@ -326,17 +326,18 @@ and sample; they do not guarantee the same result on your code.
 | Directory | Contents |
 | --- | --- |
 | [`src/`](src/) | CLI implementation and command reference |
-| [`github-app/`](github-app/) | Hosted application, workers, and operations documentation |
 | [`site/`](site/) | Next.js marketing site |
 | [`docs/operations/`](docs/operations/) | Operational baselines and runbooks |
 | [`benchmarks/`](benchmarks/) | Repository benchmark material |
+
+The hosted application is maintained separately from this public repository.
 
 </details>
 
 ## Licensing
 
 
-Aletheore is open source under the [GNU Affero General Public License v3.0](LICENSE)
+The CLI and other code in this repository are open source under the [GNU Affero General Public License v3.0](LICENSE)
 (AGPL-3.0). You can use, study, modify, and redistribute it, including at a company and
 for internal tooling, as long as you follow the AGPL. The part that matters most:
 

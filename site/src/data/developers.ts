@@ -99,7 +99,7 @@ const kindLines: TermLine[] = [
 terminals.push({ id: "kinds", label: "query kinds", copy: "aletheore query", lines: kindLines });
 
 export const terminalNote =
-  "Real output from scanning the Aletheore repository itself. The path is shortened and the one-per-package licence progress lines are collapsed to one; nothing else is edited. The query kinds are the CLI's own listing for the released version.";
+  "Historical output from scanning the Aletheore repository before the hosted app moved. The path is shortened and the one-per-package licence progress lines are collapsed to one; nothing else is edited. The query kinds are the CLI's own listing for the released version.";
 
 export const queryHead = {
   eyebrow: "Query kinds",

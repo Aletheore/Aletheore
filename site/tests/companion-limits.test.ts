@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { acquirePermit, clientBucket, HOLD_MICRO_INR, LEDGER_KEY, LIMIT_PREFIX, LimitError, serviceEvalFromEnvironment, usageCost, type RedisEval } from "@/lib/companion/limits";
 import { RESERVE_SCRIPT, SETTLE_SCRIPT } from "@/lib/companion/limit-scripts";
@@ -10,10 +9,6 @@ afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 function req(ip = "192.0.2.1", extra: Record<string, string> = {}) { return new Request("https://www.aletheore.com/api/companion", { headers: { "x-vercel-forwarded-for": ip, ...extra } }); }
 function production() { vi.stubEnv("NODE_ENV", "production"); vi.stubEnv("VERCEL", "1"); vi.stubEnv("COMPANION_LIMIT_HMAC_SECRET", "test-only-stable-identity-secret-0123456789"); }
 
-it("keeps the website and backend script snapshots identical", () => {
-  const backend = JSON.parse(readFileSync(new URL("../../github-app/app_server/companion_limit_scripts.json", import.meta.url), "utf8"));
-  expect(backend.RESERVE_SCRIPT).toBe(RESERVE_SCRIPT); expect(backend.SETTLE_SCRIPT).toBe(SETTLE_SCRIPT);
-});
 it("ignores spoofable headers and cookies when selecting a Vercel bucket", () => {
   production();
   expect(clientBucket(req())).toBe(clientBucket(req("192.0.2.1", { "x-forwarded-for": "198.51.100.7", "x-real-ip": "203.0.113.2", cookie: "user=another", "x-user-id": randomUUID() })));

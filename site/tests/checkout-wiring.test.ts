@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { effectiveInterval, previewItems, subscribeUrl, TIERS } from "@/lib/pricing";
 import { subscribedPlan } from "@/lib/subscribed";
 
-// The backend (github-app/app_server/paddle_pricing.py PLAN_INTERVAL_TO_PRICE_ID and frontend.py /subscribe) accepts exactly these
+// The hosted backend accepts exactly these
 // (plan, interval) pairs and price ids. A pair outside this set gets a 400 from /subscribe.
 const BACKEND: Record<string, string> = {
   "air:month": "pri_01kyhevc8bkcghfpwjymz16y2h",
@@ -28,7 +28,7 @@ describe("checkout wiring against the backend", () => {
   it("previews only prices that exist", () => {
     for (const interval of ["month", "year"] as const) for (const i of previewItems(interval)) expect(Object.values(BACKEND)).toContain(i.priceId);
   });
-  it("recognises the return from a Flash checkout", () => {
+  it("recognizes the return from a Flash checkout", () => {
     expect(subscribedPlan("?subscribed=flash")).toBe("flash");
     expect(subscribedPlan("?subscribed=air")).toBeNull();
     expect(subscribedPlan("")).toBeNull();

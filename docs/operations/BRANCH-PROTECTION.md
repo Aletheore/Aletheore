@@ -3,7 +3,7 @@
 **Purpose:** Define the minimum repository protection policy for launch hardening.
 **Status:** Active baseline
 **Owner:** Arihant Kaul
-**Related Documents:** [README.md](README.md), [DEPLOYMENT-VERIFICATION.md](DEPLOYMENT-VERIFICATION.md), [../../SECURITY.md](../../SECURITY.md)
+**Related Documents:** [README.md](README.md), [../../SECURITY.md](../../SECURITY.md)
 **Last Updated:** 2026-07-23
 
 ## Purpose
@@ -51,5 +51,5 @@ Repository administrators may bypass protections only for urgent security or rec
 
 ## Deployment Coupling
 
-Merging to `master` does not prove production is current. Use [DEPLOYMENT-VERIFICATION.md](DEPLOYMENT-VERIFICATION.md) before claiming a change is live.
+Merging to `master` does not prove production is current. Verify the hosted deployment separately before claiming a change is live.
 
