@@ -22,7 +22,6 @@ jobs:
         with:
           globs: |
             *.md
-            !STARTUP_AUDIT_REPORT.md
             .github/**/*.md
             docs/**/*.md
             !docs/superpowers/**

@@ -1,38 +1,14 @@
 # Operations
 
-**Purpose:** Define operational expectations for the hosted Aletheore service.
+**Purpose:** Public operational policies for this repository.
 **Status:** Active baseline
 **Owner:** Arihant Kaul
-**Related Documents:** [../../STARTUP_AUDIT_REPORT.md](../../STARTUP_AUDIT_REPORT.md), [../../SECURITY.md](../../SECURITY.md)
-**Last Updated:** 2026-07-23
-
-## Purpose
-
-This directory contains concise runbooks and policies for operating the hosted Aletheore GitHub App.
-
-## Responsibilities
-
-- Define the operational checks required before and after deployment.
-- Document incident response, reliability targets, and customer-impacting data handling.
-- Keep production claims tied to repository evidence and server verification.
+**Related Documents:** [../../SECURITY.md](../../SECURITY.md)
+**Last Updated:** 2026-11-04
 
 ## Current Documents
 
 - [BRANCH-PROTECTION.md](BRANCH-PROTECTION.md)
 - [DATA-HANDLING.md](DATA-HANDLING.md)
-- [DEPLOYMENT-VERIFICATION.md](DEPLOYMENT-VERIFICATION.md)
-- [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md)
-- [MANUAL-ACCOUNT-CHANGES.md](MANUAL-ACCOUNT-CHANGES.md)
-- [SLOS.md](SLOS.md)
-- [SUPPORT-PROCESS.md](SUPPORT-PROCESS.md)
 
-## Future Contents
-
-- Deployment drill records.
-- Restore drill records.
-- Alert threshold history.
-- Customer support and escalation process.
-
-## Relationship to Other Directories
-
-The hosted service implementation is maintained separately from this public repository. Security disclosure policy lives in [../../SECURITY.md](../../SECURITY.md). Startup-readiness tracking lives in [../../STARTUP_AUDIT_REPORT.md](../../STARTUP_AUDIT_REPORT.md).
+Security disclosure policy lives in [../../SECURITY.md](../../SECURITY.md). The hosted service is maintained separately from this public repository.
