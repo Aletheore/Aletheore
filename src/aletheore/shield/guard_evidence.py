@@ -229,7 +229,12 @@ def _claim_marker_unlocked(marker: Path, newest_edit: float | None = None) -> bo
     if started is None:
         started = _mtime(marker)
     if started is None:
-        return _write_marker(marker, now)  # gone meanwhile: create it, as above
+        if not os.path.lexists(marker):
+            return _write_marker(marker, now)  # gone meanwhile: create it, as above
+        # There, but neither its start time nor its mtime can be read: replace it (this caller holds the lock), so a
+        # corrupt marker never blocks refreshes for good.
+        atomic_write_text(marker, repr(now))
+        return True
     age = now - started
     # marker.parent is <repo>/.aletheore/shield
     running = not _refresh_finished(marker.parent.parent.parent, started)

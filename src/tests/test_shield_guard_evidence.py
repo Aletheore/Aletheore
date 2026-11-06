@@ -917,3 +917,15 @@ def test_a_deleted_file_stops_asking_for_refreshes_once_a_rescan_dropped_it(repo
         _, not_checked = evidence_checks(repo, ["app/api.py", "app/core.py"], None)
         assert not any("older than" in reason for reason in not_checked)
     assert len(asked) == 1
+
+
+def test_an_unreadable_marker_with_no_readable_time_is_replaced_under_the_lock(repo, monkeypatch):
+    from aletheore.shield import state as shield_state
+
+    _write_evidence(repo, _evidence(_core_modules()))
+    marker = shield_state.shield_dir(repo, create=True) / guard_evidence._MARKER_NAME
+    marker.write_text("garbage", encoding="utf-8")
+    real_mtime = guard_evidence._mtime
+    monkeypatch.setattr(guard_evidence, "_mtime", lambda p: None if p == marker else real_mtime(p))
+    assert guard_evidence._claim_marker(marker) is True  # self-heals instead of blocking refreshes forever
+    assert guard_evidence._refresh_started_at(marker) is not None
