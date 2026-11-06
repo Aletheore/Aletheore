@@ -41,7 +41,10 @@ _ENV_NAMES = (
     "local", "production", "prod", "staging", "stage", "dev", "development", "test", "testing", "qa", "uat", "ci",
     "preview", "secret", "secrets", "backup", "bak", "old", "orig", "save",
 )
-_ENV_VARIANT = r".+\.env\.(?:" + "|".join(_ENV_NAMES) + r")"
+# A backup or editor copy of any of those (prod.env.bak, app.env.production.old, app.env.local~, .app.env.swp,
+# prod.env.1) is the same secret: any number of backup suffixes may follow.
+_BACKUP_SUFFIX = r"(?:\.(?:bak|old|orig|save|backup|swp|\d+)|~)"
+_ENV_VARIANT = r".+\.env(?:\.(?:" + "|".join(_ENV_NAMES) + r"))?" + _BACKUP_SUFFIX + "*"
 
 
 # Names a pattern above matches that are kept anyway: committed templates hold placeholders, not secrets, and a source

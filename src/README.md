@@ -603,7 +603,7 @@ read-modify-write of that folder, of the refresh marker and of the registry cach
 never done without the lock. Checkpoints are commits under `refs/aletheore/checkpoints/<worktree>/`,
 built with Git plumbing so your index, branches, stash and working tree are not touched. They hold
 tracked and untracked files minus ignored files, secret-looking files (such as `.env`, `.env.local`, `prod.env`,
-`app.env.production`, `*.pem`, `*.key`, `*.p8`, `id_rsa*`, `credentials*`, `*.tfvars`, `terraform.tfstate*`,
+`app.env.production` and backups of them such as `prod.env.bak`, `*.pem`, `*.key`, `*.p8`, `id_rsa*`, `credentials*`, `*.tfvars`, `terraform.tfstate*`,
 `service-account*.json`, matched by file name on any platform; `values.env.yaml`, `.env.example`,
 `.env.sample`, `.env.template` and source code such as `credentials.py` are kept), Shield's own
 folder and files over the size caps. Receipts are Markdown files in `.aletheore/shield/receipts/`.

@@ -333,6 +333,21 @@ def test_env_variants_are_denied_only_for_environment_names(path, expected):
 @pytest.mark.parametrize(
     "path,expected",
     [
+        ("app.env.production.bak", True), ("app.env.local.old", True), ("prod.env.bak", True),
+        ("app.env.backup.bak", True), ("App.Env.Prod.ORIG", True), ("staging.env.save", True), ("x.env.dev.backup", True),
+        ("prod.env~", True), ("app.env.local~", True), (".app.env.swp", True), ("app.env.prod.1", True),
+        ("prod.env.bak.old", True), ("deploy/prod.env.2026", True),
+        ("values.env.yaml", False), ("config.env.go", False), ("app.env.example", False), ("app.env.example.bak", False),
+        ("values.env.yaml.bak", False), ("app.env.sh~", False),
+    ],
+)
+def test_backups_of_environment_files_are_denied_too(path, expected):
+    assert denylist.is_denied_path(path) is expected
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
         # Committed templates hold placeholders, not secrets: they are checkpointed like any file.
         (".env.example", False), (".env.sample", False), (".env.template", False), ("web/.ENV.Example", False),
         # Source code about credentials is code; a credentials file in any data format is not.
