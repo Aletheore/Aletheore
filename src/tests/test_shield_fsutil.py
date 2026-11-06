@@ -14,7 +14,8 @@ SRC = Path(__file__).resolve().parents[1]
 
 def _age(path: Path, seconds: float) -> None:
     then = time.time() - seconds
-    os.utime(path, (then, then), follow_symlinks=False)
+    # Windows has no utime(follow_symlinks=False); a path that is a symlink there is never aged by these tests.
+    os.utime(path, (then, then), follow_symlinks=os.utime not in os.supports_follow_symlinks)
 
 
 # ---- the lock every read-modify-write takes (locking.file_lock; fsutil's lock-file lock was replaced by it) ---------

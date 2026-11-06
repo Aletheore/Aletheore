@@ -303,6 +303,11 @@ def test_concurrent_registry_cache_writers_keep_every_entry(tmp_path, monkeypatc
         return data
 
     monkeypatch.setattr(registry, "_read_cache", slow)
+    # The cache lock is best effort (0.25 s, then no caching); a slow CI runner can exceed that with four writers
+    # queued, so wait longer here: this test is about every writer's entry surviving the merge, not lock timing.
+    from aletheore.shield import locking
+
+    monkeypatch.setattr(registry, "file_lock", lambda path, timeout=0.25: locking.file_lock(path, timeout=10.0))
     barrier = threading.Barrier(4)
 
     def go(index):

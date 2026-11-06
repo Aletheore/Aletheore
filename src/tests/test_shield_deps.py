@@ -210,7 +210,15 @@ def no_repo_walk(monkeypatch):
     import aletheore.vulnerabilities as vulnerabilities
 
     monkeypatch.setattr(vulnerabilities, "collect_pins", _no_whole_repo_walk)
-    monkeypatch.setattr(_deps.os, "walk", _no_whole_repo_walk)
+    real_walk = os.walk
+
+    def walk(top, *args, **kwargs):
+        # os.walk is global; shutil.rmtree uses it (Windows, Python 3.14) to remove Shield's own temporary folder.
+        if os.path.basename(os.fspath(top)).startswith("aletheore-shield-pins-"):
+            return real_walk(top, *args, **kwargs)
+        return _no_whole_repo_walk()
+
+    monkeypatch.setattr(_deps.os, "walk", walk)
 
 
 @pytest.fixture
