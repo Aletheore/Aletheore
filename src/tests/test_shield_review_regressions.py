@@ -598,7 +598,10 @@ def test_cat_file_batch_returns_files_whose_names_hold_spaces(tmp_path):
     (repo / "plain.md").write_text("x\n", encoding="utf-8", newline="\n")
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-qm", "c"], cwd=repo, check=True, capture_output=True)
-    found = gitutil.cat_file_batch(repo, ["HEAD:docs/my file.md", "HEAD:no such file.md", "HEAD:plain.md"])
+    # Real git answers a found object "<oid> <type> <size>" and a missing one "<name> missing", even when the missing
+    # name itself looks like a header ("x blob 3").
+    found = gitutil.cat_file_batch(repo, ["HEAD:docs/my file.md", "HEAD:no such file.md", "HEAD:x blob 3",
+                                          "HEAD:plain.md"])
     assert found == {"HEAD:docs/my file.md": b"hello world\n", "HEAD:plain.md": b"x\n"}
 
 
@@ -654,3 +657,20 @@ def test_the_js_parse_child_never_imports_from_the_repository_or_the_current_fol
     source = "import a from 'pkg-a';\n" + "const x = 1;\n" * 4000
     assert imports.js_imports(source, repo=repo) == {"pkg-a"}
     assert not list(repo.glob("*.PWNED"))
+
+
+def test_a_git_call_that_raised_is_a_failure_to_every_consumer(tmp_path, monkeypatch):
+    # Every consumer of a GitResult reads success as returncode == 0; the call_failed sentinel is negative, so a call
+    # that raised is a failure everywhere, never an exit status with a meaning.
+    assert gitutil._CALL_FAILED < 0 and gitutil.GitResult(["git"], gitutil._CALL_FAILED).returncode != 0
+    repo = _changes_repo(tmp_path)
+    real = changes.run_git
+
+    def run(repo_, *args, **kwargs):
+        if args[0] == "diff":
+            raise RuntimeError("broken runner")
+        return real(repo_, *args, **kwargs)
+
+    monkeypatch.setattr(changes, "run_git", run)
+    found = changes.compute(repo)
+    assert not found.complete and not found.spawn_failed

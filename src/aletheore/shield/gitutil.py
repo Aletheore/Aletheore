@@ -138,8 +138,8 @@ def cat_file_batch(
             return None
         header = data[position:end].split(b" ")
         position = end + 1
-        if len(header) != 3 or not header[2].isdigit():
-            continue  # "<name> missing" or "<name> ambiguous"
+        if header[-1] in (b"missing", b"ambiguous") or len(header) != 3 or not header[2].isdigit():
+            continue  # "<name> missing" / "<name> ambiguous" (the name may hold spaces); found is "<oid> <type> <size>"
         size = int(header[2])
         if position + size > len(data):
             return None
