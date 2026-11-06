@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -938,3 +939,20 @@ def test_an_unreadable_marker_with_no_readable_time_is_replaced_under_the_lock(r
     monkeypatch.setattr(guard_evidence, "_mtime", lambda p: None if p == marker else real_mtime(p))
     assert guard_evidence._claim_marker(marker) is True  # self-heals instead of blocking refreshes forever
     assert guard_evidence._refresh_started_at(marker) is not None
+    if os.name != "nt":
+        assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
+def test_every_refresh_marker_write_is_private(repo):
+    from aletheore.shield import state as shield_state
+
+    _write_evidence(repo, _evidence(_core_modules()))
+    marker = shield_state.shield_dir(repo, create=True) / guard_evidence._MARKER_NAME
+    assert guard_evidence._claim_marker(marker) is True  # created
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+    old = time.time() - 3600
+    os.utime(marker, (old, old))
+    marker.write_text(repr(old), encoding="utf-8")
+    assert guard_evidence._claim_marker(marker) is True  # replaced
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o600

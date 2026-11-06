@@ -185,7 +185,9 @@ def _write_marker(marker: Path, started: float) -> bool:
     without its start time; where hard links are unavailable it falls back to an exclusive create and write."""
     temporary = marker.with_name(f"{marker.name}.{os.getpid()}.{time.monotonic_ns()}.tmp")
     try:
-        temporary.write_text(repr(started), encoding="utf-8")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        with os.fdopen(os.open(temporary, flags, 0o600), "w", encoding="utf-8") as handle:  # private, like all state
+            handle.write(repr(started))
         try:
             os.link(temporary, marker)
             return True
@@ -194,7 +196,7 @@ def _write_marker(marker: Path, started: float) -> bool:
         except OSError:
             pass
         try:
-            descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
             return False
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -231,10 +233,13 @@ def _claim_marker_unlocked(marker: Path, newest_edit: float | None = None) -> bo
     if started is None:
         if not os.path.lexists(marker):
             return _write_marker(marker, now)  # gone meanwhile: create it, as above
-        # There, but neither its start time nor its mtime can be read: replace it (this caller holds the lock), so a
-        # corrupt marker never blocks refreshes for good.
-        atomic_write_text(marker, repr(now))
-        return True
+        # There, but neither its start time nor its mtime can be read: this caller holds the lock, so remove it and
+        # create it the one way markers are created, so a corrupt marker never blocks refreshes for good.
+        try:
+            marker.unlink()
+        except FileNotFoundError:
+            pass
+        return _write_marker(marker, now)
     age = now - started
     # marker.parent is <repo>/.aletheore/shield
     running = not _refresh_finished(marker.parent.parent.parent, started)
@@ -244,7 +249,7 @@ def _claim_marker_unlocked(marker: Path, newest_edit: float | None = None) -> bo
     elif not (newest_edit is not None and newest_edit > started):
         if 0 <= age < REFRESH_MIN_INTERVAL_S:
             return False
-    atomic_write_text(marker, repr(now))  # replaced in one step: never absent, never without its start time
+    atomic_write_text(marker, repr(now), mode=0o600)  # replaced in one step: never absent, never without its time
     return True
 
 
