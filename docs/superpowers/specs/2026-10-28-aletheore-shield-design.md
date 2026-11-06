@@ -303,7 +303,8 @@ Differences from the first draft, and the decisions the builder made, in one pla
   `["-X", "utf8", "-P", "-m", "aletheore.shield.hooks", <event>]`. `-P` because the hook's current folder is the
   repository and `python -m` would otherwise put it first on sys.path, letting a repository's own `aletheore/` or
   `tree_sitter.py` run inside the hook (the `pre-commit` block and the background refresh use `-P` too; the JS
-  parse child runs with `-I` and never gets the current folder or the repository on its path). A hook counts as
+  parse child runs with `-I` and adds only the folders this process imported aletheore, tree_sitter and
+  tree_sitter_typescript from, so no repository folder on sys.path reaches it). A hook counts as
   Shield's only in that exact shape, the same without `-P` (earlier builds; setup migrates it), or the old
   four-word string `<python> -m aletheore.shield.hooks <event>` that earlier builds wrote; a user's hook that runs the module any other way is left alone. `setup` replaces an old
   string entry in place and keeps any other fields the user added to it. There is no separate

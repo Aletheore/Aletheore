@@ -688,3 +688,33 @@ def test_two_deleted_cycle_members_cannot_both_have_become_the_same_new_file():
     new2 = _graph({'a.py': ['b.py'], 'b.py': ['x.py'], 'x.py': ['y.py'], 'y.py': ['a.py']})
     pairs = {('c.py', 'x.py'), ('c.py', 'y.py'), ('d.py', 'x.py')}
     assert new_cycles(old, new2, renamed=lambda gone, came: (gone, came) in pairs) == []
+
+
+def test_the_js_parse_child_gets_only_the_folders_its_imports_came_from(tmp_path, monkeypatch):
+    # A PYTHONPATH=repo/src or an editable-install .pth entry puts a repository folder on this process's sys.path;
+    # it must not reach the child unless tree_sitter or aletheore really were imported from it.
+    import sys
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    for name in ("tree_sitter.py", "tree_sitter_typescript.py", "json.py", "re.py"):
+        (repo / "src" / name).write_text("open(__file__ + '.PWNED', 'w').close()\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "path", [*sys.path, str(repo / "src")])
+    path = imports._child_path()
+    assert str(repo / "src") not in path
+    source = "import a from 'pkg-a';\n" + "const x = 1;\n" * 4000
+    assert imports.js_imports(source, repo=repo) == {"pkg-a"}
+    assert not list((repo / "src").glob("*.PWNED"))
+
+
+def test_a_tree_sitter_installed_in_a_venv_inside_the_repository_is_still_found(tmp_path, monkeypatch):
+    # The parent already runs from that .venv, so the child may import from the same folder.
+    import types
+
+    site = tmp_path / "repo" / ".venv" / "lib" / "python3.12" / "site-packages"
+    fake = types.ModuleType("tree_sitter")
+    fake.__file__ = str(site / "tree_sitter" / "__init__.py")
+    monkeypatch.setitem(__import__("sys").modules, "tree_sitter", fake)
+    path = imports._child_path()
+    assert str(site) in path
+    assert len(path) == len(set(path))

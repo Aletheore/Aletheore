@@ -229,46 +229,46 @@ def _js_imports_from_raw(raw: bytes, deadline: float | None = None) -> set[str]:
 
 
 # The child reads {"path": [...], "source": "..."} on stdin and prints the sorted package names as JSON. It runs
-# isolated (-I: no PYTHON* variables, no user site, no current directory or script folder on sys.path) and is given
-# the folder this package came from plus the absolute entries of this process's sys.path, minus the current directory
-# and the repository being checked (a parent started with `python -m` in the repository has it on sys.path as an
-# absolute path), so a repository's own files can never be imported by it. Entries deeper inside the repository (a
-# virtual environment's site-packages in `.venv/`) are kept: this process imports from them too, so the child adds
-# nothing this process does not already run.
+# isolated (-I: no PYTHON* variables, no user site, no current directory or script folder on sys.path), and the only
+# folders it adds in front of its own stdlib and site-packages are the ones this process actually imported tree_sitter,
+# tree_sitter_typescript and aletheore from (see `_child_path`). A repository folder on this process's sys.path (a
+# PYTHONPATH=repo/src, an editable-install .pth entry, the current folder) never reaches it, unless one of those three
+# packages really was imported from there, which is this process's own choice: it is already running that code.
 _CHILD = (
     "import json, sys\n"
     "request = json.loads(sys.stdin.buffer.read())\n"
-    "sys.path[:] = request['path']\n"
+    "sys.path[:0] = request['path']\n"
     "from aletheore.shield.imports import _js_imports_from_raw\n"
     "sys.stdout.write(json.dumps(sorted(_js_imports_from_raw(request['source'].encode('utf-8', 'replace')))))\n"
 )
 
 
-def _same_folder(a: str, b: str) -> bool:
-    import os
-
-    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
-
-
 def _child_path(repo=None) -> list[str]:
+    """The folders the parse child needs: where this process imported tree_sitter, tree_sitter_typescript and the
+    aletheore package from (the folder holding each package), de-duplicated, and nothing else. `repo` is accepted for
+    callers' clarity; it is not needed, since nothing is taken from sys.path."""
+    import importlib
     import os
 
-    # The folder this aletheore package was imported from comes first: it is the code already running here.
-    package_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    try:
-        excluded = [os.getcwd()]
-    except OSError:
-        excluded = []
-    if repo is not None:
-        excluded.append(os.fspath(repo))
-    path = [package_root]
-    for entry in sys.path:
-        if not entry or not os.path.isabs(entry) or _same_folder(entry, package_root):
+    folders: list[str] = []
+    # aletheore first: the child must import this same aletheore, even when the interpreter's site-packages holds
+    # another installed copy.
+    for name in ("aletheore", "tree_sitter", "tree_sitter_typescript"):
+        module = sys.modules.get(name)
+        if module is None:
+            try:
+                module = importlib.import_module(name)
+            except ImportError:
+                continue
+        location = getattr(module, "__file__", None)
+        if not location:
             continue
-        if any(_same_folder(entry, folder) for folder in excluded):
-            continue
-        path.append(entry)
-    return path
+        # <folder>/<name>/__init__.py -> <folder>; a single-file module <folder>/<name>.py -> <folder>
+        package_dir = os.path.dirname(os.path.abspath(location))
+        folder = os.path.dirname(package_dir) if os.path.basename(location).startswith("__init__.") else package_dir
+        if folder not in folders:
+            folders.append(folder)
+    return folders
 
 
 def _js_imports_in_child(source: str, timeout: float, repo=None) -> set[str]:

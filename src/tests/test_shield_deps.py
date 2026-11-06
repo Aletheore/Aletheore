@@ -831,3 +831,11 @@ def test_the_same_not_checked_reason_is_said_once(tmp_path, monkeypatch):
     monkeypatch.setattr(_deps, "_base_unit_pins", lambda *a, **k: ({}, False))
     _, not_checked = added_dependencies(repo)
     assert len(not_checked) == len(set(not_checked)), not_checked
+
+
+def test_not_checked_dedupe_keys_on_name_and_reason_and_keeps_the_first_occurrence():
+    # NotChecked is a frozen dataclass: hashable, equal only when name AND reason match. dict.fromkeys therefore drops
+    # exact repeats only, keeps the first one's position, and keeps two different reasons for the same name.
+    a, b = NotChecked("pkg", "reason one"), NotChecked("pkg", "reason two")
+    assert hash(a) == hash(NotChecked("pkg", "reason one"))
+    assert list(dict.fromkeys([a, b, NotChecked("pkg", "reason one"), b])) == [a, b]
