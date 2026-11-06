@@ -555,14 +555,16 @@ overwritten; personal, not committed), the Git `pre-commit` hook (a block betwee
 cannot edit safely (invalid JSON, a symlink, read-only, tracked by Git, a hook that is not a shell
 script or lives outside the Git directory) is not written; the plan shows the text to add yourself.
 
-**Hook events.** Each runs `python -X utf8 -m aletheore.shield.hooks <event>`, always exits 0 and has
-a hard time limit. The four Claude Code entries use the executable-plus-arguments form (`command` is
+**Hook events.** Each runs `python -X utf8 -P -m aletheore.shield.hooks <event>`, always exits 0 and has
+a hard time limit. `-P` keeps the hook's current folder, your repository, off Python's import path, so
+files in the repository (an `aletheore/` folder, a `tree_sitter.py`) can never run inside the hook; the
+`pre-commit` block and the background refresh are started the same way. The four Claude Code entries use the executable-plus-arguments form (`command` is
 the interpreter, `args` the rest), so no shell parses them and paths with spaces or backslashes need
-no quoting on any platform. Earlier Shield versions wrote each entry as one shell-command string;
-`aletheore shield status` notes such entries, and `aletheore shield setup` shows them as an edit that
+no quoting on any platform. Earlier Shield versions wrote each entry as one shell-command string, or
+without `-P`; `aletheore shield status` notes such entries, and `aletheore shield setup` shows them as an edit that
 replaces each one in place, keeping any other fields (such as a `timeout`) you added to it.
 `aletheore shield off` removes either form. Only the exact shapes Shield writes count as its own: an
-interpreter with `-X utf8 -m aletheore.shield.hooks <event>` as `args`, or the old four-word string
+interpreter with `-X utf8 -P -m aletheore.shield.hooks <event>` (or the older `-X utf8 -m ...`) as `args`, or the old four-word string
 `<python> -m aletheore.shield.hooks <event>`. A hook of yours that runs the module any other way (a
 wrapper, extra flags, a chained command) is left alone. The Git `pre-commit` block is a
 `sh` script, so it quotes the interpreter path for `sh` (with forward slashes on Windows, where Git

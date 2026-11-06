@@ -310,7 +310,8 @@ def start_background_refresh(
         options = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
     try:
         subprocess.Popen(  # noqa: S603  # nosec B603 - fixed argv, our own module, no shell
-            [sys.executable, "-m", "aletheore.shield.refresh", str(repo), repr(started)],
+            # -P: the current folder (the repository) is never put on the child's import path
+            [sys.executable, "-P", "-m", "aletheore.shield.refresh", str(repo), repr(started)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

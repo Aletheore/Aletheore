@@ -94,7 +94,7 @@ USER_HOOK_BYTES = b"#!/bin/sh\nset -e\necho user hook ran\nexit 0\n"
 
 
 def _exec_hook(event, python=FAKE_PY):
-    return {"type": "command", "command": python, "args": ["-X", "utf8", "-m", "aletheore.shield.hooks", event]}
+    return {"type": "command", "command": python, "args": ["-X", "utf8", "-P", "-m", "aletheore.shield.hooks", event]}
 
 
 def _legacy_hook(event, python=FAKE_PY):
@@ -111,12 +111,14 @@ READ_GUARD_HOOK = {
 }
 
 
-def test_agent_hook_entries_use_the_exec_form_of_python_hook(monkeypatch):
+def test_agent_hook_entries_use_the_exec_form_of_python_hook_plus_isolation(monkeypatch):
     from aletheore.hook_config import python_hook
 
     monkeypatch.setattr(setup, "_interpreter", lambda: sys.executable)
     for _name, _matcher, event in setup.AGENT_EVENTS:
-        assert setup._hook(event) == python_hook("aletheore.shield.hooks", event)
+        expected = python_hook("aletheore.shield.hooks", event)
+        expected["args"] = ["-X", "utf8", "-P", "-m", "aletheore.shield.hooks", event]
+        assert setup._hook(event) == expected
 
 
 @pytest.mark.parametrize(
@@ -323,7 +325,7 @@ def test_status_notes_legacy_entries(tmp_path, monkeypatch):
     _write_legacy_settings(repo, monkeypatch)
     status = setup.shield_status(repo)
     assert status.enabled
-    assert "agent hooks use the old command format; run `aletheore shield setup` to update" in status.notes
+    assert "agent hooks use an old command format; run `aletheore shield setup` to update" in status.notes
     assert not any("not registered" in n or "partly" in n for n in status.notes)
     setup.apply_setup(repo)
     assert not any("old command format" in n for n in setup.shield_status(repo).notes)
@@ -610,12 +612,12 @@ def test_shebang_without_a_newline_is_restored_exactly(tmp_path):
 
 def test_git_hook_block_quotes_the_interpreter_for_sh(tmp_path):
     block = setup.git_hook_block("C:\\Program Files\\Py's\\python.exe", platform="win32")
-    assert "'C:/Program Files/Py'\\''s/python.exe' -m aletheore.shield.hooks pre-commit" in block
+    assert "'C:/Program Files/Py'\\''s/python.exe' -P -m aletheore.shield.hooks pre-commit" in block
     assert "\\" not in block.replace("'\\''", "")
     assert block.startswith(MARK_START + "\n") and block.endswith(MARK_END + "\n")
     assert "|| true" in block
     posix = setup.git_hook_block("/a b/python", platform="linux")
-    assert "'/a b/python' -m aletheore.shield.hooks pre-commit" in posix
+    assert "'/a b/python' -P -m aletheore.shield.hooks pre-commit" in posix
     assert '--repo "$(git rev-parse --show-toplevel)"' in posix
 
 
@@ -636,7 +638,7 @@ def test_git_hook_is_a_marked_block_and_runs_on_commit(tmp_path, monkeypatch):
     _git(repo, "add", "-A")
     subprocess.run(["git", "commit", "-q", "-m", "second"], cwd=repo / "sub", check=True, capture_output=True)
     args, cwd = sentinel.read_text(encoding="utf-8").splitlines()
-    assert args.split()[:3] == ["-m", "aletheore.shield.hooks", "pre-commit"]
+    assert args.split()[:4] == ["-P", "-m", "aletheore.shield.hooks", "pre-commit"]
     assert os.path.realpath(args.split("--repo ", 1)[1]) == os.path.realpath(repo)
     assert _git(repo, "log", "-1", "--format=%s").stdout.decode().strip() == "second"
 
@@ -1251,3 +1253,47 @@ def test_a_legacy_hook_whose_quoted_interpreter_path_holds_a_space_is_recognised
     from aletheore.shield import setup as shield_setup
 
     assert shield_setup._our_event({"type": "command", "command": command}) == "turn-end"
+
+
+def _hostile_repo(tmp_path):
+    """A repository that ships its own `aletheore` package: importing it from the repository leaves a marker."""
+    repo = tmp_path / "hostile"
+    (repo / "aletheore" / "shield").mkdir(parents=True)
+    (repo / "aletheore" / "__init__.py").write_text("open(__file__ + '.PWNED', 'w').close()\n", encoding="utf-8")
+    (repo / "aletheore" / "shield" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "aletheore" / "shield" / "hooks.py").write_text("open(__file__ + '.PWNED', 'w').close()\n",
+                                                             encoding="utf-8")
+    return repo
+
+
+def test_shield_hook_commands_never_import_code_from_the_repository(tmp_path):
+    from aletheore.shield import setup as shield_setup
+
+    repo = _hostile_repo(tmp_path)
+    for event in ("pre-edit", "post-edit", "turn-end", "session-end"):
+        hook = shield_setup._hook(event)
+        assert "-P" in hook["args"]
+        subprocess.run([sys.executable, *hook["args"]], cwd=repo, input=b"{}", capture_output=True, timeout=60,
+                       check=False)
+    assert not list(repo.rglob("*.PWNED"))
+
+
+def test_the_pre_commit_block_runs_python_without_the_current_folder_on_sys_path():
+    from aletheore.shield import setup as shield_setup
+
+    assert f"-P -m {shield_setup.MODULE} pre-commit" in shield_setup.git_hook_block("/usr/bin/python3")
+
+
+@pytest.mark.parametrize("args,legacy", [
+    (["-X", "utf8", "-P", "-m", "aletheore.shield.hooks", "turn-end"], False),
+    (["-X", "utf8", "-m", "aletheore.shield.hooks", "turn-end"], True),  # an earlier Shield, without -P
+])
+def test_both_exec_shapes_are_recognised_and_the_one_without_isolation_is_migrated(args, legacy):
+    from aletheore.shield import setup as shield_setup
+
+    hook = {"type": "command", "command": shield_setup._interpreter(), "args": args}
+    assert shield_setup._our_event(hook) == "turn-end"
+    assert shield_setup._is_legacy(hook) is legacy
+    entries = [{"hooks": [hook]}]
+    assert shield_setup._place(entries, None, "turn-end") is legacy
+    assert entries[0]["hooks"][0]["args"] == shield_setup._hook("turn-end")["args"]

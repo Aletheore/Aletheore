@@ -640,3 +640,17 @@ def test_an_odd_number_of_diff_fields_makes_the_change_set_incomplete(tmp_path, 
     monkeypatch.setattr(changes, "run_git", run)
     found = changes.compute(repo)
     assert "a.py" in found.changed and not found.complete
+
+
+def test_the_js_parse_child_never_imports_from_the_repository_or_the_current_folder(tmp_path, monkeypatch):
+    import sys
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for name in ("tree_sitter.py", "tree_sitter_typescript.py", "json.py"):
+        (repo / name).write_text("open(__file__ + '.PWNED', 'w').close()\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(sys, "path", [str(repo), *sys.path])  # e.g. a parent started with `python -m` in the repo
+    source = "import a from 'pkg-a';\n" + "const x = 1;\n" * 4000
+    assert imports.js_imports(source, repo=repo) == {"pkg-a"}
+    assert not list(repo.glob("*.PWNED"))

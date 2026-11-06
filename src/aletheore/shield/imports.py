@@ -228,8 +228,11 @@ def _js_imports_from_raw(raw: bytes, deadline: float | None = None) -> set[str]:
 
 # The child reads {"path": [...], "source": "..."} on stdin and prints the sorted package names as JSON. It runs
 # isolated (-I: no PYTHON* variables, no user site, no current directory or script folder on sys.path) and is given
-# the folder this package came from plus the absolute entries of this process's sys.path, never the current directory
-# (a hook's current directory is the repository), so a repository's own files can never be imported by it.
+# the folder this package came from plus the absolute entries of this process's sys.path, minus the current directory
+# and the repository being checked (a parent started with `python -m` in the repository has it on sys.path as an
+# absolute path), so a repository's own files can never be imported by it. Entries deeper inside the repository (a
+# virtual environment's site-packages in `.venv/`) are kept: this process imports from them too, so the child adds
+# nothing this process does not already run.
 _CHILD = (
     "import json, sys\n"
     "request = json.loads(sys.stdin.buffer.read())\n"
@@ -239,14 +242,38 @@ _CHILD = (
 )
 
 
-def _js_imports_in_child(source: str, timeout: float) -> set[str]:
-    import json
+def _same_folder(a: str, b: str) -> bool:
     import os
-    import subprocess  # nosec B404 - runs this Python only, with an argv list and never a shell
+
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def _child_path(repo=None) -> list[str]:
+    import os
 
     # The folder this aletheore package was imported from comes first: it is the code already running here.
     package_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    path = [package_root, *(entry for entry in sys.path if entry and os.path.isabs(entry) and entry != package_root)]
+    try:
+        excluded = [os.getcwd()]
+    except OSError:
+        excluded = []
+    if repo is not None:
+        excluded.append(os.fspath(repo))
+    path = [package_root]
+    for entry in sys.path:
+        if not entry or not os.path.isabs(entry) or _same_folder(entry, package_root):
+            continue
+        if any(_same_folder(entry, folder) for folder in excluded):
+            continue
+        path.append(entry)
+    return path
+
+
+def _js_imports_in_child(source: str, timeout: float, repo=None) -> set[str]:
+    import json
+    import subprocess  # nosec B404 - runs this Python only, with an argv list and never a shell
+
+    path = _child_path(repo)
     request = json.dumps({"path": path, "source": source}).encode("utf-8")
     try:
         # The executable is this interpreter and the argv is fixed; the source travels on stdin, never in argv.
@@ -266,9 +293,10 @@ def _js_imports_in_child(source: str, timeout: float) -> set[str]:
     return set(names)
 
 
-def js_imports(source: str, timeout: float = JS_PARSE_TIMEOUT_S) -> set[str]:
+def js_imports(source: str, timeout: float = JS_PARSE_TIMEOUT_S, *, repo=None) -> set[str]:
     """Bare package names from actual syntax, excluding comments and string contents. Raises ParseTimeout when the
-    source cannot be parsed, and its tree walked, within `timeout` seconds."""
+    source cannot be parsed, and its tree walked, within `timeout` seconds. `repo` (the repository the source comes
+    from) is kept off the parse child's import path, as is the current folder."""
     if "import" not in source and "require" not in source and "export" not in source:  # every form read below holds one
         return set()
     raw = source.encode("utf-8", "replace")
@@ -276,4 +304,4 @@ def js_imports(source: str, timeout: float = JS_PARSE_TIMEOUT_S) -> set[str]:
         raise ParseTimeout("too large to parse in time")
     if len(raw) <= JS_IN_PROCESS_BYTES:
         return _js_imports_from_raw(raw, time.monotonic() + timeout)
-    return _js_imports_in_child(raw.decode("utf-8"), max(timeout, 0.001))
+    return _js_imports_in_child(raw.decode("utf-8"), max(timeout, 0.001), repo)

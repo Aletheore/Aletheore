@@ -942,7 +942,7 @@ def added_dependencies(
             parse_deadline = time.monotonic() + min(imports.JS_PARSE_TIMEOUT_S, max(budget.left(), MIN_STAGE_S))
 
             def parse(source: str) -> set[str]:
-                return imports.js_imports(source, timeout=max(parse_deadline - time.monotonic(), 0.001))
+                return imports.js_imports(source, timeout=max(parse_deadline - time.monotonic(), 0.001), repo=repo)
         try:
             new_names = parse(text) - (parse(before.decode("utf-8", "replace")) if before is not None else set())
         except imports.ParseTimeout:

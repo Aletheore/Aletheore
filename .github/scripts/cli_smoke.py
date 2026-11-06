@@ -227,6 +227,7 @@ for event, name in (("PreToolUse", "pre-edit"), ("PostToolUse", "post-edit"), ("
         check(f"shield {name} hook registered in exec form", False, shield_hooks)
         continue
     hook = entries[0]
+    check(f"shield {name} hook keeps the repository off its import path (-P)", "-P" in hook["args"], hook)
     if event == "PostToolUse":
         edited.write_text(written, encoding="utf-8")
     payload = json.dumps({

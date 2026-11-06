@@ -287,7 +287,7 @@ def test_refresh_spawns_detached_child_once_per_minute(repo, no_spawn):
     os.utime(air, (old, old))
     assert guard_evidence.start_background_refresh(repo, ["app/core.py"]) is True
     (args, kwargs), = no_spawn
-    assert args[0][:3] == [sys.executable, "-m", "aletheore.shield.refresh"] and args[0][3] == str(repo)
+    assert args[0][:4] == [sys.executable, "-P", "-m", "aletheore.shield.refresh"] and args[0][4] == str(repo)
     assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["stdout"] == subprocess.DEVNULL
     assert kwargs["stderr"] == subprocess.DEVNULL
     if os.name == "nt":
@@ -654,7 +654,16 @@ def test_refresh_child_gets_its_start_time(repo, no_spawn):
     _set_mtime(air, time.time() - 100)
     assert guard_evidence.start_background_refresh(repo, ["app/core.py"]) is True
     (args, _kwargs), = no_spawn
-    assert float(args[0][4]) == guard_evidence._refresh_started_at(_marker(repo))
+    assert float(args[0][-1]) == guard_evidence._refresh_started_at(_marker(repo))
+
+
+def test_the_refresh_child_never_has_the_repository_on_its_import_path(repo, no_spawn):
+    # It is started from the hook, whose current folder is the repository; `-m` alone would put that folder first.
+    air = _write_evidence(repo, _evidence(_core_modules()))
+    _set_mtime(air, time.time() - 100)
+    assert guard_evidence.start_background_refresh(repo, ["app/core.py"]) is True
+    (args, kwargs), = no_spawn
+    assert args[0][1:4] == ["-P", "-m", "aletheore.shield.refresh"]
 
 
 def test_refresh_module_records_completion_only_after_a_successful_rebuild(repo, monkeypatch):

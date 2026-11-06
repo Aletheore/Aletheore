@@ -690,12 +690,12 @@ def test_setup_subcommand_updates_legacy_hook_entries(repo, monkeypatch):
     data = json.loads(path.read_text(encoding="utf-8"))
     for entries in data["hooks"].values():
         for entry in entries:
-            entry["hooks"] = [{"type": "command", "command": shlex.join([h["command"], *h["args"][2:]])}
+            entry["hooks"] = [{"type": "command", "command": shlex.join([h["command"], *h["args"][3:]])}  # drop -X utf8 -P
                               for h in entry["hooks"]]
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
     status = runner.invoke(app, ["shield", "status", "--path", str(repo)])
-    assert "old command format; run `aletheore shield setup` to update" in status.stdout
+    assert "an old command format; run `aletheore shield setup` to update" in status.stdout
 
     r = runner.invoke(app, ["shield", "setup", "--path", str(repo)], input="yes\n")
     assert r.exit_code == 0, r.output

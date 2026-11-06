@@ -5,9 +5,10 @@ What setup touches, and nothing else:
 
 - `<top>/.claude/settings.local.json` (personal, not committed, because the commands hold an absolute interpreter
   path): four Claude Code hook entries, PreToolUse and PostToolUse (matcher `Edit|MultiEdit|Write`), Stop and
-  SessionEnd, each running `<python> -X utf8 -m aletheore.shield.hooks <event>` in the exec form
-  (`hook_config.python_hook`: `command` is the interpreter, `args` the rest, so no shell quoting is involved). Entries
-  an earlier Shield wrote as one shell-command string are still recognised, and setup replaces them in place. The
+  SessionEnd, each running `<python> -X utf8 -P -m aletheore.shield.hooks <event>` in the exec form (`command` is
+  the interpreter, `args` the rest, so no shell quoting is involved; `-P` keeps the repository, the hook's current
+  folder, off its import path). Entries an earlier Shield wrote as one shell-command string or without `-P` are still
+  recognised, and setup replaces them in place. The
   file is merged, never overwritten.
   Before an existing file is edited its exact bytes are saved under `.aletheore/shield/`, so removal puts them back
   byte for byte as long as nobody changed the file since; otherwise removal strips only Shield's entries. A file
@@ -78,7 +79,7 @@ KEEP_EXCLUDE_BLOCK = f"{MARK_START}\n/.aletheore/\n{MARK_END}\n"
 EXCLUDE_BLOCK = f"{MARK_START}\n/.aletheore/\n/{SETTINGS_RELATIVE.as_posix()}\n{MARK_END}\n"
 DIFF_MAX_LINES = 200
 PLAN_CHANGED = "setup plan changed since it was shown"
-LEGACY_NOTE = "agent hooks use the old command format; run `aletheore shield setup` to update"
+LEGACY_NOTE = "agent hooks use an old command format; run `aletheore shield setup` to update"
 _SHARED = "shared by all linked worktrees of this repository"
 _UTF8_BOM = b"\xef\xbb\xbf"
 _HOOK_STATE_DIRNAME = "aletheore-shield"  # hooks.STATE_DIRNAME; not imported so setup stays light
@@ -305,9 +306,16 @@ def _record_bytes(record: _Record) -> bytes:
 # ------------------------------------------------------------------------------------------------ agent hooks
 
 
+# `-P`: the hook runs with the repository as its current folder, and `python -m` would otherwise put that folder first
+# on sys.path, so a repository holding its own `aletheore/` (or `tree_sitter.py`, ...) would run its code inside the
+# hook. Python 3.11+, which is the oldest Python aletheore supports.
+HOOK_ARGS = ("-X", "utf8", "-P", "-m", MODULE)
+_OLD_HOOK_ARGS = ("-X", "utf8", "-m", MODULE)  # what earlier Shield versions wrote; recognised and migrated
+
+
 def _hook(event: str) -> dict:
-    """Shield's hook for one event: `hook_config.python_hook` (exec form, UTF-8 mode) run by this interpreter."""
-    return {**python_hook(MODULE, event), "command": _interpreter()}
+    """Shield's hook for one event in the exec form (`command` is this interpreter, `args` the rest)."""
+    return {**python_hook(MODULE, event), "command": _interpreter(), "args": [*HOOK_ARGS, event]}
 
 
 def _entry(matcher: str | None, event: str) -> dict:
@@ -341,7 +349,8 @@ def _our_event(hook: object) -> str | None:
 
     Only the exact shapes Shield wrote count, so a user's own hook that merely runs or mentions the module stays
     theirs. Exec form (what setup writes): `command` is a Python interpreter and `args` is exactly
-    `["-X", "utf8", "-m", "aletheore.shield.hooks", <event>]`. Legacy form (earlier Shield versions, no `args`): the
+    `["-X", "utf8", "-P", "-m", "aletheore.shield.hooks", <event>]`, or the same without `-P` (earlier Shield versions).
+    Legacy form (earlier Shield versions, no `args`): the
     `command` string is exactly four shell words, `<python> -m aletheore.shield.hooks <event>`, whether the path was
     quoted for POSIX sh, double-quoted with forward slashes, or a bare Windows backslash path."""
     if not isinstance(hook, dict) or not isinstance(hook.get("command"), str):
@@ -351,12 +360,12 @@ def _our_event(hook: object) -> str | None:
         args = hook["args"]
         if (
             isinstance(args, list)
-            and len(args) == 5
-            and args[:4] == ["-X", "utf8", "-m", MODULE]
-            and args[4] in SHIELD_EVENTS
+            and args
+            and tuple(args[:-1]) in (HOOK_ARGS, _OLD_HOOK_ARGS)
+            and args[-1] in SHIELD_EVENTS
             and _is_python(command)
         ):
-            return args[4]
+            return args[-1]
         return None
     try:
         words = shlex.split(command)
@@ -374,8 +383,12 @@ def _is_ours(hook: object) -> bool:
 
 
 def _is_legacy(hook: object) -> bool:
-    """One of Shield's hooks still in the single shell-command string form."""
-    return _is_ours(hook) and "args" not in hook  # type: ignore[operator]
+    """One of Shield's hooks in a shape an earlier version wrote: the single shell-command string, or the exec form
+    without `-P` (which lets the repository's own files shadow the hook's modules). Setup replaces it in place."""
+    if not _is_ours(hook):
+        return False
+    args = hook.get("args")  # type: ignore[union-attr]
+    return not isinstance(args, list) or tuple(args[:-1]) != HOOK_ARGS
 
 
 def _ours(entries: list) -> list[dict]:
@@ -533,7 +546,7 @@ def git_hook_block(executable: str, *, platform: str | None = None) -> str:
     return (
         f"{MARK_START}\n"
         "# Added by Aletheore Shield: reports what changed before you commit; it never blocks a commit.\n"
-        f'if [ -x {python} ]; then {python} -m {MODULE} pre-commit --repo "$(git rev-parse --show-toplevel)"'
+        f'if [ -x {python} ]; then {python} -P -m {MODULE} pre-commit --repo "$(git rev-parse --show-toplevel)"'
         " || true; fi\n"
         f"{MARK_END}\n"
     )
@@ -723,8 +736,8 @@ def _settings_plan(where: _Where, record: _Record) -> _SettingsPlan:
     written = _dump_settings(data, layout)
     if _any_legacy(original):
         description = (
-            "update Shield's Claude Code hooks from the old command format (one shell string) to the interpreter "
-            "plus arguments, in place; other settings and hooks are kept"
+            "update Shield's Claude Code hooks from an old command format to the interpreter plus arguments with "
+            "-P (the repository is never on the hook's import path), in place; other settings and hooks are kept"
         )
     else:
         description = "add Shield's four Claude Code hooks; other settings and hooks are kept"
