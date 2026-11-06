@@ -86,6 +86,8 @@ def compute(repo: Path, base: str = "HEAD", *, budget: Budget = UNLIMITED) -> Ch
         changed: dict[str, None] = {}
         if diff.returncode == 0:
             fields = _paths(diff.stdout)
+            if len(fields) % 2:
+                complete = False  # cut short: a status without its path
             for status, path in zip(fields[::2], fields[1::2]):
                 changed.setdefault(path)
                 if status.startswith("D"):
@@ -106,5 +108,5 @@ def compute(repo: Path, base: str = "HEAD", *, budget: Budget = UNLIMITED) -> Ch
         changed=changed_list,
         deleted=frozenset(deleted),
         complete=complete,
-        spawn_failed=probe.spawn_failed,
+        spawn_failed=any(getattr(result, "spawn_failed", False) for result in (probe, listing, diff)),
     )

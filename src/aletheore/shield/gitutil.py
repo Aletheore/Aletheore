@@ -12,6 +12,7 @@ from aletheore.git_exec import git_executable
 # mistaken for a timeout or a git that could not start.
 _TIMED_OUT = -(1 << 33)
 _SPAWN_FAILED = _TIMED_OUT - 1
+_CALL_FAILED = _TIMED_OUT - 2  # the call itself raised (a broken runner); neither a timeout nor a spawn failure
 _INHERITED_GIT_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 
 
@@ -32,8 +33,8 @@ class RepoState:
 
 class GitResult(subprocess.CompletedProcess):
     """A finished git call. `timed_out`: stopped at its timeout; `spawn_failed`: git could not be resolved or
-    started (not found, not executable, no such folder). Either way the output is empty and returncode is the
-    matching sentinel."""
+    started (not found, not executable, no such folder); `call_failed`: the call raised. In each case the output is
+    empty and returncode is the matching sentinel."""
 
     def __init__(self, args, returncode, stdout=b"", stderr=b""):
         super().__init__(args, returncode, stdout, stderr)
@@ -45,6 +46,10 @@ class GitResult(subprocess.CompletedProcess):
     @property
     def spawn_failed(self) -> bool:
         return self.returncode == _SPAWN_FAILED
+
+    @property
+    def call_failed(self) -> bool:
+        return self.returncode == _CALL_FAILED
 
 
 def run_git(
@@ -115,7 +120,8 @@ def cat_file_batch(
 
     Returns {object name: bytes} for every object that exists; a missing one is simply absent. None when git failed
     or timed out, so the caller can tell "not there" from "not answered". Names holding a newline cannot be asked
-    for on the batch protocol and are left out."""
+    for on the batch protocol and are left out. A name with spaces is fine: an object found is answered as
+    "<object id> <type> <size>" (the name is echoed only in "<name> missing")."""
     wanted = [name for name in dict.fromkeys(objects) if "\n" not in name and "\r" not in name]
     if not wanted:
         return {}
@@ -156,16 +162,17 @@ def run_git_pair(
     def second_call() -> None:
         try:
             box.append(run(repo, *second, env=env, timeout=timeout))
-        except Exception as error:  # noqa: BLE001 - reported as a failed call below
+        except Exception as error:  # noqa: BLE001 - reported as a failed call, not as a timeout
             from aletheore.shield.fsutil import debug_note
 
             debug_note("a git call on the helper thread failed", error)
+            box.append(GitResult(["git", *second], _CALL_FAILED))
 
     helper = threading.Thread(target=second_call, daemon=True)
     helper.start()
     one = run(repo, *first, env=env, timeout=timeout)
     helper.join(timeout + 5.0)
-    two = box[0] if box else GitResult(["git", *second], _TIMED_OUT)
+    two = box[0] if box else GitResult(["git", *second], _TIMED_OUT)  # still running after its timeout
     return one, two
 
 

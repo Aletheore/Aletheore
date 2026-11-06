@@ -574,3 +574,69 @@ def test_python_imports_give_the_same_names_when_the_file_does_not_parse(source)
     broken = imports.python_imports(source + "def broken(:\n")
     assert parsed == broken == {"google.protobuf", "google.cloud", "google.auth", "google.api_core", "requests",
                                 "yaml", "a"}
+
+
+def test_a_helper_thread_git_call_that_raises_is_a_failed_call_not_a_timeout(tmp_path):
+    def runner(repo, *args, env=None, timeout=10.0):
+        if args[0] == "boom":
+            raise RuntimeError("patched runner broke")
+        return gitutil.GitResult(["git", *args], 0, b"ok", b"")
+
+    one, two = gitutil.run_git_pair(tmp_path, ("status",), ("boom",), runner=runner)
+    assert one.returncode == 0
+    assert two.returncode != 0 and not two.timed_out and two.call_failed
+
+
+def test_cat_file_batch_returns_files_whose_names_hold_spaces(tmp_path):
+    repo = tmp_path / "r"
+    repo.mkdir()
+    for args in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"],
+                 ["config", "commit.gpgsign", "false"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "my file.md").write_text("hello world\n", encoding="utf-8", newline="\n")
+    (repo / "plain.md").write_text("x\n", encoding="utf-8", newline="\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "c"], cwd=repo, check=True, capture_output=True)
+    found = gitutil.cat_file_batch(repo, ["HEAD:docs/my file.md", "HEAD:no such file.md", "HEAD:plain.md"])
+    assert found == {"HEAD:docs/my file.md": b"hello world\n", "HEAD:plain.md": b"x\n"}
+
+
+def _changes_repo(tmp_path):
+    repo = tmp_path / "r"
+    repo.mkdir()
+    for args in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"],
+                 ["config", "commit.gpgsign", "false"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "c"], cwd=repo, check=True, capture_output=True)
+    return repo
+
+
+def test_a_listing_git_that_cannot_be_started_marks_the_change_set_spawn_failed(tmp_path, monkeypatch):
+    repo = _changes_repo(tmp_path)
+    real = changes.run_git
+
+    def run(repo_, *args, **kwargs):
+        if args[0] == "ls-files":
+            return gitutil.GitResult(["git", *args], gitutil._SPAWN_FAILED)
+        return real(repo_, *args, **kwargs)
+
+    monkeypatch.setattr(changes, "run_git", run)
+    found = changes.compute(repo)
+    assert found.spawn_failed and not found.complete
+
+
+def test_an_odd_number_of_diff_fields_makes_the_change_set_incomplete(tmp_path, monkeypatch):
+    repo = _changes_repo(tmp_path)
+    real = changes.run_git
+
+    def run(repo_, *args, **kwargs):
+        if args[0] == "diff":
+            return gitutil.GitResult(["git", *args], 0, b"M\0a.py\0D\0", b"")  # cut short after a status
+        return real(repo_, *args, **kwargs)
+
+    monkeypatch.setattr(changes, "run_git", run)
+    found = changes.compute(repo)
+    assert "a.py" in found.changed and not found.complete
