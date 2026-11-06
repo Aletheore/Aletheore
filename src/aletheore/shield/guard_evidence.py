@@ -135,7 +135,7 @@ def record_refresh_finished(repo: Path, started: float, mtime_ns: int | None) ->
         try:
             temporary.unlink()
         except OSError as cleanup:
-            debug_note(f"could not remove {temporary}", cleanup)
+            debug_note("could not remove a temporary file", cleanup)
 
 
 def _finished_refresh_start(repo: Path) -> float | None:
@@ -206,7 +206,7 @@ def _write_marker(marker: Path, started: float) -> bool:
         except FileNotFoundError:
             pass
         except OSError as error:
-            debug_note(f"could not remove {temporary}", error)
+            debug_note("could not remove a temporary file", error)
 
 
 def _claim_marker_unlocked(marker: Path, newest_edit: float | None = None) -> bool:
@@ -336,7 +336,7 @@ def save_base_evidence(repo: Path, session_id: str) -> Path | None:
         try:
             temporary.unlink()
         except OSError as cleanup:
-            debug_note(f"could not remove {temporary}", cleanup)
+            debug_note("could not remove a temporary file", cleanup)
         return None
     return destination
 
@@ -351,7 +351,7 @@ def load_base_evidence(repo: Path, session_id: str) -> dict | None:
 
         return evidence_io.load_evidence_file(path)
     except Exception as error:  # noqa: BLE001  # corrupt, truncated or incompatible: all mean "no base"
-        debug_note(f"ignoring the unreadable base evidence {path}", error)
+        debug_note("ignoring unreadable base evidence", error)
         return None
 
 
@@ -365,7 +365,7 @@ def delete_base_evidence(repo: Path, session_id: str) -> None:
     except FileNotFoundError:
         pass
     except OSError as error:
-        debug_note(f"could not delete the base evidence {path}", error)
+        debug_note("could not delete the base evidence", error)
 
 
 BASE_EVIDENCE_MAX_AGE_S = 7 * 24 * 3600.0

@@ -239,7 +239,7 @@ class _PinCache:
             try:
                 temporary.unlink()
             except OSError as cleanup:
-                debug_note(f"could not remove {temporary}", cleanup)
+                debug_note("could not remove a temporary file", cleanup)
 
     def _remove_stale_temporaries(self) -> None:
         """Temporary files a killed hook left behind (the hard stop can end a process mid-write)."""
@@ -252,7 +252,7 @@ class _PinCache:
                     if leftover.is_file() and not leftover.is_symlink() and leftover.stat().st_mtime < cutoff:
                         leftover.unlink()
                 except OSError as error:
-                    debug_note(f"could not remove the stale temporary {leftover}", error)
+                    debug_note("could not remove a stale temporary file", error)
         except OSError as error:
             debug_note("could not list the pins cache folder", error)
 
@@ -317,7 +317,7 @@ def _base_unit_pins(
             try:
                 pins = _parse_into(Path(tmp), str(index), {n: blobs.get(b, b"") for n, b in files.items()})
             except Exception as error:  # noqa: BLE001 - an unreadable manifest declares nothing
-                debug_note(f"could not parse the base manifests of {folder}", error)
+                debug_note("could not parse the base manifests of a folder", error)
                 pins = []
             cache.put(_unit_key(files), pins)
             found[folder] = pins
@@ -345,7 +345,7 @@ def _working_unit_pins(
                     shutil.copyfile(repo / rel, unit / name)
                 found[folder] = pins_in_directory(unit)
             except Exception as error:  # noqa: BLE001
-                debug_note(f"could not parse the manifests of {folder}", error)
+                debug_note("could not parse the manifests of a folder", error)
                 unreadable.append(folder)
     return found, unreadable, True
 
@@ -629,7 +629,7 @@ def _real_installed_import_names() -> set[str]:
             try:
                 files = importlib.metadata.distribution(dist).files or []
             except Exception as error:  # noqa: BLE001
-                debug_note(f"could not list the files of {dist}", error)
+                debug_note("could not list the files of an installed distribution", error)
                 continue
             for file in files:
                 parts = file.parts
@@ -765,7 +765,7 @@ def _declared_python_names(repo: Path, working: list[str]) -> set[str]:
             elif name == "setup.cfg":
                 found |= _setup_cfg_names(_read(repo, rel) or "")
         except Exception as error:  # noqa: BLE001 - an unparseable file declares nothing
-            debug_note(f"could not read the declared names in {rel}", error)
+            debug_note("could not read the declared names in a manifest", error)
             continue
     return found
 

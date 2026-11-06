@@ -898,7 +898,7 @@ def test_a_failed_rollback_is_explained_on_stderr_only_when_debugging(tmp_path, 
     monkeypatch.setenv("ALETHEORE_HOOK_DEBUG", "1")
     with pytest.raises(OSError, match="disk full"):
         setup.apply_setup(repo)
-    assert "could not roll back a failed setup: RuntimeError: rollback broke" in capsys.readouterr().err
+    assert "could not roll back a failed setup: RuntimeError\n" in capsys.readouterr().err  # class only, never the text
 
 
 def test_apply_with_the_approved_plan_writes_it(tmp_path):

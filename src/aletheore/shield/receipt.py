@@ -249,7 +249,7 @@ def _prune(directory: Path, repo: Path, now: datetime, keep_name: str) -> None:
         try:
             path.unlink()
         except OSError as error:
-            debug_note(f"could not remove the old receipt {path}", error)
+            debug_note("could not remove an old receipt", error)
 
 
 def _wall_clock() -> datetime:
@@ -278,7 +278,7 @@ def write_receipt(repo: Path, receipt: Receipt, *, now: datetime | None = None) 
         try:
             os.unlink(temp_name)
         except OSError as error:
-            debug_note(f"could not remove {temp_name}", error)
+            debug_note("could not remove a temporary file", error)
         raise
     try:
         _prune(directory, repo, _utc(now) if now is not None else _wall_clock(), target.name)

@@ -1,3 +1,4 @@
+import io
 import os
 import stat
 import subprocess
@@ -161,3 +162,25 @@ def test_atomic_write_replaces_a_symlink_itself_and_never_writes_through_it(tmp_
     fsutil.atomic_write_text(link, "ours")
     assert not link.is_symlink() and link.read_text(encoding="utf-8") == "ours"
     assert outside.read_text(encoding="utf-8") == "theirs"
+
+
+# ---- debug_note ---------------------------------------------------------------------------------------------------
+
+
+def test_debug_note_prints_the_error_class_only_never_its_text(monkeypatch, capsys):
+    # An exception's text can carry a path, a token or file content; only its class is ever written.
+    monkeypatch.setenv("ALETHEORE_HOOK_DEBUG", "1")
+    fsutil.debug_note("could not read the cache", OSError(2, "No such file", "/home/u/.secret-token-abc"))
+    err = capsys.readouterr().err
+    assert err == "aletheore shield: could not read the cache: FileNotFoundError\n"
+
+
+def test_debug_note_is_silent_without_the_debug_variable_and_survives_a_closed_stderr(monkeypatch, capsys):
+    monkeypatch.delenv("ALETHEORE_HOOK_DEBUG", raising=False)
+    fsutil.debug_note("anything", ValueError("x"))
+    assert capsys.readouterr().err == ""
+    monkeypatch.setenv("ALETHEORE_HOOK_DEBUG", "1")
+    closed = io.StringIO()
+    closed.close()
+    monkeypatch.setattr(fsutil.sys, "stderr", closed)
+    fsutil.debug_note("anything", ValueError("x"))  # nowhere to report it; never raises

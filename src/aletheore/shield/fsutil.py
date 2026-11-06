@@ -10,7 +10,8 @@ Everything here is stdlib only and imports nothing heavy, so the per-edit hook c
   open; it is retried for a moment before giving up. A symbolic link at the target is replaced by the new file, never
   written through, so a link pointing outside the repository cannot redirect the write. Temporary files a killed
   writer left next to the target more than an hour ago are removed on the next write.
-- `debug_note` explains a swallowed error on stderr when ALETHEORE_HOOK_DEBUG is set, and does nothing otherwise.
+- `debug_note` names a swallowed error (its class only) on stderr when ALETHEORE_HOOK_DEBUG is set, and does nothing
+  otherwise.
   Stdout carries the hook protocol's JSON and is never written here.
 """
 
@@ -28,14 +29,15 @@ _RETRY_REPLACE = os.name == "nt"
 
 
 def debug_note(what: str, error: BaseException | None = None) -> None:
-    """One `aletheore shield: <what>[: <error type>: <error>]` line on stderr, only under ALETHEORE_HOOK_DEBUG."""
+    """One `aletheore shield: <what>[: <error class>]` line on stderr, only under ALETHEORE_HOOK_DEBUG. `what` is a
+    fixed message and only the error's class is written: an error's text can carry a path, a token or file content."""
     if not os.environ.get("ALETHEORE_HOOK_DEBUG"):
         return
+    detail = f": {type(error).__name__}" if error is not None else ""
     try:
-        detail = f": {type(error).__name__}: {error}" if error is not None else ""
         sys.stderr.write(f"aletheore shield: {what}{detail}\n")
-    except Exception:  # noqa: BLE001 - a broken stderr must not break the caller either  # nosec B110
-        pass
+    except (OSError, ValueError, AttributeError):
+        return  # stderr is closed, broken or missing: there is nowhere left to report anything, and the caller goes on
 
 
 # ---- atomic replace -------------------------------------------------------------------------------------------------
@@ -91,7 +93,7 @@ def atomic_write_text(path: Path, text: str, *, mode: int = 0o644, cleanup: bool
         try:
             os.unlink(temporary)
         except OSError as error:
-            debug_note(f"could not remove the temporary file {temporary}", error)
+            debug_note("could not remove a temporary file", error)
         raise
 
 
@@ -116,5 +118,5 @@ def remove_older_than(folder: Path, prefixes: tuple[str, ...], suffixes: tuple[s
             os.unlink(entry.path)
             removed += 1
         except OSError as error:
-            debug_note(f"could not remove the old file {entry.path}", error)
+            debug_note("could not remove an old file", error)
     return removed

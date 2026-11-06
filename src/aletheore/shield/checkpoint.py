@@ -1067,7 +1067,7 @@ def _remove_quietly(path: str) -> None:
         if os.path.lexists(path):
             os.remove(path)
     except OSError as error:
-        debug_note(f"could not remove {path}", error)
+        debug_note("could not remove a file", error)
 
 
 def _remove_empty_folders(created: list[str]) -> None:
