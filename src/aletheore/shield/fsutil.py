@@ -5,8 +5,11 @@ Locks are not here: every read-modify-write takes `locking.file_lock`, a bounded
 Everything here is stdlib only and imports nothing heavy, so the per-edit hook can use it without cost.
 
 - `atomic_write_text` writes a temporary file in the target's folder and moves it into place with `os.replace`, so a
-  reader sees the old file or the new one, never a torn one. On POSIX the replaced file keeps its permission bits and
-  a new file gets `mode` (0644 by default, less the umask read at import). On Windows `mode` is not applied: the file
+  reader sees the old file or the new one, never a torn one. On POSIX a private `mode` (no group or other bits, such as
+  0600) is applied exactly, to a new file and to an existing one alike, so the umask never matters for it and a
+  looser file an older version wrote is tightened. Any other `mode` (0644 by default): the replaced file keeps its
+  permission bits and a new file gets `mode` less the umask read once at import (setting the umask to read it is
+  not thread-safe), so a umask the host process sets after import does not apply to those. On Windows `mode` is not applied: the file
   is a `tempfile.mkstemp` file moved into place, so it has the folder's inherited ACL and the read-only bit clear,
   readable by whoever can read that folder. On Windows `os.replace` fails while another process has the target
   open; it is retried for a moment before giving up. A symbolic link at the target is replaced by the new file, never
@@ -92,8 +95,8 @@ _UMASK = _read_umask()
 
 def atomic_write_text(path: Path, text: str, *, mode: int = 0o644, cleanup: bool = True) -> None:
     """Replace `path` with `text` (UTF-8, "\\n" line ends) in one step. Raises OSError; never leaves its temporary
-    file behind. On POSIX an existing file keeps its permission bits and a new one gets `mode` less the umask; on
-    Windows `mode` is not applied (see the module docstring). `cleanup` removes
+    file behind. On POSIX a private `mode` is applied exactly; otherwise an existing file keeps its permission bits and
+    a new one gets `mode` less the umask; on Windows `mode` is not applied (see the module docstring). `cleanup` removes
     this file's temporaries left by killed writers over an hour ago (one folder listing)."""
     path = Path(path)
     if cleanup:
@@ -103,8 +106,12 @@ def atomic_write_text(path: Path, text: str, *, mode: int = 0o644, cleanup: bool
         with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as out:
             out.write(text)
         if os.name != "nt":
-            existing = _existing_mode(path)
-            os.chmod(temporary, existing if existing is not None else mode & ~_UMASK)
+            if not mode & 0o077:
+                target_mode = mode  # private: exactly this, whatever the umask, and an older looser file is tightened
+            else:
+                existing = _existing_mode(path)
+                target_mode = existing if existing is not None else mode & ~_UMASK
+            os.chmod(temporary, target_mode)  # mkstemp made it 0600 and only this process knows its name
         _replace(temporary, path)
     except BaseException:
         try:

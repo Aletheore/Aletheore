@@ -351,3 +351,14 @@ def test_registry_cache_file_is_private(tmp_path):
 
     _lookup(tmp_path, "PyPI", "no-such-pkg", _http_error("u", 404))
     assert stat.S_IMODE((tmp_path / "reg.json").stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes; on Windows the folder's ACL applies")
+def test_an_older_world_readable_registry_cache_is_tightened_on_the_next_write(tmp_path):
+    import stat
+
+    cache = tmp_path / "reg.json"
+    cache.write_text("{}", encoding="utf-8")
+    cache.chmod(0o644)
+    _lookup(tmp_path, "PyPI", "no-such-pkg", _http_error("u", 404))
+    assert stat.S_IMODE(cache.stat().st_mode) == 0o600

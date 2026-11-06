@@ -224,3 +224,22 @@ def test_atomic_write_never_changes_the_process_umask(tmp_path, monkeypatch):
     assert stat.S_IMODE((tmp_path / "new.json").stat().st_mode) == 0o644 & ~current
     fsutil.atomic_write_text(tmp_path / "private.json", "{}", mode=0o600)
     assert stat.S_IMODE((tmp_path / "private.json").stat().st_mode) == 0o600 & ~current
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
+def test_a_private_file_gets_exactly_its_mode_whatever_the_umask_and_an_existing_looser_file_is_tightened(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(fsutil, "_UMASK", 0o077)  # a umask the host set after import has no say in private files
+    fsutil.atomic_write_text(tmp_path / "shared.json", "{}")
+    assert stat.S_IMODE((tmp_path / "shared.json").stat().st_mode) == 0o600  # 0644 less the cached umask
+    monkeypatch.setattr(fsutil, "_UMASK", 0o000)
+    old = tmp_path / "cache.json"
+    old.write_text("{}", encoding="utf-8")
+    old.chmod(0o644)  # written by an older version
+    fsutil.atomic_write_text(old, "{}", mode=0o600)
+    assert stat.S_IMODE(old.stat().st_mode) == 0o600
+    kept = tmp_path / "config.json"
+    kept.write_text("{}", encoding="utf-8")
+    kept.chmod(0o640)
+    fsutil.atomic_write_text(kept, "{}")
+    assert stat.S_IMODE(kept.stat().st_mode) == 0o640  # a non-private file keeps the bits it had
