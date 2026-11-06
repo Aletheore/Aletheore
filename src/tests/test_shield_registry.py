@@ -1,6 +1,7 @@
 import http.client
 import io
 import json
+import os
 import socket
 import urllib.error
 import urllib.request
@@ -342,3 +343,11 @@ def test_popular_packages_file_is_in_the_form_its_regeneration_script_writes():
     assert set(data) == {"source", "generated", "pypi", "npm"}
     for ecosystem in ("pypi", "npm"):
         assert len(data[ecosystem]) == 1000 == len(set(data[ecosystem]))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
+def test_registry_cache_file_is_private(tmp_path):
+    import stat
+
+    _lookup(tmp_path, "PyPI", "no-such-pkg", _http_error("u", 404))
+    assert stat.S_IMODE((tmp_path / "reg.json").stat().st_mode) == 0o600

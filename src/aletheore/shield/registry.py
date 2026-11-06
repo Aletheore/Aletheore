@@ -140,7 +140,7 @@ def _write_cache_unlocked(path: Path, key: str, info: RegistryInfo, now: datetim
         size += entry_size + (2 if cache else 0)
         cache[name] = entry
     try:
-        atomic_write_text(path, json.dumps(cache))
+        atomic_write_text(path, json.dumps(cache), mode=0o600)  # names the user's code depends on: private
     except OSError as error:
         debug_note("could not write the registry cache", error)
 

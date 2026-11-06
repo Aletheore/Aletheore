@@ -208,3 +208,19 @@ def test_a_failed_unlock_still_closes_the_lock_file_and_is_noted_when_debugging(
     if handle_count is not None:
         assert len(os.listdir("/dev/fd")) < handle_count
     assert "could not unlock" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
+def test_atomic_write_never_changes_the_process_umask(tmp_path, monkeypatch):
+    # Setting the umask, even for a moment, would race with any other thread creating a file (run_git_pair has one).
+    current = os.umask(0o022)
+    os.umask(current)
+
+    def no_umask(_value):
+        raise AssertionError("os.umask called while writing")
+
+    monkeypatch.setattr(fsutil.os, "umask", no_umask)
+    fsutil.atomic_write_text(tmp_path / "new.json", "{}")
+    assert stat.S_IMODE((tmp_path / "new.json").stat().st_mode) == 0o644 & ~current
+    fsutil.atomic_write_text(tmp_path / "private.json", "{}", mode=0o600)
+    assert stat.S_IMODE((tmp_path / "private.json").stat().st_mode) == 0o600 & ~current

@@ -5,8 +5,10 @@ Locks are not here: every read-modify-write takes `locking.file_lock`, a bounded
 Everything here is stdlib only and imports nothing heavy, so the per-edit hook can use it without cost.
 
 - `atomic_write_text` writes a temporary file in the target's folder and moves it into place with `os.replace`, so a
-  reader sees the old file or the new one, never a torn one. The replaced file keeps its permission bits; a new file
-  gets `mode` (0644 by default, less the umask). On Windows `os.replace` fails while another process has the target
+  reader sees the old file or the new one, never a torn one. On POSIX the replaced file keeps its permission bits and
+  a new file gets `mode` (0644 by default, less the umask read at import). On Windows `mode` is not applied: the file
+  is a `tempfile.mkstemp` file moved into place, so it has the folder's inherited ACL and the read-only bit clear,
+  readable by whoever can read that folder. On Windows `os.replace` fails while another process has the target
   open; it is retried for a moment before giving up. A symbolic link at the target is replaced by the new file, never
   written through, so a link pointing outside the repository cannot redirect the write. Temporary files a killed
   writer left next to the target more than an hour ago are removed on the next write.
@@ -67,16 +69,31 @@ def _existing_mode(path: Path) -> int | None:
     return stat.S_IMODE(info.st_mode) if stat.S_ISREG(info.st_mode) else None
 
 
-def _umask() -> int:
-    # Reading the umask means setting it; this is the usual way and is restored at once.
-    current = os.umask(0)
+def _read_umask() -> int:
+    """The process umask, read once when this module is imported. On Linux it is read from /proc without changing
+    it; elsewhere the only way is to set it and set it back, which is done here, at import, and never again while
+    other threads (run_git_pair's helper) may be creating files."""
+    if os.name == "nt":
+        return 0
+    try:
+        with open("/proc/self/status", encoding="ascii", errors="replace") as status:
+            for line in status:
+                if line.startswith("Umask:"):
+                    return int(line.split()[1], 8)
+    except (OSError, ValueError, IndexError):
+        pass  # no /proc (macOS, BSD) or an unexpected format: fall back to reading it by setting it
+    current = os.umask(0o022)
     os.umask(current)
     return current
 
 
+_UMASK = _read_umask()
+
+
 def atomic_write_text(path: Path, text: str, *, mode: int = 0o644, cleanup: bool = True) -> None:
     """Replace `path` with `text` (UTF-8, "\\n" line ends) in one step. Raises OSError; never leaves its temporary
-    file behind. An existing file keeps its permission bits; a new one gets `mode` less the umask. `cleanup` removes
+    file behind. On POSIX an existing file keeps its permission bits and a new one gets `mode` less the umask; on
+    Windows `mode` is not applied (see the module docstring). `cleanup` removes
     this file's temporaries left by killed writers over an hour ago (one folder listing)."""
     path = Path(path)
     if cleanup:
@@ -87,7 +104,7 @@ def atomic_write_text(path: Path, text: str, *, mode: int = 0o644, cleanup: bool
             out.write(text)
         if os.name != "nt":
             existing = _existing_mode(path)
-            os.chmod(temporary, existing if existing is not None else mode & ~_umask())
+            os.chmod(temporary, existing if existing is not None else mode & ~_UMASK)
         _replace(temporary, path)
     except BaseException:
         try:
