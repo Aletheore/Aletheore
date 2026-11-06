@@ -184,3 +184,27 @@ def test_debug_note_is_silent_without_the_debug_variable_and_survives_a_closed_s
     closed.close()
     monkeypatch.setattr(fsutil.sys, "stderr", closed)
     fsutil.debug_note("anything", ValueError("x"))  # nowhere to report it; never raises
+
+
+@pytest.mark.skipif(os.name == "nt", reason="fcntl")
+def test_a_failed_unlock_still_closes_the_lock_file_and_is_noted_when_debugging(tmp_path, monkeypatch, capsys):
+    import fcntl
+
+    real = fcntl.flock
+
+    def flock(handle, operation):
+        if operation == fcntl.LOCK_UN:
+            raise OSError(5, "unlock failed")
+        return real(handle, operation)
+
+    monkeypatch.setenv("ALETHEORE_HOOK_DEBUG", "1")
+    monkeypatch.setattr(fcntl, "flock", flock)
+    with locking.file_lock(tmp_path / "x.lock") as acquired:
+        assert acquired
+        handle_count = len(os.listdir("/dev/fd")) if os.path.isdir("/dev/fd") else None
+    monkeypatch.setattr(fcntl, "flock", real)
+    with locking.file_lock(tmp_path / "x.lock", timeout=0.0) as again:
+        assert again  # closing the file released the lock
+    if handle_count is not None:
+        assert len(os.listdir("/dev/fd")) < handle_count
+    assert "could not unlock" in capsys.readouterr().err

@@ -55,6 +55,9 @@ def file_lock(path: Path, timeout: float = 0.25):
             if acquired:
                 try:
                     unlock()
-                except OSError:
-                    # Closing this handle also releases the OS lock; preserve the body's outcome.
-                    pass
+                except OSError as error:
+                    # The enclosing `with` closes the handle whatever happens here, and closing it releases the OS
+                    # lock (flock and msvcrt locks belong to the open file); the body's own outcome is kept.
+                    from aletheore.shield.fsutil import debug_note
+
+                    debug_note("could not unlock; closing the lock file releases it", error)
