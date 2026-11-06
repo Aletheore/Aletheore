@@ -266,7 +266,8 @@ def start_background_refresh(
 
     A changed file that no longer exists has no modification time. When it is one of `scanned_modules` (the evidence
     still lists it), the evidence predates its deletion, so it always counts as a reason to refresh (still at most
-    once per marker window).
+    once per marker window), even when every changed file was deleted; one the scan never listed is no reason. A
+    rescan drops a deleted file from the evidence, so it stops being a reason once a refresh has run.
     """
     repo = Path(repo)
     evidence_file = repo / _EVIDENCE_REL
@@ -282,10 +283,13 @@ def start_background_refresh(
         reference = _scan_time(scanned_at)
         if reference is None:
             reference = evidence_time  # written at the end of the scan, so never earlier than scanned_at
+        if not deleted_in_scan:  # a deleted file the scan still lists is a reason on its own, whatever else changed
+            if not edit_times:
+                return False  # every changed file is gone and the scan never listed any of them: nothing is stale
+            if _covered_until(repo, reference) >= max(edit_times):
+                return False
         if edit_times:
             newest_edit = max(edit_times)
-            if not deleted_in_scan and _covered_until(repo, reference) >= newest_edit:
-                return False
     marker = state.shield_dir(repo) / _MARKER_NAME
     try:
         state.shield_dir(repo, create=True)

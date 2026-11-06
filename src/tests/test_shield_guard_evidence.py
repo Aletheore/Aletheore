@@ -888,3 +888,32 @@ def test_a_deleted_cycle_member_and_an_unrelated_new_file_closing_a_loop_is_a_ne
     _write_evidence(repo, _evidence(_ring(["a.py", "c.py"])))
     findings, _ = evidence_checks(repo, ["a.py", "b.py", "c.py"], _evidence(_ring(["a.py", "b.py"])))
     assert any("import cycle" in f.message and "c.py" in f.message for f in findings), findings
+
+
+def test_a_refresh_starts_when_every_changed_file_was_deleted_and_the_scan_still_lists_one(repo, no_spawn):
+    _write_evidence(repo, _evidence(_core_modules()))
+    known = {"app/core.py", "app/api.py"}
+    assert guard_evidence.start_background_refresh(repo, ["app/api.py"], scanned_modules=known) is True
+    assert len(no_spawn) == 1
+
+
+def test_no_refresh_when_every_changed_file_was_deleted_and_the_scan_never_listed_them(repo, no_spawn):
+    _write_evidence(repo, _evidence(_core_modules()))
+    known = {"app/core.py"}
+    assert guard_evidence.start_background_refresh(repo, ["notes/gone.py"], scanned_modules=known) is False
+    assert guard_evidence.start_background_refresh(repo, ["notes/gone.py"]) is False
+    assert no_spawn == []
+
+
+def test_a_deleted_file_stops_asking_for_refreshes_once_a_rescan_dropped_it(repo, monkeypatch):
+    asked = []
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda *a, **k: asked.append(a) or True)
+    _write_evidence(repo, _evidence(_core_modules()))  # still lists app/api.py, which is gone
+    evidence_checks(repo, ["app/api.py"], None)
+    assert len(asked) == 1
+    rescanned = _evidence([m for m in _core_modules() if m["path"] != "app/api.py"])  # what a rescan writes
+    _write_evidence(repo, rescanned)
+    for _ in range(3):  # every later edit: no refresh loop
+        _, not_checked = evidence_checks(repo, ["app/api.py", "app/core.py"], None)
+        assert not any("older than" in reason for reason in not_checked)
+    assert len(asked) == 1
