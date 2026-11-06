@@ -786,3 +786,37 @@ def test_more_alternative_providers_satisfy_an_import(imp, declared):
     ref = _deps._import_ref(imp, "a.py", True, _deps._Facts(set(), set(), set(), set(), set(), {}),
                             _deps._import_map(), set(), {_deps._norm_py(declared)}, set())
     assert ref is None
+
+
+@pytest.mark.parametrize("cut", ["budget", "git"])
+def test_imports_are_not_reported_new_against_a_base_that_was_only_partly_read(tmp_path, monkeypatch, cut):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n", "a.py": "x = 1\n"})
+    _write(repo, "requirements.txt", "requests==2.0\nfastjsonx==1.0\n")
+    _write(repo, "a.py", "import zzqfromimport\n")
+    if cut == "git":
+        monkeypatch.setattr(_deps, "_base_units", lambda *a, **k: None)
+    else:
+        monkeypatch.setattr(_deps, "_base_unit_pins", lambda *a, **k: ({}, False))
+    refs, not_checked = added_dependencies(repo)
+    assert refs == []
+    assert any(n.name == "zzqfromimport" and "base" in n.reason for n in not_checked), not_checked
+
+
+def test_a_git_spec_replaced_by_a_registry_spec_of_the_same_name_is_a_new_registry_dependency(tmp_path):
+    repo = _init(tmp_path / "r", {"package.json": json.dumps({"name": "app", "dependencies": {"zzq-thing": "github:u/zzq-thing"}})})
+    _write(repo, "package.json", json.dumps({"name": "app", "dependencies": {"zzq-thing": "^1.2.0"}}))
+    refs, _ = added_dependencies(repo)
+    assert DepRef("npm", "zzq-thing", "manifest", "package.json") in refs
+
+
+def test_an_unreadable_base_package_json_is_reported_as_not_checked(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", {"package.json": json.dumps({"name": "app", "dependencies": {"left-pad": "1.0.0"}})})
+    _write(repo, "package.json", json.dumps({"name": "app", "dependencies": {"left-pad": "1.0.0", "zzq-new": "1.0.0"}}))
+    real = _deps.cat_file_batch
+    monkeypatch.setattr(_deps, "cat_file_batch",
+                        lambda repo_, objects, **k: None if any(o.endswith(":package.json") for o in objects)
+                        else real(repo_, objects, **k))
+    monkeypatch.setattr(_deps, "_manifest_pins", lambda *a, **k: ([], {}, [], True))  # the pins stage succeeded
+    refs, not_checked = added_dependencies(repo)
+    assert not any(r.name == "zzq-new" for r in refs)
+    assert any("package.json" in n.reason for n in not_checked), not_checked

@@ -66,6 +66,9 @@ TIME_BUDGET_MANIFESTS = "time budget reached; new manifest dependencies were not
 TIME_BUDGET_IMPORTS = "time budget reached; new imports were not checked"
 GIT_FAILED_MANIFESTS = "git did not answer; new manifest dependencies were not compared with the base"
 GIT_FAILED_IMPORTS = "git did not answer; new imports were not checked"
+TIME_BUDGET_PACKAGE_JSON = "time budget reached; changed package.json entries were not compared with the base"
+GIT_FAILED_PACKAGE_JSON = "git did not answer; changed package.json entries were not compared with the base"
+PARTIAL_BASE_IMPORT = "the base manifests were not read in full, so this import could not be proven new"
 
 
 def _why_stopped(budget: Budget, timed_out: str, failed: str) -> str:
@@ -524,7 +527,7 @@ def _package_json_changes(
         asked = {f"{change.base_commit}:{rel}": rel for rel in rels if rel not in untracked}
         found = cat_file_batch(repo, list(asked), timeout=budget.timeout(_GIT_TIMEOUT_S)) if asked else {}
         if found is None:
-            return [], []  # the caller already reports the base as unknown when git fails
+            return [], [NotChecked("", _why_stopped(budget, TIME_BUDGET_PACKAGE_JSON, GIT_FAILED_PACKAGE_JSON))]
         base = {asked[name]: data for name, data in found.items()}
     refs: list[DepRef] = []
     not_checked: list[NotChecked] = []
@@ -543,8 +546,8 @@ def _package_json_changes(
             real = target if kind == "alias" else name
             if old is not None:
                 old_kind, old_target = _npm_spec_kind(old)
-                if (old_target if old_kind == "alias" else name) == real:
-                    continue  # the same package as before, perhaps another version
+                if old_kind != "remote" and (old_target if old_kind == "alias" else name) == real:
+                    continue  # the same package as before, perhaps another version (a git or URL spec is not)
             if ("npm", real.lower()) in known:
                 continue
             refs.append(DepRef("npm", real, "manifest", rel))
@@ -868,8 +871,10 @@ def added_dependencies(
     owners_by_pin: dict = {}
     base_pins: list = []
     npm_refs: list[DepRef] = []
+    base_complete = True  # False when the base manifests were only partly read (budget or git)
     if any(_is_manifest(rel) and not _skipped_dir(rel) for rel in change.changed):
         pins_now, owners_by_pin, base_pins, complete = _manifest_pins(repo, change, working, budget, not_checked)
+        base_complete = complete
         if complete:
             base_known = {(eco, _norm(eco, name)) for name, _v, eco in base_pins}
             npm_refs, remote = _package_json_changes(
@@ -923,6 +928,7 @@ def added_dependencies(
         sources, base_texts = [], {}
     import_map = _import_map()
     installed = _LazyNames(_installed_import_names)
+    unproven: dict[str, None] = {}
     for rel in sources:
         is_py = rel.lower().endswith(imports.PY_SUFFIXES)
         text = _read(repo, rel)
@@ -949,7 +955,12 @@ def added_dependencies(
                 continue
             ref = _import_ref(imp, rel, is_py, facts, import_map, installed, declared_py, declared_npm)
             if ref and (ref.ecosystem, _norm(ref.ecosystem, ref.name)) not in known:
+                if not base_complete:  # it may be declared in a base manifest that was not read
+                    unproven.setdefault(ref.name, None)
+                    continue
                 candidates.setdefault((ref.ecosystem, _norm(ref.ecosystem, ref.name)), ref)
+    for name in unproven:
+        not_checked.append(NotChecked(name, PARTIAL_BASE_IMPORT))
 
     refs: list[DepRef] = []
     for eco in ("PyPI", "npm"):
