@@ -247,8 +247,10 @@ def _list_candidates(
 def _under_symlink(top: Path, path: str, cache: dict[str, bool]) -> bool:
     """True when a parent folder of path is a symbolic link; git refuses paths "beyond a symbolic link".
 
-    `cache` maps a folder to "this folder or one above it is a link", so each folder is looked at once and a file
-    costs one dictionary lookup."""
+    `cache` maps a folder to "this folder or one above it is a link" (transitive, not "this exact folder is a
+    link"), so each folder is looked at once and a file costs one dictionary lookup. It must start empty and belong
+    to one `_select` call (its only caller): a dict filled with other meanings, or shared across trees, gives wrong
+    answers."""
     parent = path.rpartition("/")[0]
     if not parent:
         return False

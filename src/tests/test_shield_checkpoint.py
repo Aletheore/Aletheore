@@ -671,3 +671,16 @@ def test_a_checkpoint_sits_on_the_head_of_the_moment_it_is_stored_not_of_an_earl
     made = cp.take_checkpoint(repo, "s1", checked=checked, force=True)
     assert made is not None
     assert _git(repo, "rev-parse", f"{made.commit}^").decode().strip() == head
+
+
+def test_the_layout_from_the_repo_state_probe_equals_the_layout_git_gives_for_worktrees_and_submodules(tmp_path):
+    main = _init(tmp_path / "main")
+    _git(main, "worktree", "add", "-q", str(tmp_path / "linked"), "-b", "side")
+    sub_origin = _init(tmp_path / "sub-origin")
+    _git(main, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub_origin), "vendor/sub")
+    _git(main, "commit", "-q", "-m", "add submodule")
+    for where in (main, tmp_path / "linked", main / "vendor" / "sub", main / "vendor"):
+        fast = cp._layout_from(cp.repo_state(where))
+        assert fast is not None and fast == cp._layout(where), where
+    assert cp._layout(tmp_path / "linked").worktree == "linked"
+    assert cp._layout(main / "vendor" / "sub").worktree == ""  # a submodule's git dir is its own common dir
