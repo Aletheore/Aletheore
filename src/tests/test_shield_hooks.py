@@ -204,9 +204,12 @@ def test_pre_edit_warm_path_asks_git_each_question_once(tmp_path, monkeypatch):
     monkeypatch.setattr(gitutil, "run_git", real_git)
     monkeypatch.setattr(cp, "run_git", real_git)
     assert len(_checkpoints(repo)) == 2
-    assert calls.count("rev-parse") == 3  # where the file is, the repository probe, HEAD
+    # where the file is, the repository probe, HEAD, and HEAD again right before the commit (its parent must be
+    # HEAD at that moment, not at the probe)
+    assert calls.count("rev-parse") == 4
     assert sorted(calls) == sorted([
-        "rev-parse", "rev-parse", "symbolic-ref", "rev-parse", "for-each-ref", "cat-file", "ls-files", "ls-files",
+        "rev-parse", "rev-parse", "symbolic-ref", "rev-parse", "rev-parse", "for-each-ref", "cat-file", "ls-files",
+        "ls-files",
         "update-index", "write-tree", "commit-tree", "update-ref",
     ])
 

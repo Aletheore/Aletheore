@@ -431,4 +431,4 @@ def test_a_swallowed_prune_failure_is_explained_on_stderr_only_when_debugging(tm
     receipt.write_receipt(repo, receipt.Receipt("s2", T0, (), _empty_report(), None))
     out, err = capsys.readouterr()
     assert out == ""
-    assert err == "aletheore shield: could not prune old receipts: OSError: disk says no\n"
+    assert err == "aletheore shield: could not prune old receipts: OSError\n"  # the class only, never the text
