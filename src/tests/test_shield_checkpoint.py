@@ -659,3 +659,15 @@ def test_latest_lookup_reads_one_body_and_refs_carry_worktree(tmp_path, monkeypa
     monkeypatch.setattr(cp, "_load", counting)
     assert cp.list_checkpoints(main, limit=1) == [made[-1]]
     assert loaded == [1]
+
+
+def test_a_checkpoint_sits_on_the_head_of_the_moment_it_is_stored_not_of_an_earlier_probe(tmp_path):
+    repo = _init(tmp_path / "r")
+    checked = cp.repo_state(repo)  # the caller's probe ...
+    (repo / "b.txt").write_text("b\n", newline="\n")
+    _git(repo, "add", "b.txt")
+    _git(repo, "commit", "-q", "-m", "meanwhile")  # ... and a commit made before the checkpoint is stored
+    head = _git(repo, "rev-parse", "HEAD").decode().strip()
+    made = cp.take_checkpoint(repo, "s1", checked=checked, force=True)
+    assert made is not None
+    assert _git(repo, "rev-parse", f"{made.commit}^").decode().strip() == head

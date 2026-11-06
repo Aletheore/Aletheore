@@ -601,13 +601,9 @@ def _store(
     session_id: str,
     created_at: datetime,
     snapshot: _Snapshot,
-    parent: str | None = None,
 ) -> Checkpoint | None:
-    if parent is None:
-        head = run_git(layout.top, "rev-parse", "-q", "--verify", "HEAD^{commit}")
-        parent = (
-            head.stdout.decode("ascii", "replace").strip() if head.returncode == 0 else ""
-        )
+    head = run_git(layout.top, "rev-parse", "-q", "--verify", "HEAD^{commit}")  # HEAD now, not at an earlier probe
+    parent = head.stdout.decode("ascii", "replace").strip() if head.returncode == 0 else ""
     stamp = f"@{int(created_at.timestamp())} +0000"
     env = {**_IDENT_ENV, "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp}
     prefix = (
@@ -679,7 +675,7 @@ def take_checkpoint(
     checked = checked if checked is not None else repo_state(repo)
     if not checked.ok:
         return None
-    # The repo_state probe already answered what _layout asks, and HEAD: two git calls fewer per checkpoint.
+    # The repo_state probe already answered what _layout asks: one git call fewer per checkpoint.
     layout = _layout_from(checked) or _layout(repo)
     if layout is None:
         return None
@@ -697,7 +693,8 @@ def take_checkpoint(
             return None
         if latest is not None and snapshot.tree == latest.tree:
             return None
-        return _store(layout, scratch, session_id, created_at, snapshot, checked.head if checked.top else None)
+        # HEAD is resolved again inside _store: a commit made since the caller's probe must be the parent.
+        return _store(layout, scratch, session_id, created_at, snapshot)
 
 
 def prune_checkpoints(
