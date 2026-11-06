@@ -45,6 +45,25 @@ def same_file_name(gone: str, came: str) -> bool:
     return _basename(gone) == _basename(came)
 
 
+def _each_became_a_distinct_file(removed: list[str], added: list[str], renamed: Callable[[str, str], bool]) -> bool:
+    """Whether every removed member can be paired with its own added file that `renamed` accepts (a one-to-one
+    matching, found with augmenting paths: two deleted files can never both have become the same new one)."""
+    accepted = {gone: [came for came in added if renamed(gone, came)] for gone in removed}
+    owner: dict[str, str] = {}
+
+    def assign(gone: str, seen: set[str]) -> bool:
+        for came in accepted[gone]:
+            if came in seen:
+                continue
+            seen.add(came)
+            if came not in owner or assign(owner[came], seen):
+                owner[came] = gone
+                return True
+        return False
+
+    return all(assign(gone, set()) for gone in removed)
+
+
 def _familiar(
     group: set[str], old_groups: list[set[str]], old_paths: set[str], new_paths: set[str],
     renamed: Callable[[str, str], bool] = same_file_name,
@@ -55,7 +74,7 @@ def _familiar(
       from another start module. A group joining two or more old groups into one loop is new.
     - It meets exactly one old group, files of that group were deleted and files new to the repository joined, every
       member of the old group that still exists is still in the loop, and `renamed(gone, came)` says each deleted
-      member became one of the new files: members were renamed or moved. The graph alone cannot tell a rename from a
+      member became a new file of its own (one to one): members were renamed or moved. The graph alone cannot tell a rename from a
       deleted member plus an unrelated new file closing the loop, so without that a group is new. When a surviving
       member left the loop, the new file closed a different loop and the group is new.
     - It meets no old group, but an old group was moved whole (`git mv pkg new`): none of its files is left, every
@@ -71,7 +90,7 @@ def _familiar(
         removed = old - new_paths
         added = group - old_paths
         return (bool(removed) and bool(added) and (old - removed) <= group
-                and all(any(renamed(gone, came) for came in sorted(added)) for gone in sorted(removed)))
+                and _each_became_a_distinct_file(sorted(removed), sorted(added), renamed))
     added = group - old_paths
     if added != group:
         return False

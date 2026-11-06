@@ -674,3 +674,16 @@ def test_a_git_call_that_raised_is_a_failure_to_every_consumer(tmp_path, monkeyp
     monkeypatch.setattr(changes, "run_git", run)
     found = changes.compute(repo)
     assert not found.complete and not found.spawn_failed
+
+
+def test_two_deleted_cycle_members_cannot_both_have_become_the_same_new_file():
+    # Old a -> b -> c -> d -> a. c.py and d.py are deleted and one new pkg/c.py closes the loop: only one of them can
+    # have been renamed to it, so the loop is new.
+    old = _graph({'a.py': ['b.py'], 'b.py': ['c.py'], 'c.py': ['d.py'], 'd.py': ['a.py']})
+    new = _graph({'a.py': ['b.py'], 'b.py': ['pkg/c.py'], 'pkg/c.py': ['a.py']})
+    anything = lambda gone, came: True  # noqa: E731 - a judge that would accept every pair
+    assert [c['members'] for c in new_cycles(old, new, renamed=anything)] == [['a.py', 'b.py', 'pkg/c.py']]
+    # Two deleted members, two new files: a one-to-one pairing exists even when the first guess would block it.
+    new2 = _graph({'a.py': ['b.py'], 'b.py': ['x.py'], 'x.py': ['y.py'], 'y.py': ['a.py']})
+    pairs = {('c.py', 'x.py'), ('c.py', 'y.py'), ('d.py', 'x.py')}
+    assert new_cycles(old, new2, renamed=lambda gone, came: (gone, came) in pairs) == []
