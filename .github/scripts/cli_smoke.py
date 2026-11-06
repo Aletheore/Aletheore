@@ -25,6 +25,7 @@ WIN = sys.platform == "win32"
 # drawing. Escape them rather than crash before the failure is printed.
 sys.stdout.reconfigure(errors="backslashreplace")
 EXE = shutil.which("aletheore")
+GIT = shutil.which("git") or "git"  # an absolute path, so no current directory or relative PATH entry is searched
 ROOT = Path(tempfile.mkdtemp(prefix="aletheore-smoke-"))
 HOME = ROOT / "home"
 HOME.mkdir()
@@ -125,7 +126,7 @@ repo = ROOT / "repo with spaces"
 (repo / "node_modules" / "pkg").mkdir(parents=True)
 (repo / "node_modules" / "pkg" / "i.js").write_text("module.exports = 1\n")
 for g in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "i"]):
-    subprocess.run(["git", *g], cwd=repo, check=True, capture_output=True)
+    subprocess.run([GIT, *g], cwd=repo, check=True, capture_output=True)  # nosec B603 - fixed git argv in this fixture
 SCAN = ["--no-check-vulnerabilities", "--no-check-licenses", "--no-scan-git-history", "--no-check-static-analysis"]
 
 # ---------------------------------------------------------------- basics
@@ -210,13 +211,16 @@ shield_repo = ROOT / "shield repo é"
 (shield_repo / "src").mkdir(parents=True)
 (shield_repo / "src" / "app.py").write_text("import os\n", encoding="utf-8")
 for g in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "i"]):
-    subprocess.run(["git", *g], cwd=shield_repo, check=True, capture_output=True)
+    subprocess.run([GIT, *g], cwd=shield_repo, check=True, capture_output=True)  # nosec B603 - fixed git argv in this fixture
 SHIELD_ENV = {"ALETHEORE_SHIELD_OFFLINE": "1", **NO_NET}
 shield_settings = shield_repo / ".claude" / "settings.local.json"
 rc, out = run(["shield", "setup", "--path", str(shield_repo), "--yes"], **SHIELD_ENV)
 check("shield setup --yes", rc == 0 and shield_settings.exists(), out)
 shield_hooks = json.loads(shield_settings.read_text(encoding="utf-8")).get("hooks", {}) if shield_settings.exists() else {}
 edited = shield_repo / "src" / "app.py"
+# The Write every hook is told about: Pre sees it proposed, Post sees it on disk (same text), so the post-edit hook
+# reads the file the payload describes and the dependency check really runs on the new import.
+written = "import os\nimport surely_not_a_real_package_x\n"
 for event, name in (("PreToolUse", "pre-edit"), ("PostToolUse", "post-edit"), ("Stop", "turn-end"), ("SessionEnd", "session-end")):
     entries = [h for e in shield_hooks.get(event, []) for h in e.get("hooks", []) if "aletheore.shield.hooks" in h.get("args", [])]
     if len(entries) != 1:
@@ -224,10 +228,10 @@ for event, name in (("PreToolUse", "pre-edit"), ("PostToolUse", "post-edit"), ("
         continue
     hook = entries[0]
     if event == "PostToolUse":
-        edited.write_text("import os\nimport surely_not_a_real_package_x\n", encoding="utf-8")
+        edited.write_text(written, encoding="utf-8")
     payload = json.dumps({
         "session_id": "smoke-shield", "cwd": str(shield_repo), "hook_event_name": event, "tool_name": "Write",
-        "tool_input": {"file_path": str(edited), "content": "import os\n"},
+        "tool_input": {"file_path": str(edited), "content": written},
     }, ensure_ascii=False)
     result = subprocess.run([hook["command"], *hook["args"]],  # nosec B603 - Shield's generated exec-form hook in this isolated fixture
                             cwd=shield_repo, input=payload, capture_output=True,
