@@ -541,7 +541,8 @@ def test_stopping_hostile_js_parses_many_times_in_one_process_never_crashes_it()
         "    assert imports.js_imports('import b from \"big\";\\n' + 'const x = 1;\\n' * 2000) == {'big'}\n"
         "print('ok')\n"
     )
-    done = subprocess.run([sys.executable, "-X", "faulthandler", "-c", script], capture_output=True, text=True,
+    # The script (with ~48 KB of hostile text in it) goes on stdin: a command line that long fails on Windows.
+    done = subprocess.run([sys.executable, "-X", "faulthandler", "-"], input=script, capture_output=True, text=True,
                           timeout=120, check=False)
     assert done.returncode == 0 and done.stdout.strip() == "ok", (done.returncode, done.stderr[-2000:])
 

@@ -1,3 +1,4 @@
+import os
 import subprocess
 
 import pytest
@@ -240,7 +241,13 @@ def test_save_config_is_atomic_under_concurrent_writers_and_readers(tmp_path):
 
     def write(value):
         for _ in range(150):
-            state.save_config(tmp_path, state.ShieldConfig(registry_lookups=value))
+            try:
+                state.save_config(tmp_path, state.ShieldConfig(registry_lookups=value))
+            except PermissionError:
+                # Windows: os.replace is refused while the reader holds the file open, and the retries ran out. That
+                # write is lost, never torn; any other platform must not see it.
+                if os.name != "nt":
+                    raise
 
     reader = threading.Thread(target=read)
     writers = [threading.Thread(target=write, args=(v,)) for v in (True, False, True)]
