@@ -41,8 +41,8 @@ def debug_note(what: str, error: BaseException | None = None) -> None:
     detail = f": {type(error).__name__}" if error is not None else ""
     try:
         sys.stderr.write(f"aletheore shield: {what}{detail}\n")
-    except (OSError, ValueError, AttributeError):
-        return  # stderr is closed, broken or missing: there is nowhere left to report anything, and the caller goes on
+    except Exception:  # noqa: BLE001 - closed, broken, missing or odd stderr: nowhere left to report; never fail
+        return
 
 
 # ---- atomic replace -------------------------------------------------------------------------------------------------

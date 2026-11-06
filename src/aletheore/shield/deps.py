@@ -527,7 +527,9 @@ def _package_json_changes(
         asked = {f"{change.base_commit}:{rel}": rel for rel in rels if rel not in untracked}
         found = cat_file_batch(repo, list(asked), timeout=budget.timeout(_GIT_TIMEOUT_S)) if asked else {}
         if found is None:
-            return [], [NotChecked("", _why_stopped(budget, TIME_BUDGET_PACKAGE_JSON, GIT_FAILED_PACKAGE_JSON))]
+            unread = sorted(asked.values())
+            shown = unread[0] if len(unread) == 1 else f"{unread[0]} and {len(unread) - 1} more"
+            return [], [NotChecked(shown, _why_stopped(budget, TIME_BUDGET_PACKAGE_JSON, GIT_FAILED_PACKAGE_JSON))]
         base = {asked[name]: data for name, data in found.items()}
     refs: list[DepRef] = []
     not_checked: list[NotChecked] = []
@@ -970,7 +972,7 @@ def added_dependencies(
             not_checked.append(NotChecked(shown, facts.private[eco]))
         else:
             refs.extend(mine)
-    return refs, not_checked
+    return refs, list(dict.fromkeys(not_checked))  # one stage's failure is said once, in the order found
 
 
 class _LazyNames:

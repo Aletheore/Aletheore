@@ -819,4 +819,15 @@ def test_an_unreadable_base_package_json_is_reported_as_not_checked(tmp_path, mo
     monkeypatch.setattr(_deps, "_manifest_pins", lambda *a, **k: ([], {}, [], True))  # the pins stage succeeded
     refs, not_checked = added_dependencies(repo)
     assert not any(r.name == "zzq-new" for r in refs)
-    assert any("package.json" in n.reason for n in not_checked), not_checked
+    assert [n for n in not_checked if "package.json" in n.reason] == [
+        NotChecked("package.json", _deps.GIT_FAILED_PACKAGE_JSON)], not_checked  # named, and said once
+
+
+def test_the_same_not_checked_reason_is_said_once(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n", "a.py": "x = 1\n", "b.py": "x = 1\n"})
+    _write(repo, "requirements.txt", "requests==2.0\nfastjsonx==1.0\n")
+    _write(repo, "a.py", "import zzqb\n")
+    _write(repo, "b.py", "import zzqb\n")
+    monkeypatch.setattr(_deps, "_base_unit_pins", lambda *a, **k: ({}, False))
+    _, not_checked = added_dependencies(repo)
+    assert len(not_checked) == len(set(not_checked)), not_checked

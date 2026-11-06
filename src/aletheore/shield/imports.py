@@ -186,11 +186,13 @@ class ParseTimeout(Exception):
 
 
 JS_PARSE_TIMEOUT_S = 1.0
-# tree-sitter's error recovery goes quadratic on some hostile text (`x=/[` or `a<b,` repeated: about 0.2 s for 8 KB,
-# 3 s for 32 KB, 6 s for 48 KB), and a parse cannot be stopped safely once started. Text up to JS_IN_PROCESS_BYTES is
-# parsed here, where the worst case known stays near 0.2 s; anything larger is parsed in a child process that is
-# killed at the time limit. Text over JS_MAX_PARSE_BYTES is not parsed at all.
-JS_IN_PROCESS_BYTES = 8 * 1024
+# tree-sitter's error recovery goes quadratic on some hostile text, and a parse cannot be stopped safely once started.
+# Measured (2026-11, Apple M-series, Python 3.12 and 3.14, tree-sitter 0.26) at 8 KB: `a<b<c,` repeated 0.23 s,
+# `x=/[` 0.18 s, `x=a</[` 0.17 s, `a<b,` 0.16 s; 3 s at 32 KB and 6 s at 48 KB. Text up to JS_IN_PROCESS_BYTES (6 KB,
+# so the worst case known is about 0.13 s here, with room for a CI runner twice as slow) is parsed in this process;
+# anything larger is parsed in a child process that is killed at the time limit. Text over JS_MAX_PARSE_BYTES is not
+# parsed at all.
+JS_IN_PROCESS_BYTES = 6 * 1024
 JS_MAX_PARSE_BYTES = 512 * 1024
 
 

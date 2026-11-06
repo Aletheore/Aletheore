@@ -22,6 +22,7 @@ NPM_COMMIT = "6ca165357f4cf1e127f38065455fc1c7680f8b16"
 PYPI_URL = f"https://raw.githubusercontent.com/hugovk/top-pypi-packages/{PYPI_COMMIT}/top-pypi-packages.min.json"
 NPM_URL = f"https://raw.githubusercontent.com/wooorm/npm-high-impact/{NPM_COMMIT}/lib/top.js"
 GENERATED = "2026-10-28"
+COUNT = 1000
 TARGET = Path(__file__).resolve().parents[2] / "src" / "aletheore" / "data" / "popular_packages.json"
 
 
@@ -33,8 +34,11 @@ def _get(url: str) -> bytes:
 
 def build() -> str:
     pypi_data = json.loads(_get(PYPI_URL))
-    pypi = [row["project"] for row in pypi_data["rows"][:1000]]
-    npm = re.findall(r"^\s*'([^']+)',?\s*$", _get(NPM_URL).decode("utf-8"), re.M)[:1000]
+    pypi = [row["project"] for row in pypi_data["rows"][:COUNT]]
+    npm = re.findall(r"^\s*'([^']+)',?\s*$", _get(NPM_URL).decode("utf-8"), re.M)[:COUNT]
+    for label, names in (("PyPI", pypi), ("npm", npm)):
+        if len(names) != COUNT or len(set(names)) != COUNT:
+            raise SystemExit(f"{label}: expected {COUNT} distinct names from the source, got {len(set(names))}")
     source = (
         "PyPI: hugovk/top-pypi-packages (https://hugovk.github.io/top-pypi-packages/top-pypi-packages.min.json, "
         f"last_update {pypi_data['last_update']}, ClickHouse download counts), top 1000 by downloads. "
@@ -47,6 +51,9 @@ def build() -> str:
 def main() -> int:
     rebuilt = build()
     if "--check" in sys.argv[1:]:
+        if not TARGET.is_file():
+            print(f"{TARGET} is missing")
+            return 1
         same = TARGET.read_text(encoding="utf-8") == rebuilt
         print("popular_packages.json matches its sources" if same else "popular_packages.json differs from its sources")
         return 0 if same else 1

@@ -25,7 +25,9 @@ WIN = sys.platform == "win32"
 # drawing. Escape them rather than crash before the failure is printed.
 sys.stdout.reconfigure(errors="backslashreplace")
 EXE = shutil.which("aletheore")
-GIT = shutil.which("git") or "git"  # an absolute path, so no current directory or relative PATH entry is searched
+GIT = shutil.which("git")  # an absolute path, so no current directory or relative PATH entry is searched
+if GIT is None:
+    sys.exit("cli_smoke: git was not found on PATH; it is needed to build the fixture repositories")
 ROOT = Path(tempfile.mkdtemp(prefix="aletheore-smoke-"))
 HOME = ROOT / "home"
 HOME.mkdir()
