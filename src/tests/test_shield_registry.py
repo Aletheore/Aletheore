@@ -328,3 +328,17 @@ def test_near_miss_compares_only_within_the_names_own_ecosystem():
     for ecosystem in ("crates.io", "Go", "RubyGems", "pypi", "NPM", "", "Maven"):
         assert nearmiss.near_miss(ecosystem, "expres") is None
         assert nearmiss.near_miss(ecosystem, "reqeusts") is None
+
+
+def test_popular_packages_file_is_in_the_form_its_regeneration_script_writes():
+    # .github/scripts/regenerate_popular_packages.py rebuilds this file byte for byte from pinned upstream commits
+    # (`--check` verifies it); a hand edit would break that form or the 1000-per-ecosystem shape.
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "aletheore" / "data" / "popular_packages.json"
+    text = path.read_text(encoding="utf-8")
+    data = json.loads(text)
+    assert text == json.dumps(data, indent=0) + "\n"
+    assert set(data) == {"source", "generated", "pypi", "npm"}
+    for ecosystem in ("pypi", "npm"):
+        assert len(data[ecosystem]) == 1000 == len(set(data[ecosystem]))
