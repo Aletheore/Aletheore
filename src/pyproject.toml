@@ -75,7 +75,7 @@ dependencies = [
     # walking and stat-ing the tree costs 841 ms for 644 files, so a
     # two-second poll would burn ~40% of a core continuously on a laptop
     # already running an editor and a compiler.
-    "watchdog>=4.0,<7.0",
+    "watchdog>=4.0,<8.0",
     "rich>=13.0",
     "tomli-w>=1.0,<2.0",
     # Real client-side token counting for hosted-embedding batching (see
