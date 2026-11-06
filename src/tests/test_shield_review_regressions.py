@@ -508,5 +508,33 @@ def test_walking_a_huge_js_tree_is_bounded_by_the_same_time_limit():
         imports.js_imports("import 'aa';\n" + "x" * imports.JS_MAX_PARSE_BYTES)
 
 
+def test_stopping_hostile_js_parses_many_times_in_one_process_never_crashes_it():
+    # Stopping a tree-sitter parse from its progress callback segfaulted the process on Python 3.11-3.13 (CI, PR
+    # #1161). Run the loop in a child so a crash fails this test instead of killing the whole test session.
+    import sys
+
+    script = (
+        "from aletheore.shield import imports\n"
+        f"hostile = {_PATHOLOGICAL_JS!r}\n"
+        "for i in range(12):\n"
+        "    try:\n"
+        "        imports.js_imports(hostile, timeout=0.05)\n"
+        "    except imports.ParseTimeout:\n"
+        "        pass\n"
+        "    assert imports.js_imports(\"import a from 'still-works';\") == {'still-works'}\n"
+        "    assert imports.js_imports('import b from \"big\";\\n' + 'const x = 1;\\n' * 2000) == {'big'}\n"
+        "print('ok')\n"
+    )
+    done = subprocess.run([sys.executable, "-X", "faulthandler", "-c", script], capture_output=True, text=True,
+                          timeout=120, check=False)
+    assert done.returncode == 0 and done.stdout.strip() == "ok", (done.returncode, done.stderr[-2000:])
+
+
+def test_a_large_js_file_is_parsed_in_a_child_and_gives_the_same_imports():
+    source = "import a from 'pkg-a';\n" + "const x = 1;\n" * 4000 + "require('pkg-b');\n"
+    assert len(source.encode()) > imports.JS_IN_PROCESS_BYTES
+    assert imports.js_imports(source) == {'pkg-a', 'pkg-b'}
+
+
 def test_source_without_import_words_is_not_parsed():
     assert imports.js_imports("const x = 1;\n" * 10, timeout=0.0) == set()

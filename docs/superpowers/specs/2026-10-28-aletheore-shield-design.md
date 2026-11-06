@@ -332,9 +332,10 @@ Differences from the first draft, and the decisions the builder made, in one pla
   then warns that turn-end checks may be skipped); it never writes without the lock. Writes themselves go
   through `fsutil.atomic_write_text` (temporary file plus `os.replace`).
 - **Import extraction.** Python: `ast`, with a `tokenize` fallback for a file that does not parse. JS/TS:
-  the tree-sitter TSX grammar with string escapes decoded; the parse is stopped after 1 s (or what is left
-  of the budget), because tree-sitter's error recovery can go quadratic on hostile text, and that file's
-  imports are then reported as not checked. Git-ignored registry configs (`.npmrc`, `.yarnrc.yml`,
+  the tree-sitter TSX grammar with string escapes decoded. tree-sitter's error recovery can go quadratic on
+  hostile text and a parse cannot be stopped safely once started, so text up to 8 KB is parsed in process
+  (worst case known about 0.2 s) and larger text in a child process killed after 1 s (or what is left of the
+  budget); that file's imports are then reported as not checked. Git-ignored registry configs (`.npmrc`, `.yarnrc.yml`,
   `pip.conf`, `pip.ini`) in any folder of the working tree are read, so a private registry is never missed;
   an import two unrelated distributions provide (`jwt`, `bson`, ...) with neither declared is not checked.
 - **New import cycles.** A new cycle group is familiar (not reported) when it meets exactly one old group

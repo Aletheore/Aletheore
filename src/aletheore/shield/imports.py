@@ -2,7 +2,8 @@
 
 Neither language is matched with a regex over the raw text: Python goes through `ast` (and `tokenize` for a file that
 does not parse, such as one in the middle of an edit), JS/TS through the tree-sitter TSX grammar, a real parser that
-knows strings, template literals, comments, regular-expression literals and JSX and runs in time linear in the file.
+knows strings, template literals, comments, regular-expression literals and JSX. It is linear on real code; on hostile
+text its error recovery is not, so large text is parsed in a child process with a time limit (see JS_IN_PROCESS_BYTES).
 Import-shaped text inside a string, docstring or comment is never an import, and a comment marker inside a string
 (`"//"`, `"/*"`, `"#"`) never hides the code after it.
 """
@@ -123,13 +124,14 @@ def _package_of(specifier: str) -> str | None:
 
 
 def _js_parser():
-    """Reuse a parser within a thread; parsers must not be shared across concurrent checks."""
+    """A new TSX parser. A parser is never stopped mid-parse (stopping one from tree-sitter's progress callback crashed
+    the process on Python 3.11-3.13), so it is never left in a half-parsed state either."""
     import tree_sitter_typescript
     from tree_sitter import Language, Parser
 
-    if not hasattr(_JS_PARSERS, "parser"):
-        _JS_PARSERS.parser = Parser(Language(tree_sitter_typescript.language_tsx()))
-    return _JS_PARSERS.parser
+    if not hasattr(_JS_PARSERS, "language"):
+        _JS_PARSERS.language = Language(tree_sitter_typescript.language_tsx())
+    return Parser(_JS_PARSERS.language)
 
 
 def _js_specifier(text: str) -> str | None:
@@ -156,42 +158,24 @@ class ParseTimeout(Exception):
 
 
 JS_PARSE_TIMEOUT_S = 1.0
-# tree-sitter calls the progress hook only while it reads; the rest of a parse is linear but cannot be stopped (about
-# 0.75 s for 1 MB of "{"). Larger sources are not parsed at all, so the overshoot past the time limit stays small.
+# tree-sitter's error recovery goes quadratic on some hostile text (`x=/[` or `a<b,` repeated: about 0.2 s for 8 KB,
+# 3 s for 32 KB, 6 s for 48 KB), and a parse cannot be stopped safely once started. Text up to JS_IN_PROCESS_BYTES is
+# parsed here, where the worst case known stays near 0.2 s; anything larger is parsed in a child process that is
+# killed at the time limit. Text over JS_MAX_PARSE_BYTES is not parsed at all.
+JS_IN_PROCESS_BYTES = 8 * 1024
 JS_MAX_PARSE_BYTES = 512 * 1024
-_READ_CHUNK = 64 * 1024
 
 
-def _parse_js(raw: bytes, deadline: float):
-    """The tree for `raw`, or ParseTimeout once time.monotonic() passes `deadline`. tree-sitter is linear on real code, but its error
-    recovery can go quadratic on hostile text (`x=/[` repeated: about 6 s for 48 KB), so the parse is stopped from
-    its progress callback, which tree-sitter calls only when reading through a callback."""
-    parser = _js_parser()
-    try:
-        return parser.parse(lambda offset, _point: raw[offset:offset + _READ_CHUNK],
-                            progress_callback=lambda *_: time.monotonic() > deadline)
-    except ValueError:  # tree-sitter's "Parsing failed": the callback stopped it
-        parser.reset()
-        raise ParseTimeout("not parsed in time") from None
-
-
-def js_imports(source: str, timeout: float = JS_PARSE_TIMEOUT_S) -> set[str]:
-    """Bare package names from actual syntax, excluding comments and string contents. Raises ParseTimeout when the
-    source cannot be parsed, and its tree walked, within `timeout` seconds."""
-    if "import" not in source and "require" not in source and "export" not in source:  # every form read below holds one
-        return set()
-    raw = source.encode("utf-8", "replace")
-    if len(raw) > JS_MAX_PARSE_BYTES:
-        raise ParseTimeout("too large to parse in time")
-    deadline = time.monotonic() + timeout
-    tree = _parse_js(raw, deadline)
+def _js_imports_from_raw(raw: bytes, deadline: float | None = None) -> set[str]:
+    """Parse `raw` here, to the end, and read its imports. The tree walk stops with ParseTimeout past `deadline`."""
+    tree = _js_parser().parse(raw)
     found: set[str] = set()
     stack = [tree.root_node]
     visited = 0
     while stack:
         node = stack.pop()
         visited += 1
-        if not visited % 4096 and time.monotonic() > deadline:  # a huge tree's walk is bounded too
+        if deadline is not None and not visited % 4096 and time.monotonic() > deadline:
             raise ParseTimeout("not walked in time")
         literal = None
         if node.type in ("import_statement", "export_statement"):
@@ -212,3 +196,53 @@ def js_imports(source: str, timeout: float = JS_PARSE_TIMEOUT_S) -> set[str]:
                 found.add(package)
         stack.extend(node.named_children)
     return found
+
+
+# The child reads {"path": [...], "source": "..."} on stdin and prints the sorted package names as JSON. It runs
+# isolated (-I: no PYTHON* variables, no user site, no current directory or script folder on sys.path) and is given
+# only the absolute entries of this process's sys.path, so a repository's own files can never be imported by it.
+_CHILD = (
+    "import json, sys\n"
+    "request = json.loads(sys.stdin.buffer.read())\n"
+    "sys.path[:] = request['path']\n"
+    "from aletheore.shield.imports import _js_imports_from_raw\n"
+    "sys.stdout.write(json.dumps(sorted(_js_imports_from_raw(request['source'].encode('utf-8', 'replace')))))\n"
+)
+
+
+def _js_imports_in_child(source: str, timeout: float) -> set[str]:
+    import json
+    import os
+    import subprocess  # nosec B404 - runs this Python only, with an argv list and never a shell
+
+    path = [entry for entry in sys.path if entry and os.path.isabs(entry)]
+    request = json.dumps({"path": path, "source": source}).encode("utf-8")
+    try:
+        # The executable is this interpreter and the argv is fixed; the source travels on stdin, never in argv.
+        done = subprocess.run(  # noqa: S603  # nosec B603
+            [sys.executable, "-I", "-c", _CHILD], input=request, capture_output=True, timeout=timeout, check=False
+        )
+    except subprocess.TimeoutExpired:
+        raise ParseTimeout("not parsed in time") from None
+    except OSError:
+        raise ParseTimeout("could not start the parser") from None
+    try:
+        names = json.loads(done.stdout) if done.returncode == 0 else None
+    except ValueError:
+        names = None
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        raise ParseTimeout("the parser failed")
+    return set(names)
+
+
+def js_imports(source: str, timeout: float = JS_PARSE_TIMEOUT_S) -> set[str]:
+    """Bare package names from actual syntax, excluding comments and string contents. Raises ParseTimeout when the
+    source cannot be parsed, and its tree walked, within `timeout` seconds."""
+    if "import" not in source and "require" not in source and "export" not in source:  # every form read below holds one
+        return set()
+    raw = source.encode("utf-8", "replace")
+    if len(raw) > JS_MAX_PARSE_BYTES:
+        raise ParseTimeout("too large to parse in time")
+    if len(raw) <= JS_IN_PROCESS_BYTES:
+        return _js_imports_from_raw(raw, time.monotonic() + timeout)
+    return _js_imports_in_child(raw.decode("utf-8"), max(timeout, 0.001))
