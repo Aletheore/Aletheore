@@ -653,8 +653,9 @@ The setup screen prints the active network plan.
 - JS/TS imports are read with the tree-sitter TSX parser. A file it cannot parse within 1 s (hostile or
   badly broken text) is listed as not checked. Git-ignored registry configs (`.npmrc`, `pip.conf`, ...)
   are read too, so a private registry is respected even when its config is not committed.
-- A moved or renamed import cycle is not reported as new; a new file closing a loop that an old member
-  left is.
+- A moved or renamed import cycle is not reported as new (a renamed member is told by its file name or by
+  its contents being at least half the same); a new file closing a loop that an old member left, or an
+  unrelated new file taking a deleted member's place in the loop, is.
 - Dependency and signature findings are import-level (which files import a module), not call-level.
   Candidate tests are suggestions and are not run.
 - Undo never deletes a file. It restores bytes the way `git checkout` would, following your

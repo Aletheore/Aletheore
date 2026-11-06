@@ -340,9 +340,11 @@ Differences from the first draft, and the decisions the builder made, in one pla
   an import two unrelated distributions provide (`jwt`, `bson`, ...) with neither declared is not checked.
 - **New import cycles.** A new cycle group is familiar (not reported) when it meets exactly one old group
   and holds all of it or only modules of it; when files of that group were deleted, new files joined and
-  every surviving member is still in the loop (a rename or move); or when an old group was moved whole
-  (none of its files left, same file names). Joining two old cycles, or a new file closing a loop that a
-  surviving member left, is a new cycle.
+  every surviving member is still in the loop and each deleted member became one of the new files (a rename
+  or move: the same file name, or the deleted file's HEAD text and the new file at least 50% alike); or when
+  an old group was moved whole (none of its files left, same file names). Joining two old cycles, a new file
+  closing a loop that a surviving member left, or a deleted member plus an unrelated new file closing the
+  loop, is a new cycle.
 - **Git.** Resolved from absolute PATH entries only (never a relative entry or the current directory,
   which is the repository for a hook). Timeouts and spawn failures use sentinel return codes outside
   every exit code, so a git exiting 124 or 127 is never mistaken for either.

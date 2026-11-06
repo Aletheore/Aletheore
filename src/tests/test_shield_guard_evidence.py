@@ -817,8 +817,9 @@ def test_a_stale_refresh_marker_is_replaced_by_exactly_one_of_many_concurrent_ca
 
 def test_renaming_or_moving_a_module_inside_an_old_cycle_is_not_a_new_cycle():
     old = _evidence(_ring(["a.py", "b.py"]))
-    renamed = _evidence(_ring(["a.py", "c.py"]))  # b.py renamed to c.py
-    assert new_risks(old, renamed)["cycles"] == []
+    renamed = _evidence(_ring(["a.py", "c.py"]))  # b.py renamed to c.py (Shield tells by the file contents)
+    assert new_risks(old, renamed, renamed=lambda gone, came: (gone, came) == ("b.py", "c.py"))["cycles"] == []
+    assert [set(c["members"]) for c in new_risks(old, renamed)["cycles"]] == [{"a.py", "c.py"}]  # b.py deleted
     old3 = _evidence(_ring(["a.py", "b.py", "c.py"]))
     moved = _evidence(_ring(["a.py", "b.py", "pkg/c.py"]))  # c.py moved into pkg/
     assert new_risks(old3, moved)["cycles"] == []
@@ -830,3 +831,60 @@ def test_renaming_or_moving_a_module_inside_an_old_cycle_is_not_a_new_cycle():
     # c.py leaving the a-b-c cycle to close a loop with a new file d.py is a new cycle, not a rename.
     split = _evidence(_ring(["a.py", "b.py"]) + _ring(["c.py", "d.py"]))
     assert [set(c["members"]) for c in new_risks(old3, split)["cycles"]] == [{"c.py", "d.py"}]
+
+
+import subprocess as _subprocess
+
+_REAL_POPEN = _subprocess.Popen  # captured at import, before the autouse no_spawn fixture replaces it
+
+
+@pytest.fixture
+def real_git(monkeypatch):
+    """These tests run git itself; still no background refresh may start."""
+    monkeypatch.setattr(guard_evidence.subprocess, "Popen", _REAL_POPEN)
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda *a, **k: False)
+
+
+def _git_repo(path):
+    import subprocess
+
+    path.mkdir(parents=True, exist_ok=True)
+    for args in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"],
+                 ["config", "commit.gpgsign", "false"]):
+        subprocess.run(["git", *args], cwd=path, check=True, capture_output=True)
+    return path
+
+
+def _commit_all(path):
+    import subprocess
+
+    subprocess.run(["git", "add", "-A"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "c"], cwd=path, check=True, capture_output=True)
+
+
+_B_TEXT = "".join(f"def helper_{i}(value):\n    return value + {i}\n\n" for i in range(20)) + "import a\n"
+
+
+def test_a_cycle_member_renamed_with_its_contents_is_not_a_new_cycle(tmp_path, real_git):
+    repo = _git_repo(tmp_path / "r")
+    (repo / "a.py").write_text("import b\n", encoding="utf-8")
+    (repo / "b.py").write_text(_B_TEXT, encoding="utf-8")
+    _commit_all(repo)
+    (repo / "b.py").unlink()
+    (repo / "c.py").write_text(_B_TEXT.replace("helper_19", "helper_nineteen"), encoding="utf-8")  # renamed, edited
+    head = _evidence(_ring(["a.py", "c.py"]))
+    _write_evidence(repo, head)
+    findings, _ = evidence_checks(repo, ["a.py", "b.py", "c.py"], _evidence(_ring(["a.py", "b.py"])))
+    assert not any("import cycle" in f.message for f in findings), findings
+
+
+def test_a_deleted_cycle_member_and_an_unrelated_new_file_closing_a_loop_is_a_new_cycle(tmp_path, real_git):
+    repo = _git_repo(tmp_path / "r")
+    (repo / "a.py").write_text("import b\n", encoding="utf-8")
+    (repo / "b.py").write_text(_B_TEXT, encoding="utf-8")
+    _commit_all(repo)
+    (repo / "b.py").unlink()
+    (repo / "c.py").write_text("import a\n\nclass Unrelated:\n    pass\n", encoding="utf-8")
+    _write_evidence(repo, _evidence(_ring(["a.py", "c.py"])))
+    findings, _ = evidence_checks(repo, ["a.py", "b.py", "c.py"], _evidence(_ring(["a.py", "b.py"])))
+    assert any("import cycle" in f.message and "c.py" in f.message for f in findings), findings

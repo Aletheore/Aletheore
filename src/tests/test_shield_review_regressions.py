@@ -470,6 +470,22 @@ def test_a_deleted_member_does_not_hide_a_new_loop_through_a_new_file():
 def test_renaming_one_member_of_an_old_cycle_is_not_a_new_cycle():
     old = _graph({'a.py': ['b.py'], 'b.py': ['c.py'], 'c.py': ['a.py']})
     new = _graph({'a.py': ['b.py'], 'b.py': ['util.py'], 'util.py': ['a.py']})  # c.py renamed to util.py
+    assert new_cycles(old, new, renamed=lambda gone, came: (gone, came) == ('c.py', 'util.py')) == []
+
+
+def test_a_deleted_member_and_a_new_file_closing_a_loop_is_a_new_cycle_not_a_rename():
+    # Old {a, b}; a.py is deleted and a new, unrelated c.py closes b <-> c. The graph alone looks exactly like a
+    # rename of a.py to c.py, so only the rename judge (Shield: file contents; default: same file name) tells.
+    old = _graph({'a.py': ['b.py'], 'b.py': ['a.py']})
+    new = _graph({'b.py': ['c.py'], 'c.py': ['b.py']})
+    assert [c['members'] for c in new_cycles(old, new)] == [['b.py', 'c.py']]
+    assert [c['members'] for c in new_cycles(old, new, renamed=lambda gone, came: False)] == [['b.py', 'c.py']]
+    assert new_cycles(old, new, renamed=lambda gone, came: (gone, came) == ('a.py', 'c.py')) == []
+
+
+def test_moving_one_member_of_an_old_cycle_keeps_its_name_and_is_not_new_by_default():
+    old = _graph({'a.py': ['b.py'], 'b.py': ['a.py']})
+    new = _graph({'a.py': ['pkg/b.py'], 'pkg/b.py': ['a.py']})
     assert new_cycles(old, new) == []
 
 

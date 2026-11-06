@@ -547,13 +547,62 @@ def _cycle_text(cycle: list[str]) -> str:
     return " -> ".join(closed)
 
 
-def _risk_findings(base: dict, head: dict) -> list[Finding]:
+RENAME_SIMILARITY = 0.5  # git's own default for rename detection
+_RENAME_MAX_BYTES = 1024 * 1024
+_RENAME_MAX_LINES = 5000  # beyond this only difflib's cheap upper bound is used
+
+
+def _similar(before: bytes, after: bytes) -> bool:
+    import difflib
+
+    old_lines, new_lines = before.splitlines(), after.splitlines()
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    if matcher.real_quick_ratio() < RENAME_SIMILARITY or matcher.quick_ratio() < RENAME_SIMILARITY:
+        return False
+    if max(len(old_lines), len(new_lines)) > _RENAME_MAX_LINES:
+        return True
+    return matcher.ratio() >= RENAME_SIMILARITY
+
+
+def _rename_judge(repo: Path, budget: Budget):
+    """`renamed(gone, came)` for the cycle comparison: the same file name in another folder, or the deleted file's
+    committed text (HEAD) and the new file's text at least RENAME_SIMILARITY alike. Anything that cannot be read in
+    time is not a rename, so a loop closed by an unrelated new file is still reported."""
+    from aletheore import evidence_diff
+    from aletheore.shield.gitutil import cat_file_batch
+
+    verdicts: dict[tuple[str, str], bool] = {}
+
+    def renamed(gone: str, came: str) -> bool:
+        if evidence_diff.same_file_name(gone, came):
+            return True
+        if (gone, came) not in verdicts:
+            verdict = False
+            if not budget.spent(MIN_STAGE_S):
+                name = f"HEAD:{gone}"
+                answer = cat_file_batch(repo, [name], timeout=budget.timeout(2.0)) or {}
+                before = answer.get(name)
+                try:
+                    target = repo / came
+                    after = target.read_bytes() if target.stat().st_size <= _RENAME_MAX_BYTES else None
+                except OSError:
+                    after = None
+                if before is not None and after is not None and len(before) <= _RENAME_MAX_BYTES:
+                    verdict = _similar(before, after)
+            verdicts[(gone, came)] = verdict
+        return verdicts[(gone, came)]
+
+    return renamed
+
+
+def _risk_findings(base: dict, head: dict, renamed=None) -> list[Finding]:
     """New secrets and import cycles. Vulnerability and layer-violation findings can only appear when the head
     evidence came from a full `aletheore scan`: Shield's first scan has vulnerabilities off, and the background
-    refresh carries both forward from the last full scan."""
+    refresh carries both forward from the last full scan. `renamed` judges renamed cycle members (see
+    `_rename_judge`)."""
     from aletheore import evidence_diff
 
-    risks = evidence_diff.new_risks(base, head)
+    risks = evidence_diff.new_risks(base, head, renamed)
     source = "session-start vs current .aletheore/air.json"
     findings = []
     if risks["secrets"]:
@@ -645,7 +694,7 @@ def evidence_checks(
             if budget.spent(MIN_STAGE_S):
                 not_checked.append(_out_of_time("new-risk check"))
             else:
-                findings.extend(_risk_findings(base_evidence, head))
+                findings.extend(_risk_findings(base_evidence, head, _rename_judge(repo, budget)))
     except (KeyError, TypeError, ValueError) as exc:
         not_checked.append(f"evidence checks stopped on unexpected evidence shape ({type(exc).__name__})")
     return findings, not_checked

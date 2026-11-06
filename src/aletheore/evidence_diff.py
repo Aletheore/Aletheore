@@ -7,6 +7,8 @@ network access.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from aletheore.history import compute_diff
 from aletheore.query import _shortest_cycle, import_cycle_components
 
@@ -38,14 +40,24 @@ def _basename(path: str) -> str:
     return path.rpartition("/")[2]
 
 
-def _familiar(group: set[str], old_groups: list[set[str]], old_paths: set[str], new_paths: set[str]) -> bool:
+def same_file_name(gone: str, came: str) -> bool:
+    """The default rename judge: a file moved to another folder under the same name."""
+    return _basename(gone) == _basename(came)
+
+
+def _familiar(
+    group: set[str], old_groups: list[set[str]], old_paths: set[str], new_paths: set[str],
+    renamed: Callable[[str, str], bool] = same_file_name,
+) -> bool:
     """Whether the new cycle group `group` is an old cycle group that changed, rather than a new cycle.
 
     - It meets exactly one old group and holds all of it or only modules of it: the cycle grew, shrank or was found
       from another start module. A group joining two or more old groups into one loop is new.
-    - It meets exactly one old group, files of that group were deleted and files new to the repository joined, and
-      every member of the old group that still exists is still in the loop: members were renamed or moved. When a
-      surviving member left the loop, the new file closed a different loop and the group is new.
+    - It meets exactly one old group, files of that group were deleted and files new to the repository joined, every
+      member of the old group that still exists is still in the loop, and `renamed(gone, came)` says each deleted
+      member became one of the new files: members were renamed or moved. The graph alone cannot tell a rename from a
+      deleted member plus an unrelated new file closing the loop, so without that a group is new. When a surviving
+      member left the loop, the new file closed a different loop and the group is new.
     - It meets no old group, but an old group was moved whole (`git mv pkg new`): none of its files is left, every
       member of this group is new, and the file names are the same.
     """
@@ -58,7 +70,8 @@ def _familiar(group: set[str], old_groups: list[set[str]], old_paths: set[str], 
             return True
         removed = old - new_paths
         added = group - old_paths
-        return bool(removed) and bool(added) and (old - removed) <= group
+        return (bool(removed) and bool(added) and (old - removed) <= group
+                and all(any(renamed(gone, came) for came in sorted(added)) for gone in sorted(removed)))
     added = group - old_paths
     if added != group:
         return False
@@ -66,7 +79,7 @@ def _familiar(group: set[str], old_groups: list[set[str]], old_paths: set[str], 
     return any(not (old & new_paths) and sorted(map(_basename, old)) == names for old in old_groups)
 
 
-def new_cycles(old: dict, new: dict) -> list[dict]:
+def new_cycles(old: dict, new: dict, renamed: Callable[[str, str], bool] | None = None) -> list[dict]:
     """Import-cycle groups in `new` that are not an old cycle group changed (see `_familiar`): a cycle that grew,
     shrank, had members renamed or moved, or was found from a different start module is not new; a group that meets
     no old group, joins several old groups into one loop, or replaces members of an old group while one of its
@@ -74,7 +87,8 @@ def new_cycles(old: dict, new: dict) -> list[dict]:
 
     Works on the full strongly-connected components computed from each snapshot's module graph (evidence stores the
     graph, not a cycle list), so the listing caps of `find_import_cycles` cannot hide an old cycle. Old self-imports
-    do not make a new mutual cycle familiar."""
+    do not make a new mutual cycle familiar. `renamed(gone, came)` judges whether a deleted member became a new file
+    (default `same_file_name`; Shield compares the two files' contents)."""
     old_components, old_self, _ = import_cycle_components(old)
     old_groups = [set(group) for group in old_components]
     seen = {m for group in old_groups for m in group} | set(old_self)
@@ -82,7 +96,7 @@ def new_cycles(old: dict, new: dict) -> list[dict]:
     old_paths, new_paths = _module_paths(old), _module_paths(new)
     found = []
     for component in sorted(new_groups, key=lambda c: (-len(c), c[0])):
-        if not _familiar(set(component), old_groups, old_paths, new_paths):
+        if not _familiar(set(component), old_groups, old_paths, new_paths, renamed or same_file_name):
             found.append(
                 {
                     "size": len(component),
@@ -97,7 +111,7 @@ def new_cycles(old: dict, new: dict) -> list[dict]:
     return found
 
 
-def new_risks(old: dict, new: dict) -> dict[str, list[dict]]:
+def new_risks(old: dict, new: dict, renamed: Callable[[str, str], bool] | None = None) -> dict[str, list[dict]]:
     """Risks present in `new` and not in `old`: keys secrets, vulnerabilities, layer_violations, cycles.
 
     Secrets exclude placeholders and accepted ones; vulnerabilities are empty when either snapshot skipped the check.
@@ -107,5 +121,5 @@ def new_risks(old: dict, new: dict) -> dict[str, list[dict]]:
         "secrets": real_new_secrets(curated),
         "vulnerabilities": [] if vulnerability_check_skipped_in(old, new) else list(curated["vulnerabilities"]["new"]),
         "layer_violations": list(curated["layer_violations"]["new"]),
-        "cycles": new_cycles(old, new),
+        "cycles": new_cycles(old, new, renamed),
     }
