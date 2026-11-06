@@ -89,24 +89,52 @@ def _python_statements(source: str):
         yield statement
 
 
+def _dotted(tokens: list[tuple[int, str]], start: int) -> tuple[str, int]:
+    """The dotted name (`a.b.c`) starting at tokens[start], and the index just past it; "" when there is none."""
+    parts: list[str] = []
+    index = start
+    while index < len(tokens) and tokens[index][0] == tokenize.NAME:
+        parts.append(tokens[index][1])
+        index += 1
+        if index < len(tokens) and tokens[index] == (tokenize.OP, "."):
+            index += 1
+        else:
+            break
+    return ".".join(parts), index
+
+
 def _python_imports_from_tokens(source: str) -> set[str]:
+    """The same names as the `ast` path (`_top`, and `from <namespace root> import <sub>`), read from tokens."""
     found: set[str] = set()
     for statement in _python_statements(source):
         kind, word = statement[0]
         if kind != tokenize.NAME:
             continue
         if word == "from" and len(statement) > 1 and statement[1][0] == tokenize.NAME:
-            found.add(statement[1][1])  # "from . import x" starts with an OP: relative, skipped
+            # "from . import x" starts with an OP: relative, skipped
+            module, index = _dotted(statement, 1)
+            if module in PY_NAMESPACE_ROOTS and index < len(statement) and statement[index] == (tokenize.NAME, "import"):
+                expect_name = True
+                for kind, text in statement[index + 1:]:
+                    if expect_name and kind == tokenize.NAME:
+                        found.add(f"{module}.{text}")
+                        expect_name = False
+                    elif kind == tokenize.OP and text == ",":
+                        expect_name = True
+                    elif kind == tokenize.OP and text not in ("(", ")"):
+                        break  # "*" and anything unexpected
+            elif module:
+                found.add(_top(module))
         elif word == "import":
-            expect_name = True
-            for kind, text in statement[1:]:
-                if expect_name and kind == tokenize.NAME:
-                    found.add(text)
-                    expect_name = False
-                elif kind == tokenize.OP and text == ",":
-                    expect_name = True
-                elif kind == tokenize.OP and text not in (".", "(", ")"):
+            index = 1
+            while index < len(statement):
+                module, index = _dotted(statement, index)
+                if not module:
                     break
+                found.add(_top(module))
+                while index < len(statement) and statement[index] != (tokenize.OP, ","):
+                    index += 1  # "as <alias>"
+                index += 1
     return found
 
 
@@ -141,8 +169,8 @@ def _js_specifier(text: str) -> str | None:
             return chr(int(escape[2:-1], 16))
         if escape[0] in "ux":
             return chr(int(escape[1:], 16))
-        if escape in ("\n", "\r", "\r\n", "\u2028", "\u2029"):
-            return ""
+        if escape in ("\n", "\r", "\r\n", "\u2028", "\u2029"):  # a backslash before a raw line terminator
+            return ""  # (a LineContinuation); the escape `\u2028` itself took the hex branch above
         if escape in "0123456789bfnrtv":
             raise ValueError("control/octal escape cannot be a package name")
         return escape

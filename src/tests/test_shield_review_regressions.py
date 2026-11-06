@@ -554,3 +554,23 @@ def test_a_large_js_file_is_parsed_in_a_child_and_gives_the_same_imports():
 
 def test_source_without_import_words_is_not_parsed():
     assert imports.js_imports("const x = 1;\n" * 10, timeout=0.0) == set()
+
+
+def test_a_backslash_before_a_raw_line_separator_is_a_line_continuation_in_a_js_specifier():
+    # The " "/" " entries in _js_specifier are the raw characters after a backslash (JS LineContinuation),
+    # reached through the [\s\S] branch; the six-character escape   is a different thing and decodes to U+2028.
+    assert imports._js_specifier("lo\\ dash") == "lodash"
+    assert imports._js_specifier("lo\\ dash") == "lodash"
+    assert imports._js_specifier("lo\\u2028dash") == "lo dash"  # not a package name: rejected later
+    assert imports.js_imports("import x from 'lo\\ dash';") == {"lodash"}
+
+
+@pytest.mark.parametrize("source", [
+    "import google.protobuf.json_format\nfrom google.cloud import storage\nfrom google import auth, api_core as c\n"
+    "import requests.adapters, yaml\nfrom a.b import c\n",
+])
+def test_python_imports_give_the_same_names_when_the_file_does_not_parse(source):
+    parsed = imports.python_imports(source)
+    broken = imports.python_imports(source + "def broken(:\n")
+    assert parsed == broken == {"google.protobuf", "google.cloud", "google.auth", "google.api_core", "requests",
+                                "yaml", "a"}
