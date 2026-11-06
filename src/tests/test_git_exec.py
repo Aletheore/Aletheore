@@ -40,3 +40,26 @@ def test_missing_git_raises_instead_of_falling_back_to_the_bare_name(tmp_path, m
 
     with pytest.raises(FileNotFoundError):
         git_executable()
+
+
+def test_absolute_path_only_never_resolves_git_from_a_relative_entry_or_the_current_directory(tmp_path, monkeypatch):
+    # Shield's hooks start with the repository as their current directory: a repository must not be able to plant a
+    # git that a relative PATH entry (or Windows' implicit current-directory search) would pick.
+    _fake_git(tmp_path / "tools")
+    _fake_git(tmp_path)  # git in the current directory itself
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", os.pathsep.join(["tools", ".", ""]))
+    with pytest.raises(FileNotFoundError):
+        git_executable(absolute_path_only=True)
+    real = _fake_git(tmp_path / "abs" / "bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["tools", str(tmp_path / "abs" / "bin")]))
+    assert os.path.normcase(git_executable(absolute_path_only=True)) == os.path.normcase(str(real))
+
+
+def test_shield_resolves_git_from_absolute_path_entries_only(tmp_path, monkeypatch):
+    from aletheore.shield import gitutil
+
+    _fake_git(tmp_path / "tools")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", "tools")
+    assert gitutil.run_git(tmp_path, "--version").returncode == gitutil._SPAWN_FAILED

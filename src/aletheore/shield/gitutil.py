@@ -59,10 +59,12 @@ def run_git(
     output."""
     command = ["git", *args]  # diagnostic argv if resolution fails; this fallback is never executed
     try:
-        command[0] = git_executable()
+        command[0] = git_executable(absolute_path_only=True)
         full_env = {k: v for k, v in os.environ.items() if k not in _INHERITED_GIT_VARS}
         full_env.update(env or {})
-        done = subprocess.run(  # noqa: S603  # nosec B603 - see git_executable; argv list, no shell
+        # The executable is git from an absolute PATH entry (never a relative entry or the current directory, which is
+        # the repository for a hook), the arguments are an argv list built by Shield and no shell is involved.
+        done = subprocess.run(  # noqa: S603  # nosec B603
             command, cwd=str(repo), env=full_env, input=input, capture_output=True, timeout=timeout, check=False
         )
     except subprocess.TimeoutExpired:
