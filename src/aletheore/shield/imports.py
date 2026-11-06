@@ -200,7 +200,8 @@ def _js_imports_from_raw(raw: bytes, deadline: float | None = None) -> set[str]:
 
 # The child reads {"path": [...], "source": "..."} on stdin and prints the sorted package names as JSON. It runs
 # isolated (-I: no PYTHON* variables, no user site, no current directory or script folder on sys.path) and is given
-# only the absolute entries of this process's sys.path, so a repository's own files can never be imported by it.
+# the folder this package came from plus the absolute entries of this process's sys.path, never the current directory
+# (a hook's current directory is the repository), so a repository's own files can never be imported by it.
 _CHILD = (
     "import json, sys\n"
     "request = json.loads(sys.stdin.buffer.read())\n"
@@ -215,7 +216,9 @@ def _js_imports_in_child(source: str, timeout: float) -> set[str]:
     import os
     import subprocess  # nosec B404 - runs this Python only, with an argv list and never a shell
 
-    path = [entry for entry in sys.path if entry and os.path.isabs(entry)]
+    # The folder this aletheore package was imported from comes first: it is the code already running here.
+    package_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    path = [package_root, *(entry for entry in sys.path if entry and os.path.isabs(entry) and entry != package_root)]
     request = json.dumps({"path": path, "source": source}).encode("utf-8")
     try:
         # The executable is this interpreter and the argv is fixed; the source travels on stdin, never in argv.
