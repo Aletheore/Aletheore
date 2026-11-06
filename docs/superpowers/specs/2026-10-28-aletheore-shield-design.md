@@ -322,7 +322,29 @@ Differences from the first draft, and the decisions the builder made, in one pla
     session never ended), the dependency pins cache and the setup record plus the saved original
     settings.
   - Outside the repository: `~/.cache/aletheore/shield-registry-cache.json` (under the user profile on
-    Windows), registry answers for 24 hours, at most 2,000 names and 4 MB. `off --purge` leaves it.
+    Windows), registry answers for 24 hours. A file over 1 MiB is ignored on read; a write keeps the new
+    answer and the newest others, at most 2,048 entries and 1 MiB, so the cache never grows past what it
+    will read. `off --purge` leaves it.
+- **Locks.** One mechanism: `shield/locking.py` `file_lock`, a bounded (0.25 s) OS lock (`flock` on
+  POSIX, `msvcrt.locking` on Windows) that the OS releases when the holder dies, so there are no stale
+  lock files to break. Hook state writes, the hourly prune claim, the dedupe ("said") record, the refresh
+  marker claim and the registry cache take it. A lock still busy after its wait skips the write (pre-edit
+  then warns that turn-end checks may be skipped); it never writes without the lock. Writes themselves go
+  through `fsutil.atomic_write_text` (temporary file plus `os.replace`).
+- **Import extraction.** Python: `ast`, with a `tokenize` fallback for a file that does not parse. JS/TS:
+  the tree-sitter TSX grammar with string escapes decoded; the parse is stopped after 1 s (or what is left
+  of the budget), because tree-sitter's error recovery can go quadratic on hostile text, and that file's
+  imports are then reported as not checked. Git-ignored registry configs (`.npmrc`, `.yarnrc.yml`,
+  `pip.conf`, `pip.ini`) in any folder of the working tree are read, so a private registry is never missed;
+  an import two unrelated distributions provide (`jwt`, `bson`, ...) with neither declared is not checked.
+- **New import cycles.** A new cycle group is familiar (not reported) when it meets exactly one old group
+  and holds all of it or only modules of it; when files of that group were deleted, new files joined and
+  every surviving member is still in the loop (a rename or move); or when an old group was moved whole
+  (none of its files left, same file names). Joining two old cycles, or a new file closing a loop that a
+  surviving member left, is a new cycle.
+- **Git.** Resolved from absolute PATH entries only (never a relative entry or the current directory,
+  which is the repository for a hook). Timeouts and spawn failures use sentinel return codes outside
+  every exit code, so a git exiting 124 or 127 is never mistaken for either.
 - **Pins cache.** The base side's dependency pins are cached per manifest folder in
   `<git dir>/aletheore-shield/pins-cache.json`, keyed by the folder's file names and Git blob ids and the
   Aletheore version that parsed them, so a cached entry is never stale. It is bounded (4,000 folders,
@@ -331,14 +353,18 @@ Differences from the first draft, and the decisions the builder made, in one pla
 - **Deny-list.** Never read, hashed or stored in a checkpoint, matched on the lower-cased base name
   (`\` and `/` both separate folders): `.env*`, `*.env`, `<name>.env.<environment or backup name>`
   (local, production, staging, dev, test, qa, ci, preview, secret(s), backup, bak, old and similar;
-  `app.env.example`, `values.env.yaml` and similar templates or configuration are kept; `.env.example` is still covered by `.env*`), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`,
-  `*.keystore`, `*.jks`, `*.tfvars`, `*.tfvars.json`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`,
-  `id_ed25519*`, `credentials*`, `.git-credentials`, `secrets.json/.yml/.yaml`, `.npmrc`, `.pypirc`,
+  `app.env.example`, `values.env.yaml` and similar templates or configuration are kept, and so are
+  `.env.example`, `.env.sample` and `.env.template`), `*.pem`, `*.key`, `*.p12`, `*.p8`, `*.pfx`, `*.ppk`,
+  `*.keystore`, `*.jks`, `*.tfvars`, `*.tfvars.json`, `terraform.tfstate*`, `service-account*.json`,
+  `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, `credentials*` and `.credentials*` (except source
+  code such as `credentials.py`), `.git-credentials`, `secrets.json/.yml/.yaml`, `.npmrc`, `.pypirc`,
   `.netrc`. `undo` lists every file the checkpoint did not capture as "not captured, cannot be
   restored".
 - **Receipts.** `build_receipt` returns None only when there is nothing worth a receipt. Any other
-  failure raises `ReceiptError(reason)`; the session-end hook then prints one line to stderr
-  (`aletheore shield: receipt could not be built: ...`), keeps stdout empty and exits 0.
+  failure gives a receipt with no files whose only "not checked" line is `receipt could not be computed
+  (<error type>)`; it is written like any receipt, and the session-end hook also prints that line to
+  stderr, keeps stdout empty and exits 0. Retention ages receipts by the write-time wall clock; a receipt
+  stamped up to a day ahead counts as real.
 - **Debugging.** With `ALETHEORE_HOOK_DEBUG=1`, every failure a hook or helper swallows (a state write,
   a corrupt cache, a prune, a failed setup rollback) is explained on stderr; stdout stays the hook's
   JSON or nothing.
