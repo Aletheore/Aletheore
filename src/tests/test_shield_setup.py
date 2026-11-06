@@ -1239,3 +1239,15 @@ def test_control_characters_are_exactly_c0_without_tab_del_and_c1():
     assert {c for c in range(0x3000) if setup._BREAKS.fullmatch(chr(c))} == {
         0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029
     }
+
+
+@pytest.mark.parametrize("command", [
+    "'/opt/my tools/python' -m aletheore.shield.hooks turn-end",
+    "\"/opt/my tools/python3.12\" -m aletheore.shield.hooks turn-end",
+    "'/Users/me/my env/bin/python3' -m aletheore.shield.hooks turn-end",
+])
+def test_a_legacy_hook_whose_quoted_interpreter_path_holds_a_space_is_recognised(command):
+    # The file name is judged after the folders are split off, so a space in a folder never hides "python".
+    from aletheore.shield import setup as shield_setup
+
+    assert shield_setup._our_event({"type": "command", "command": command}) == "turn-end"

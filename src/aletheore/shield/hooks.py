@@ -318,6 +318,7 @@ def _claim_prune(path: Path) -> float | None:
     """The time of this hook's hourly prune, or None when it is not due: of concurrent hooks exactly one claims it,
     recording the time in the same locked step that read the last one. A busy lock means another hook is in there."""
     try:
+        path.parent.mkdir(exist_ok=True)  # like _update_state: inside the git dir, never creates anything else
         with _state_lock(path) as acquired:
             if not acquired:
                 return None
@@ -557,7 +558,12 @@ def _write(stream, text: str) -> bool:
 def _deliver(output: Output, stdout, stderr) -> None:
     """Write the output, and record its state only when every write succeeded, so text a broken pipe swallowed is
     said again next time. A dedupe record (Said) is checked again and written under the state lock: of two hooks
-    with the same text at once only one says it."""
+    with the same text at once only one says it.
+
+    Writing inside the lock is what makes that exactly once (write first, record after, and two hooks both say it).
+    The hold is bounded for everyone else: the text is a few lines, far below a pipe's buffer, and every other taker
+    of the lock waits at most file_lock's 0.25 s and then goes on without it (a state write is skipped and said
+    again later, never blocked), so a stalled reader of this hook's stdout cannot hang other hooks."""
     commit = output.commit
     if not isinstance(commit, Said):
         delivered = _write(stdout, output.stdout) if output.stdout else True

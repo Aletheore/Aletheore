@@ -1090,3 +1090,13 @@ def _umask():
     current = os.umask(0)
     os.umask(current)
     return current
+
+
+def test_the_hourly_prune_is_claimed_in_a_fresh_state_folder(tmp_path):
+    from aletheore.shield import hooks as shield_hooks
+
+    folder = tmp_path / "git" / "aletheore-shield"
+    (tmp_path / "git").mkdir()
+    claimed = shield_hooks._claim_prune(folder / "hook-s1.json")
+    assert claimed is not None and folder.is_dir()
+    assert shield_hooks._claim_prune(folder / "hook-s1.json") is None  # not due again within the hour
