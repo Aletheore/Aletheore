@@ -156,32 +156,43 @@ class ParseTimeout(Exception):
 
 
 JS_PARSE_TIMEOUT_S = 1.0
+# tree-sitter calls the progress hook only while it reads; the rest of a parse is linear but cannot be stopped (about
+# 0.75 s for 1 MB of "{"). Larger sources are not parsed at all, so the overshoot past the time limit stays small.
+JS_MAX_PARSE_BYTES = 512 * 1024
 _READ_CHUNK = 64 * 1024
 
 
-def _parse_js(raw: bytes, timeout: float):
-    """The tree for `raw`, or ParseTimeout after `timeout` seconds. tree-sitter is linear on real code, but its error
+def _parse_js(raw: bytes, deadline: float):
+    """The tree for `raw`, or ParseTimeout once time.monotonic() passes `deadline`. tree-sitter is linear on real code, but its error
     recovery can go quadratic on hostile text (`x=/[` repeated: about 6 s for 48 KB), so the parse is stopped from
     its progress callback, which tree-sitter calls only when reading through a callback."""
     parser = _js_parser()
-    deadline = time.monotonic() + timeout
     try:
         return parser.parse(lambda offset, _point: raw[offset:offset + _READ_CHUNK],
                             progress_callback=lambda *_: time.monotonic() > deadline)
     except ValueError:  # tree-sitter's "Parsing failed": the callback stopped it
         parser.reset()
-        raise ParseTimeout(f"not parsed within {timeout:g} s") from None
+        raise ParseTimeout("not parsed in time") from None
 
 
 def js_imports(source: str, timeout: float = JS_PARSE_TIMEOUT_S) -> set[str]:
     """Bare package names from actual syntax, excluding comments and string contents. Raises ParseTimeout when the
-    source cannot be parsed within `timeout` seconds."""
+    source cannot be parsed, and its tree walked, within `timeout` seconds."""
+    if "import" not in source and "require" not in source and "export" not in source:  # every form read below holds one
+        return set()
     raw = source.encode("utf-8", "replace")
-    tree = _parse_js(raw, timeout)
+    if len(raw) > JS_MAX_PARSE_BYTES:
+        raise ParseTimeout("too large to parse in time")
+    deadline = time.monotonic() + timeout
+    tree = _parse_js(raw, deadline)
     found: set[str] = set()
     stack = [tree.root_node]
+    visited = 0
     while stack:
         node = stack.pop()
+        visited += 1
+        if not visited % 4096 and time.monotonic() > deadline:  # a huge tree's walk is bounded too
+            raise ParseTimeout("not walked in time")
         literal = None
         if node.type in ("import_statement", "export_statement"):
             literal = node.child_by_field_name("source")

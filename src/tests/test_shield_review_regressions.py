@@ -492,3 +492,21 @@ def test_a_js_file_that_cannot_be_parsed_in_time_is_not_checked_and_the_guard_ke
     assert time.monotonic() - started < 2.0  # inside the post-edit hook's 2 s hard stop
     assert not any('first-package' in f.message for f in report.findings)
     assert any('web.js' in line and 'in time' in line for line in report.not_checked), report.not_checked
+
+
+def test_walking_a_huge_js_tree_is_bounded_by_the_same_time_limit():
+    # "{" repeated: tree-sitter cannot be stopped after it has read the text, and the tree is deep.
+    for count in (400_000, 1_000_000):
+        source = "import 'aa';\n" + "{" * count + "\nrequire('zz');\n"
+        started = time.monotonic()
+        try:
+            imports.js_imports(source, timeout=0.3)
+        except imports.ParseTimeout:
+            pass
+        assert time.monotonic() - started < 1.0, count
+    with pytest.raises(imports.ParseTimeout):  # over the size cap: not parsed at all
+        imports.js_imports("import 'aa';\n" + "x" * imports.JS_MAX_PARSE_BYTES)
+
+
+def test_source_without_import_words_is_not_parsed():
+    assert imports.js_imports("const x = 1;\n" * 10, timeout=0.0) == set()
