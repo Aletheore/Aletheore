@@ -294,7 +294,7 @@ def test_run_git_flags_say_timed_out_and_spawn_failed(tmp_path, monkeypatch):
     assert result.spawn_failed is True and result.timed_out is False and result.returncode != 0
     assert gitutil.repo_state(tmp_path).reason == "git could not be started; check its installation and PATH"
 
-    def not_on_path():
+    def not_on_path(**kwargs):
         raise FileNotFoundError("git was not found on PATH")
 
     monkeypatch.setattr(gitutil, "git_executable", not_on_path)
@@ -322,9 +322,32 @@ def test_repo_state_with_a_git_that_exits_124_is_not_reported_as_slow(tmp_path, 
         ("app.env.example", False), ("app.env.sample", False), ("app.env.template", False),
         ("app.env.production", True), ("app.env.prod", True), ("api.env.staging", True), ("x.env.dev", True),
         ("x.env.development", True), ("x.env.test", True), ("x.env.secret", True), ("x.env.bak", True),
-        ("x.env.old", True), ("X.ENV.LOCAL", True), (".env.example", True), ("prod.env", True),
+        ("x.env.old", True), ("X.ENV.LOCAL", True), ("prod.env", True),
         ("infra/main.tfvars.json", True), ("infra\\prod.tfvars", True),
     ],
 )
 def test_env_variants_are_denied_only_for_environment_names(path, expected):
+    assert denylist.is_denied_path(path) is expected
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        # Committed templates hold placeholders, not secrets: they are checkpointed like any file.
+        (".env.example", False), (".env.sample", False), (".env.template", False), ("web/.ENV.Example", False),
+        # Source code about credentials is code; a credentials file in any data format is not.
+        ("src/credentials.py", False), ("lib/credentials.ts", False), ("auth/credentials_test.go", False),
+        ("credentials", True), ("credentials.json", True), (".credentials", True), ("aws/credentials", True),
+        ("credentials.yml", True), ("credentials.xml", True), ("credentials-0", True), ("gcp-credentials.json", False),
+        # Newer secret-bearing names.
+        ("terraform.tfstate", True), ("infra/terraform.tfstate.backup", True), ("AuthKey_ABC123.p8", True),
+        ("service-account.json", True), ("keys/service-account-prod.json", True), ("service-account.md", False),
+        # Every earlier name stays denied.
+        (".env", True), (".env.local", True), (".env.production", True), ("id_rsa", True), ("server.pem", True),
+        ("secrets.json", True), (".npmrc", True), (".pypirc", True), (".netrc", True), ("app.keystore", True),
+        ("x.jks", True), ("x.pfx", True), ("x.p12", True), ("x.key", True), ("user.ppk", True),
+        ("main.tfvars", True), (".git-credentials", True), (".envrc", True), ("prod.env", True),
+    ],
+)
+def test_deny_list_keeps_templates_and_credential_code_and_covers_newer_secret_files(path, expected):
     assert denylist.is_denied_path(path) is expected
