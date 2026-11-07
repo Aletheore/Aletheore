@@ -301,6 +301,11 @@ body {
 @keyframes companion-cursor { 50% { opacity: 0; } }
 @media (max-width: 600px) {
   .website-companion { right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom)); }
+  .companion-trigger { width: 70px; }
+  .companion-character { height: 60px; }
+  .companion-character .aletheore-mascot { transform: scale(.58); transform-origin: top center; }
+  .companion-ground { margin-bottom: 4px; }
+  .companion-label { padding: 3px 5px; font-size: 9px; white-space: nowrap; }
   .companion-bubble { right: 4px; width: min(280px, calc(100vw - 32px)); }
 }
 @media (prefers-reduced-motion: reduce) {

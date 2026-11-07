@@ -98,7 +98,7 @@ export default function BenchmarksPage() {
           <BarList caption="Accurate findings per run, in absolute terms, not a rate" rows={accurateRows()} max={100} />
         </div>
         <div className="mt-10"><DataTable caption="Full PR review comparison with intervals" {...asRecords(T.prRecall)} oursKey="Aletheore" /></div>
-        <div className="mt-8 grid gap-6 lg:grid-cols-2">
+        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
           <Callout title={B.prReview.gap.title} tone="warn">{B.prReview.gap.body}</Callout>
           <div>
             <h3 className="mb-3 font-display text-[13.5px] font-bold">{B.prReview.pairwise.title}</h3>
@@ -139,7 +139,7 @@ export default function BenchmarksPage() {
         </div>
         <div className="mt-8"><DataTable caption="SWE-PRBench scores and generation cost" {...asRecords(T.swePr)} oursKey="Aletheore" /></div>
         <p className="mt-2 text-[12px] text-faint">*Competitor costs are priced at Aletheore&apos;s bare-mode token volume for the same 100 tasks; per-file mode makes more calls, which is why our own figure is higher there.</p>
-        <div className="mt-8 grid gap-6 lg:grid-cols-2">
+        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div>
             <h3 className="mb-3 font-display text-[13.5px] font-bold">Bare mode against per-file completeness</h3>
             <DataTable caption="Bare mode against per-file completeness" {...asRecords(T.perFile)} />
@@ -285,7 +285,7 @@ export default function BenchmarksPage() {
             <p className="mt-3 max-w-[60ch] text-[14px] leading-[1.7] text-muted">{B.closing.body}</p>
           </div>
           <div className="flex flex-wrap gap-3">
-            <Button asChild><a href={B.head.repoHref} rel="noopener">View aletheore-benchmarks on GitHub</a></Button>
+            <Button asChild className="max-w-full whitespace-normal text-center"><a href={B.head.repoHref} rel="noopener">View aletheore-benchmarks on GitHub</a></Button>
             <Button asChild variant="secondary"><a href="/dogfooding">See a raw scan instead</a></Button>
           </div>
         </div>

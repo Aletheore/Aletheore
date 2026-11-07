@@ -50,11 +50,11 @@ export default function DevelopersPage() {
       <Section id="quickstart" eyebrow={quickstart.eyebrow} title={quickstart.title} intro={quickstart.intro}>
         <Terminal terms={terminals} />
         <p className="mt-3 max-w-[76ch] text-[12px] leading-[1.6] text-faint">{terminalNote}</p>
-        <div className="mt-10 grid gap-x-10 gap-y-8 md:grid-cols-3">
+        <div className="mt-10 grid grid-cols-1 gap-x-10 gap-y-8 md:grid-cols-3">
           {quickstart.commands.map((c) => (
             <article key={c.title} className="rule-dashed pt-5">
               <h3 className="font-display text-[14px] font-bold">{c.title}</h3>
-              <pre className="mt-3 overflow-x-auto font-display text-[12px] leading-[1.75] text-ink"><code>{c.code}</code></pre>
+              <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words font-display text-[12px] leading-[1.75] text-ink"><code>{c.code}</code></pre>
               <p className="mt-3 text-[12.5px] leading-[1.6] text-muted">{c.body}</p>
             </article>
           ))}
@@ -68,7 +68,7 @@ export default function DevelopersPage() {
       <Section id="mcp" eyebrow={mcpHead.eyebrow} title={mcpHead.title} intro={mcpHead.intro}>
         <article className="rule-dashed mb-10 max-w-[76ch] pt-5">
           <h3 className="font-display text-[14px] font-bold">{mcpSetup.title}</h3>
-          <pre className="mt-3 overflow-x-auto font-display text-[12px] leading-[1.75] text-ink"><code>{mcpSetup.code}</code></pre>
+          <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words font-display text-[12px] leading-[1.75] text-ink"><code>{mcpSetup.code}</code></pre>
           <p className="mt-3 text-[12.5px] leading-[1.6] text-muted">{mcpSetup.body}</p>
         </article>
         <ToolExplorer tools={toolInfo} groups={toolGroups} />

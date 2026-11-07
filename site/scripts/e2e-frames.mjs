@@ -72,6 +72,7 @@ for (const route of ROUTES) for (const p of passes) {
   const webgl = await page.evaluate(() => [...document.querySelectorAll("[data-webgl-ready]")].map((e) => e.getAttribute("data-webgl-ready")));
   if (route === "/" && (p.reduced || p.noWebGL) && webgl.includes("true")) fail(p.name, "WebGL started although it must be off in this pass");
   const pinned = p.viewport.width >= 768 && !p.reduced;
+  if (route === "/" && p.name === "mobile" && (seen.size < 2 || !seen.has("0") || !seen.has("5"))) fail(p.name, `mobile scene did not progress from first to last step: ${[...seen].join(",")}`);
   if (route === "/" && pinned && p.name === "desktop" && seen.size < 6) fail(p.name, `pinned scene only reached steps ${[...seen].join(",")}`);
   results.push({ route, pass: p.name, height, overflow, steps: [...seen], webgl });
   await page.close();

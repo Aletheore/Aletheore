@@ -10,6 +10,7 @@ export function LiveGraph() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [hover, setHover] = useState<string | null>(null);
   const hoverRef = useRef<number>(-1);
+  const redrawRef = useRef<(() => void) | null>(null);
   const reduced = useReducedMotion();
 
   useEffect(() => {
@@ -44,6 +45,7 @@ export function LiveGraph() {
         }
       });
     };
+    redrawRef.current = draw;
     const loop = () => {
       if (visible && running) {
         const speed = stepSim(sim);
@@ -59,19 +61,27 @@ export function LiveGraph() {
       const r = el.getBoundingClientRect();
       return { x: ((e.clientX - r.left) / r.width) * W, y: ((e.clientY - r.top) / r.height) * H };
     };
-    const pick = (x: number, y: number) => {
-      let best = -1, bd = 14 * 14;
+    const pick = (x: number, y: number, radius = 14) => {
+      let best = -1, bd = radius * radius;
       sim.nodes.forEach((n, i) => { const d = (n.x - x) ** 2 + (n.y - y) ** 2; if (d < bd) { bd = d; best = i; } });
       return best;
     };
     const onMove = (e: PointerEvent) => {
+      if (e.pointerType === "touch") return;
       const p = at(e);
       if (dragging >= 0) { sim.nodes[dragging].fx = p.x; sim.nodes[dragging].fy = p.y; return; }
       const i = pick(p.x, p.y);
       if (i !== hoverRef.current) { hoverRef.current = i; setHover(i >= 0 ? sim.nodes[i].id : null); if (reduced) draw(); }
     };
     const onDown = (e: PointerEvent) => {
-      const i = pick(at(e).x, at(e).y);
+      const point = at(e);
+      const i = pick(point.x, point.y, e.pointerType === "touch" ? (12 * W) / el.getBoundingClientRect().width : 14);
+      if (e.pointerType === "touch") {
+        hoverRef.current = i;
+        setHover(i >= 0 ? sim.nodes[i].id : null);
+        if (reduced) draw();
+        return;
+      }
       if (i < 0) return;
       dragging = i; el.setPointerCapture(e.pointerId); reheat(sim, 0.3); running = true;
       if (reduced) { running = false; }
@@ -84,10 +94,11 @@ export function LiveGraph() {
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerdown", onDown);
     el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointerleave", () => { hoverRef.current = -1; setHover(null); });
+    const onLeave = (e: PointerEvent) => { if (e.pointerType !== "touch") { hoverRef.current = -1; setHover(null); if (reduced) draw(); } };
+    el.addEventListener("pointerleave", onLeave);
     return () => {
-      cancelAnimationFrame(raf); io.disconnect();
-      el.removeEventListener("pointermove", onMove); el.removeEventListener("pointerdown", onDown); el.removeEventListener("pointerup", onUp);
+      cancelAnimationFrame(raf); io.disconnect(); redrawRef.current = null;
+      el.removeEventListener("pointermove", onMove); el.removeEventListener("pointerdown", onDown); el.removeEventListener("pointerup", onUp); el.removeEventListener("pointerleave", onLeave);
     };
   }, [reduced]);
 
@@ -98,19 +109,20 @@ export function LiveGraph() {
         This is a real dependency graph, not a screenshot.
       </h2>
       <p className="mt-4 max-w-[60ch] text-[15px] leading-[1.65] text-muted">
-        AIRview builds this from your own repo&apos;s real imports: drag a node, hover to trace what depends on what. This demo is graphed from Aletheore&apos;s own module names.
+        AIRview builds this from your own repo&apos;s real imports. Explore the connections in this demo, graphed from Aletheore&apos;s own module names.
       </p>
       <div className="crop-marks mt-8 border border-line bg-raised">
         <canvas
           ref={canvas}
           role="img"
-          aria-label="Interactive dependency graph of the Aletheore repository. Hover a module to highlight what it imports and what imports it."
+          aria-label="Dependency graph of the Aletheore repository. Hover or tap a module to highlight its connections."
           className="block h-auto w-full touch-pan-y"
         />
       </div>
-      <p className="mt-3 font-display text-[12px] text-faint" aria-live="polite">
-        {hover ? hover : "Hover a module to see what it imports."}
-      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 font-display text-[12px] text-faint">
+        <p aria-live="polite">{hover ? hover : <><span className="md:hidden">Tap a module to highlight its connections.</span><span className="hidden md:inline">Hover a module to highlight its connections; drag to move it.</span></>}</p>
+        {hover && <button type="button" className="min-h-11 underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-stamp" onClick={() => { hoverRef.current = -1; setHover(null); redrawRef.current?.(); }}>Clear selection</button>}
+      </div>
     </section>
   );
 }
