@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 
 STALE_TEMPORARY_S = 3600.0
-_REPLACE_TRIES = 5
+_REPLACE_BUDGET_S = 2.0
 _RETRY_REPLACE = os.name == "nt"
 
 
@@ -49,16 +49,20 @@ def debug_note(what: str, error: BaseException | None = None) -> None:
 
 
 def _replace(source: str, target: Path) -> None:
-    for attempt in range(_REPLACE_TRIES):
+    deadline = time.monotonic() + _REPLACE_BUDGET_S
+    delay = 0.005
+    while True:
         try:
             os.replace(source, target)
             return
         except PermissionError:
-            # Windows: the target is open in another process (a concurrent reader or writer). It is a matter of
-            # milliseconds, so wait a little and try again; elsewhere this error is real and is raised at once.
-            if not _RETRY_REPLACE or attempt == _REPLACE_TRIES - 1:
+            # Windows: the target is open in another process or thread (a concurrent reader or writer, or a virus
+            # scanner). It is a matter of milliseconds, so keep trying within a time budget, which holds up under a
+            # loaded runner where a fixed few tries did not; elsewhere this error is real and is raised at once.
+            if not _RETRY_REPLACE or time.monotonic() >= deadline:
                 raise
-            time.sleep(0.01 * (attempt + 1))
+            time.sleep(delay)
+            delay = min(delay * 2, 0.1)
 
 
 def _existing_mode(path: Path) -> int | None:
