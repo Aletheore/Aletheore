@@ -16,9 +16,14 @@ def file_lock(path: Path, timeout: float = 0.25):
         if os.name == "nt":
             import msvcrt
 
-            if handle.seek(0, 2) == 0:
-                handle.write(b"\0")
-                handle.flush()
+            try:
+                if handle.seek(0, 2) == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+            except PermissionError:
+                # Another opener already created the byte and holds its lock; Windows refuses writes into a locked
+                # range. The byte exists, so there is nothing left to do, and this must not read as "could not lock".
+                pass
 
             def lock():
                 handle.seek(0)
