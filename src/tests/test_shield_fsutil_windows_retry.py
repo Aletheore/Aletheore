@@ -60,3 +60,30 @@ def test_replace_does_not_retry_off_windows(tmp_path, monkeypatch):
 def test_file_lock_still_works_on_a_fresh_path(tmp_path):
     with locking.file_lock(tmp_path / "d" / ".x.lock") as acquired:
         assert acquired
+
+
+def test_file_lock_init_write_error_is_raised_when_the_file_stays_empty(tmp_path, monkeypatch):
+    import pytest
+
+    class Handle:
+        def seek(self, *a):
+            return 0
+
+        def write(self, b):
+            raise PermissionError(13, "read-only")
+
+        def flush(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(locking.os, "name", "nt")
+    monkeypatch.setattr(locking.os, "fdopen", lambda fd, mode: (os.close(fd), Handle())[1])
+    monkeypatch.setitem(__import__("sys").modules, "msvcrt", type("M", (), {})())
+    with pytest.raises(PermissionError):
+        with locking.file_lock(tmp_path / ".x.lock"):
+            pass

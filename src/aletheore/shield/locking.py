@@ -21,9 +21,10 @@ def file_lock(path: Path, timeout: float = 0.25):
                     handle.write(b"\0")
                     handle.flush()
             except PermissionError:
-                # Another opener already created the byte and holds its lock; Windows refuses writes into a locked
-                # range. The byte exists, so there is nothing left to do, and this must not read as "could not lock".
-                pass
+                # Windows refuses a write into a byte another opener already locked. That is only benign when the byte
+                # exists; if the file is still empty the error is a real one (read-only file, restrictive ACL), so raise.
+                if handle.seek(0, 2) == 0:
+                    raise
 
             def lock():
                 handle.seek(0)
