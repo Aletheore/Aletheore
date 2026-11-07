@@ -580,6 +580,8 @@ def scan_repository(
     # matching every other check it runs.
     map_schema_skip_reason: str = "skipped (--no-map-schema)",
     progress: Callable[[str], None] | None = None,
+    # Shield's first scan must not edit the user's .gitignore (it hides .aletheore/ through info/exclude instead).
+    edit_gitignore: bool = True,
 ) -> dict:
     report = progress or _noop_progress
     repo_path = repo_path.resolve()
@@ -613,7 +615,8 @@ def scan_repository(
     # confirmed empirically). Running it first makes every scan - including
     # the very first one - already reflect whatever .gitignore state results,
     # so counts are stable and reproducible from the first call onward.
-    _ensure_aletheore_dir_gitignored(repo_path)
+    if edit_gitignore:
+        _ensure_aletheore_dir_gitignored(repo_path)
     # Created up front (it's gitignored by now) so the per-file cache in
     # file_cache.py can fill on the very first scan rather than the second.
     try:
@@ -1065,13 +1068,14 @@ def ensure_air_toon(repo_path: Path) -> Path:
     return toon_path
 
 
-def write_evidence(evidence: dict, repo_path: Path) -> Path:
+def write_evidence(evidence: dict, repo_path: Path, edit_gitignore: bool = True) -> Path:
     # Usually already a no-op by the time evidence written via
     # scan_repository() gets here - see the call at the top of
     # scan_repository for why it moved there. Kept here too as a safety net
     # for any caller that writes evidence without going through
     # scan_repository.
-    _ensure_aletheore_dir_gitignored(repo_path)
+    if edit_gitignore:
+        _ensure_aletheore_dir_gitignored(repo_path)
     aletheore_dir = repo_path / ".aletheore"
     try:
         aletheore_dir.mkdir(parents=True, exist_ok=True)

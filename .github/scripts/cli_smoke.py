@@ -25,6 +25,9 @@ WIN = sys.platform == "win32"
 # drawing. Escape them rather than crash before the failure is printed.
 sys.stdout.reconfigure(errors="backslashreplace")
 EXE = shutil.which("aletheore")
+GIT = shutil.which("git")  # an absolute path, so no current directory or relative PATH entry is searched
+if GIT is None:
+    sys.exit("cli_smoke: git was not found on PATH; it is needed to build the fixture repositories")
 ROOT = Path(tempfile.mkdtemp(prefix="aletheore-smoke-"))
 HOME = ROOT / "home"
 HOME.mkdir()
@@ -125,7 +128,7 @@ repo = ROOT / "repo with spaces"
 (repo / "node_modules" / "pkg").mkdir(parents=True)
 (repo / "node_modules" / "pkg" / "i.js").write_text("module.exports = 1\n")
 for g in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "i"]):
-    subprocess.run(["git", *g], cwd=repo, check=True, capture_output=True)
+    subprocess.run([GIT, *g], cwd=repo, check=True, capture_output=True)  # nosec B603 - fixed git argv in this fixture
 SCAN = ["--no-check-vulnerabilities", "--no-check-licenses", "--no-scan-git-history", "--no-check-static-analysis"]
 
 # ---------------------------------------------------------------- basics
@@ -204,6 +207,52 @@ rc, out = run(["tokens", "meter", "--path", str(repo), "--plain"])
 check("meter records real hook denial", rc == 0 and "1 unchanged full reread(s) denied" in out, out)
 rc, out = run(["tokens", "meter", "--path", str(repo), "--disable-read-guard"])
 check("read guard removal", rc == 0 and not (settings_dir / "settings.local.json").exists(), out)
+
+# ---------------------------------------------------------------- shield: setup, exec-form hooks, off
+shield_repo = ROOT / "shield repo é"
+(shield_repo / "src").mkdir(parents=True)
+(shield_repo / "src" / "app.py").write_text("import os\n", encoding="utf-8")
+for g in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "i"]):
+    subprocess.run([GIT, *g], cwd=shield_repo, check=True, capture_output=True)  # nosec B603 - fixed git argv in this fixture
+SHIELD_ENV = {"ALETHEORE_SHIELD_OFFLINE": "1", **NO_NET}
+shield_settings = shield_repo / ".claude" / "settings.local.json"
+rc, out = run(["shield", "setup", "--path", str(shield_repo), "--yes"], **SHIELD_ENV)
+check("shield setup --yes", rc == 0 and shield_settings.exists(), out)
+shield_hooks = json.loads(shield_settings.read_text(encoding="utf-8")).get("hooks", {}) if shield_settings.exists() else {}
+edited = shield_repo / "src" / "app.py"
+# The Write every hook is told about: Pre sees it proposed, Post sees it on disk (same text), so the post-edit hook
+# reads the file the payload describes and the dependency check really runs on the new import.
+written = "import os\nimport surely_not_a_real_package_x\n"
+for event, name in (("PreToolUse", "pre-edit"), ("PostToolUse", "post-edit"), ("Stop", "turn-end"), ("SessionEnd", "session-end")):
+    entries = [h for e in shield_hooks.get(event, []) for h in e.get("hooks", []) if "aletheore.shield.hooks" in h.get("args", [])]
+    if len(entries) != 1:
+        check(f"shield {name} hook registered in exec form", False, shield_hooks)
+        continue
+    hook = entries[0]
+    check(f"shield {name} hook keeps the repository off its import path (-P)", "-P" in hook["args"], hook)
+    if event == "PostToolUse":
+        edited.write_text(written, encoding="utf-8")
+    payload = json.dumps({
+        "session_id": "smoke-shield", "cwd": str(shield_repo), "hook_event_name": event, "tool_name": "Write",
+        "tool_input": {"file_path": str(edited), "content": written},
+    }, ensure_ascii=False)
+    result = subprocess.run([hook["command"], *hook["args"]],  # nosec B603 - Shield's generated exec-form hook in this isolated fixture
+                            cwd=shield_repo, input=payload, capture_output=True,
+                            encoding="utf-8", errors="replace", env=env(**SHIELD_ENV), timeout=60)
+    ok = result.returncode == 0
+    if event == "Stop":  # the new import is not checked offline, and turn-end says so to the user
+        ok = ok and "systemMessage" in result.stdout
+    if ok and result.stdout.strip():
+        try:
+            ok = isinstance(json.loads(result.stdout), dict)
+        except ValueError:
+            ok = False
+    check(f"shield {name} direct-exec hook (no shell) exits 0 with JSON or nothing", ok,
+          f"rc={result.returncode}\n{result.stdout}{result.stderr}")
+rc, out = run(["shield", "off", "--path", str(shield_repo), "--yes"], **SHIELD_ENV)
+check("shield off removes the settings file it created", rc == 0 and not shield_settings.exists(), out)
+pre_commit = shield_repo / ".git" / "hooks" / "pre-commit"
+check("shield off removes its pre-commit hook", not pre_commit.exists() or "aletheore shield" not in pre_commit.read_text(encoding="utf-8"), out)
 
 rc, out = run(["diff", str(snaps[0]), str(snaps[-1])])
 check("diff json", rc == 0 and json.loads(out), out)

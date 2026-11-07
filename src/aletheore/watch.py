@@ -391,7 +391,9 @@ def _carry_forward_skipped_analysis(evidence: dict, repo_path: Path) -> None:
         current_secrets["history_scanned_commits"] = previous_history_scanned_commits
 
 
-def rebuild(repo_path: Path, report: Callable[[str], None], allow_hosted: bool = True) -> None:
+def rebuild(
+    repo_path: Path, report: Callable[[str], None], allow_hosted: bool = True, edit_gitignore: bool = True
+) -> None:
     """One scan-and-reindex cycle.
 
     Vulnerability, license, git-history, architecture-analysis, hotspot, and
@@ -427,6 +429,10 @@ def rebuild(repo_path: Path, report: Callable[[str], None], allow_hosted: bool =
     used to always default True regardless of the MCP effect policy, so an
     operator who denied `external` still had edited files silently
     hosted-embedded on every watcher-triggered reindex).
+
+    edit_gitignore defaults to True (the watch command and the MCP server add
+    `.aletheore/` to .gitignore as a scan does); Shield's detached refresh
+    passes False, because Shield promises never to touch .gitignore.
     """
     from aletheore.evidence import scan_repository, write_evidence
 
@@ -438,9 +444,10 @@ def rebuild(repo_path: Path, report: Callable[[str], None], allow_hosted: bool =
         analyze_architecture=False,
         check_hotspots=False,
         check_static_analysis=False,
+        edit_gitignore=edit_gitignore,
     )
     _carry_forward_skipped_analysis(evidence, repo_path)
-    write_evidence(evidence, repo_path)
+    write_evidence(evidence, repo_path, edit_gitignore=edit_gitignore)
     report("evidence updated")
 
     if not (repo_path / ".aletheore" / "index.lancedb").exists():

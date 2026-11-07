@@ -88,6 +88,38 @@ def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: obj
     return changed
 
 
+def _test_signals(modules: list[dict], by_path: dict, target: str) -> tuple[set[str], set[str], set[str]]:
+    """(test files importing `target` directly, test files reaching it transitively, test files named for it)."""
+    via_imports_direct = {p for p in _direct_importers(by_path, target) if _is_test_path(p)}
+    via_imports_transitive = {p for p in _transitive_importers(by_path, target) if _is_test_path(p)}
+    stem = PurePosixPath(target).stem
+    via_naming = {
+        m["path"]
+        for m in modules
+        if m.get("path") and m["path"] != target and _matches_naming_convention(stem, m["path"])
+    }
+    return via_imports_direct, via_imports_transitive, via_naming
+
+
+def _split_confidence(direct: set[str], transitive: set[str], naming: set[str]) -> tuple[list[str], list[str]]:
+    # Split into two confidence tiers rather than one blended list: a direct import or a naming match is a strong
+    # signal, but a purely transitive import (reachable only through other files, often a package's own
+    # __init__.py) is not - see _transitive_importers' docstring for the measured precision gap.
+    high_confidence = sorted(direct | naming)
+    lower_confidence = sorted(transitive - set(high_confidence))
+    return high_confidence, lower_confidence
+
+
+def candidate_tests(evidence: dict, target: str) -> tuple[list[str], list[str]]:
+    """(high_confidence, lower_confidence) test files for `target`; both empty when the scan does not know it."""
+    modules = evidence["repository"]["modules"]
+    by_path = {m["path"]: m for m in modules if m.get("path")}
+    target = target.removeprefix("./")
+    if target not in by_path:
+        return [], []
+    return _split_confidence(*_test_signals(modules, by_path, target))
+
+
 def tests_for_report(evidence: dict, repo_path: Path, target: str, *, summary_only: bool = False) -> str:
     """Report candidate tests; summary_only omits the detailed coverage appendix."""
     modules = evidence["repository"]["modules"]
@@ -98,21 +130,9 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str, *, summary_on
         hint = f"; closest: {', '.join(close)}" if close else ""
         raise TestsForError(f"{target!r} is not a module in the scan{hint}")
 
-    direct_importers = _direct_importers(by_path, target)
-    via_imports_direct = {p for p in direct_importers if _is_test_path(p)}
-    via_imports_transitive = {p for p in _transitive_importers(by_path, target) if _is_test_path(p)}
+    via_imports_direct, via_imports_transitive, via_naming = _test_signals(modules, by_path, target)
     stem = PurePosixPath(target).stem
-    via_naming = {
-        m["path"]
-        for m in modules
-        if m.get("path") and m["path"] != target and _matches_naming_convention(stem, m["path"])
-    }
-
-    # Split into two confidence tiers rather than one blended list: a direct import or a naming match is a strong
-    # signal, but a purely transitive import (reachable only through other files, often a package's own
-    # __init__.py) is not - see _transitive_importers' docstring for the measured precision gap.
-    high_confidence = sorted(via_imports_direct | via_naming)
-    lower_confidence = sorted(via_imports_transitive - set(high_confidence))
+    high_confidence, lower_confidence = _split_confidence(via_imports_direct, via_imports_transitive, via_naming)
     both = sorted({*high_confidence, *lower_confidence})
 
     scan_time = evidence.get("scanned_at")

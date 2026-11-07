@@ -5,6 +5,15 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Added `aletheore shield`, a local safety net for AI-written changes in a Git repository.
+  After one confirmation it registers Claude Code hooks and a Git pre-commit hook that report
+  new or suspicious dependencies, affected files and candidate tests, signature changes and new
+  risks; keeps checkpoints of the working tree as Git refs that `aletheore shield undo` restores;
+  and writes a receipt per session. It makes no model call and never blocks a commit or an
+  agent turn. Package names, and nothing else, go to PyPI and npm for dependency checks; turn
+  that off with `ALETHEORE_SHIELD_OFFLINE=1`. `aletheore shield setup` shows every change before
+  making it, `aletheore shield status` shows what is on, `aletheore shield check` runs the guard
+  on demand, and `aletheore shield off` removes it.
 - The full MCP profile's tool definitions are about 24% smaller (35,459 to 26,979 characters; measured in Claude Code,
   2,880 fewer input tokens on every turn). The paging rule is stated once in the server instructions instead of on 18 tool descriptions,
   and the four paging arguments (`section`, `offset`, `limit`, `filter`) moved off those 18 evidence tools onto one new

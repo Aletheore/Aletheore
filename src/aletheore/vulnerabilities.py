@@ -894,6 +894,12 @@ def _pin_info_fields(info: dict) -> dict:
     return fields
 
 
+def directory_pins(directory: Path) -> list[tuple[str, str, str]]:
+    """The pins every parser finds in one manifest directory, in parser order (duplicates kept, as collect_pins
+    sees them). Raises OSError when a manifest there cannot be read."""
+    return [pin for parser in _pin_parsers() for pin in parser(directory)]
+
+
 def collect_pins(repo_path: Path) -> tuple[list[tuple[str, str, str]], dict[tuple[str, str, str], list[str]], dict]:
     """Every dependency pin declared by a manifest at ANY depth of repo_path.
 
@@ -916,7 +922,7 @@ def collect_pins(repo_path: Path) -> tuple[list[tuple[str, str, str]], dict[tupl
     unreadable: list[str] = []
     for rel_dir, directory in manifest_dir_paths(repo_path):
         try:
-            dir_pins = [pin for parser in _pin_parsers() for pin in parser(directory)]
+            dir_pins = directory_pins(directory)
         except OSError:
             if rel_dir == ".":
                 raise
