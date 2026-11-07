@@ -16,7 +16,6 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="AGPL-3.0 license"></a>
   <a href="https://github.com/Aletheore/Aletheore/actions/workflows/tests.yml"><img src="https://github.com/Aletheore/Aletheore/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
   <a href="https://codecov.io/gh/Aletheore/Aletheore"><img src="https://codecov.io/gh/Aletheore/Aletheore/graph/badge.svg" alt="Coverage"></a>
-  <a href="https://github.com/Aletheore/Aletheore/actions/workflows/container-security.yml"><img src="https://github.com/Aletheore/Aletheore/actions/workflows/container-security.yml/badge.svg" alt="Container security"></a>
   <a href="https://securityscorecards.dev/viewer/?uri=github.com/Aletheore/Aletheore"><img src="https://api.securityscorecards.dev/projects/github.com/Aletheore/Aletheore/badge" alt="OpenSSF Scorecard"></a>
   <a href="https://pepy.tech/projects/aletheore"><img src="https://static.pepy.tech/personalized-badge/aletheore?period=total&amp;units=INTERNATIONAL_SYSTEM&amp;left_color=BLACK&amp;right_color=GREEN&amp;left_text=downloads" alt="PyPI downloads"></a>
   <a href="https://mcpvault.io/servers/aletheore/health?utm_source=external_badge&amp;utm_medium=referral&amp;utm_campaign=mcp_health_report"><img src="https://mcpvault.io/badge/aletheore.svg" alt="MCPVault status"></a>
