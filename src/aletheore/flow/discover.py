@@ -148,6 +148,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
 def discover_repo(repo: Path, index: JavaIndex | None = None, budget_seconds: float = MAX_SECONDS) -> list[dict]:
     """Discover tainted flows in every supported language the repository contains."""
     from aletheore.flow.discover_cs import discover_cs, has_cs
+    from aletheore.flow.discover_rb import discover_rb, has_rb
     from aletheore.flow.discover_go import discover_go, has_go
     from aletheore.flow.discover_js import discover_javascript, has_javascript
     from aletheore.flow.discover_php import discover_php, has_php
@@ -164,14 +165,17 @@ def discover_repo(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
         out += discover_go(repo, None, budget_seconds)
     if has_cs(repo):
         out += discover_cs(repo, None, budget_seconds)
+    if has_rb(repo):
+        out += discover_rb(repo, None, budget_seconds)
     return sorted(out, key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
 
 def has_source(repo: Path) -> bool:
     from aletheore.flow.discover_cs import has_cs
+    from aletheore.flow.discover_rb import has_rb
     from aletheore.flow.discover_go import has_go
     from aletheore.flow.discover_js import has_javascript
     from aletheore.flow.discover_php import has_php
     from aletheore.flow.discover_py import has_python
 
-    return has_java(repo) or has_python(repo) or has_javascript(repo) or has_php(repo) or has_go(repo) or has_cs(repo)
+    return has_java(repo) or has_python(repo) or has_javascript(repo) or has_php(repo) or has_go(repo) or has_cs(repo) or has_rb(repo)

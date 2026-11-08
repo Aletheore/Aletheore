@@ -5,6 +5,10 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Flow analysis now covers Ruby, for both discovery and checking Semgrep's findings: `params`, `cookies` and `request` data
+  is followed through Rails controllers, Sinatra routes, methods and classes to SQL, command, path, XSS, redirect, SSRF,
+  deserialization, code-injection and session sinks. Hash and array-bound queries (`where(name: x)`, `where("a = ?", x)`),
+  `shellescape`, `to_i` and `allow_other_host: false` count as safe. ERB views are not analysed yet.
 - Flow analysis now covers C#, for both discovery and checking Semgrep's findings: request data from ASP.NET and
   WebForms (`Request[...]`, `[FromQuery]` and other model-bound action parameters) is followed through methods and
   classes to SQL, command, path, XSS, redirect, SSRF, XPath, deserialization and session sinks. Class `const` and
