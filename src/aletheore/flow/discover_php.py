@@ -162,7 +162,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                     else:
                         interp.bind_entry(fn, fr)
                         interp.exec(fn.child_by_field_name("body"), fr)
-                except (BudgetExceeded, RecursionError):
+                except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                     coverage.note(path)
                     continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))

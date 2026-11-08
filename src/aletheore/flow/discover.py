@@ -165,7 +165,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                 interp.bind_entry_params(method, fr)
                 try:
                     interp.exec(body, fr)
-                except (BudgetExceeded, RecursionError):
+                except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                     coverage.note(jf.path)
                     continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))

@@ -127,7 +127,7 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                     fr = KFrame(kf, kf.main, None, 0)
                     try:
                         interp._run_lambda(lam, [], fr)
-                    except (BudgetExceeded, RecursionError):
+                    except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                         coverage.note(path)
                         continue
             for cls in kf.classes:
@@ -146,7 +146,7 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                                 interp.eval(inner, fr)
                             else:
                                 interp.exec(inner, fr)
-                        except (BudgetExceeded, RecursionError):
+                        except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                             coverage.note(path)
                             continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))

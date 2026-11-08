@@ -181,7 +181,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                         body = fnode.child_by_field_name("body")
                         interp.bind_entry(fnode, fr, route)
                         interp.exec(body, fr)
-                except (BudgetExceeded, RecursionError):
+                except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                     coverage.note(path)
                     continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))

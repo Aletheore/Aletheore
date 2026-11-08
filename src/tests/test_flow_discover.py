@@ -162,3 +162,25 @@ def test_budget_exhaustion_is_reported_not_silent(tmp_path, monkeypatch):
     (tmp_path / "a.py").write_text("from flask import request\nimport os\n\ndef h():\n    a = 1\n    b = 2\n    c = 3\n    os.system(request.args.get('c'))\n")
     result = check_flow(tmp_path)
     assert result.get("incomplete_files") == ["a.py"]
+
+
+def test_go_split_on_empty_separator_does_not_crash(tmp_path):
+    from aletheore.flow.discover import discover_repo
+    (tmp_path / "m.go").write_text('package main\nimport ("net/http"; "strings"; "os")\nfunc h(w http.ResponseWriter, r *http.Request) {\n  parts := strings.Split("abc", "")\n  os.Open(r.FormValue("f") + parts[0])\n}\n')
+    assert any("path-traversal" in f["rule_id"] for f in discover_repo(tmp_path))
+
+
+def test_an_unexpected_error_in_one_entry_point_does_not_lose_the_scan(tmp_path, monkeypatch):
+    from aletheore.flow.py_interp import PyInterp
+    from aletheore.static_analysis.flow_scanner import check_flow
+    real = PyInterp.exec
+
+    def flaky(self, n, fr):
+        if n is not None and n.type == "block" and b"boom" in n.text:
+            raise ValueError("an unmodelled construct")
+        return real(self, n, fr)
+    monkeypatch.setattr(PyInterp, "exec", flaky)
+    (tmp_path / "a.py").write_text("from flask import request\nimport os\n\ndef bad():\n    boom = 1\n\ndef good():\n    os.system(request.args.get('c'))\n")
+    result = check_flow(tmp_path)
+    assert any("command-injection" in f["rule_id"] for f in result["findings"])
+    assert result.get("incomplete_files") == ["a.py"]

@@ -208,7 +208,7 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                     else:
                         interp.bind_entry(fn, fr, route)
                         interp._run_body(fn, fr)
-                except (BudgetExceeded, RecursionError):
+                except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                     coverage.note(path)
                     continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))

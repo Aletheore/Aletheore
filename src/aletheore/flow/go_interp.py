@@ -457,7 +457,7 @@ class GoInterp:
             if name in ("Split", "SplitN", "Fields"):
                 if args and isinstance(args[0], Const) and name == "Split" and len(args) > 1 and isinstance(args[1], Const) \
                         and isinstance(args[0].value, str) and isinstance(args[1].value, str):
-                    return ListV([Const(p) for p in args[0].value.split(args[1].value)], birth_depth=fr.branch)
+                    return ListV([Const(p) for p in (args[0].value.split(args[1].value) if args[1].value else list(args[0].value))], birth_depth=fr.branch)
                 return ListV([self._combine(*args)], birth_depth=fr.branch, dirty=True)
             if name in ("ToLower", "ToUpper", "TrimSpace") and args and isinstance(args[0], Const) and isinstance(args[0].value, str):
                 return Const({"ToLower": args[0].value.lower, "ToUpper": args[0].value.upper, "TrimSpace": args[0].value.strip}[name]())

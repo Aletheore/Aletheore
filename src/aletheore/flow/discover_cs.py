@@ -146,7 +146,7 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
                             interp.eval(body.named_children[-1] if body.named_children else None, fr)
                         else:
                             interp.exec(body, fr)
-                    except (BudgetExceeded, RecursionError):
+                    except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                         coverage.note(path)
                         continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))

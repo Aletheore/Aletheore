@@ -172,7 +172,7 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
                                 interp.exec(body, fr)
                             else:
                                 interp.eval(body, fr)
-                    except (BudgetExceeded, RecursionError):
+                    except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                         coverage.note(path)
                         continue
                 for blk in _sinatra_blocks(cls):
@@ -181,7 +181,7 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
                     fr = RFrame(rf, cls, Obj(cls=cls, type_name=cls.name), 0)
                     try:
                         _exec_block(interp, blk, fr)
-                    except (BudgetExceeded, RecursionError):
+                    except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                         coverage.note(path)
                         continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
