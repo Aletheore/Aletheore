@@ -934,7 +934,20 @@ class JsInterp:
                     return _t(init)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes)
+        def attr(n):
+            if n is None or n.type != "member_expression":
+                return None
+            obj, prop = n.child_by_field_name("object"), _t(n.child_by_field_name("property"))
+            if local(obj):
+                return (local(obj), prop)
+            if obj is not None and obj.type == "new_expression":  # new URL(x).hostname
+                a = obj.child_by_field_name("arguments")
+                first = a.named_children[0] if a is not None and a.named_children else None
+                if first is not None and local(first):
+                    return (local(first), prop)
+            return None
+
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr)
 
     def _narrow(self, names: set, fr: JFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)

@@ -131,11 +131,11 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                         if multi and isinstance(first, Const) and str(first.value).lower().rsplit("/", 1)[-1] not in ("sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "pwsh", "dash", "ksh", "csh"):
                             return  # constant program with separate arguments: no shell, no injection of a second command
                     for i in positions:
-                        if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
-                            continue  # a fixed scheme://host/ or same-site path prefix: only the rest is attacker data
                         value = recv if i == -1 else args[i] if i < len(args) else None
                         if value is None:
                             continue
+                        if _cwe in (918, 601) and (host_is_fixed(value) or path_prefix_safe(value)):
+                            continue  # a fixed scheme://host/ or same-site path prefix: only the rest is attacker data
                         if _cwe == 22 and random_adjacent(value):
                             continue  # appended to an unguessable generated name: no traversal out of it
                         # A trust-boundary finding needs a tainted STRING; an object bound from a form and

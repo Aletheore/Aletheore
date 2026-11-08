@@ -896,6 +896,10 @@ class PhpInterp:
             if fn in ("is_numeric", "is_int", "is_float", "ctype_digit", "ctype_alnum", "ctype_alpha", "ctype_xdigit", "is_bool") and args:
                 key = self._expr_key(args[0], fr)
                 return {key} if key else set()
+            if fn == "in_array" and len(args) >= 2 and self._host_key(args[0]) is not None:
+                coll = self.eval(args[1], fr)
+                if isinstance(coll, MapV) and not coll.dirty and not coll.opaque and all(classify(v) == "safe" for v in coll.entries.values()):
+                    return {self._host_key(args[0]) + "@918"}  # the URL's host is one of the allowed hosts
             if fn == "in_array" and len(args) >= 2:
                 key = self._expr_key(args[0], fr)
                 coll = self.eval(args[1], fr)
@@ -945,8 +949,34 @@ class PhpInterp:
                 return f"{_vname(node.named_children[0])}[{_s(idx.value)}]"
         return None
 
+    @staticmethod
+    def _host_key(node: Node | None) -> str | None:
+        """`parse_url($u, PHP_URL_HOST)` and `parse_url($u)['host']`: the variable whose URL host this reads."""
+        if node is None:
+            return None
+        call = node
+        if node.type == "subscript_expression" and node.named_children and node.named_children[0].type == "function_call_expression" \
+                and "host" in _t(node.named_children[-1]).lower():
+            call = node.named_children[0]
+        if call.type != "function_call_expression" or _t(call.child_by_field_name("function")).lower() != "parse_url":
+            return None
+        a = call.child_by_field_name("arguments")
+        items = [x.named_children[-1] for x in (a.named_children if a is not None else []) if x.named_children]
+        if not items or items[0].type != "variable_name":
+            return None
+        if call is node and not (len(items) >= 2 and "PHP_URL_HOST" in _t(items[1])):
+            return None
+        return _vname(items[0])
+
     def _apply_guard(self, keys: set[str], fr: PFrame) -> None:
         for k in keys:
+            if k.endswith("@918"):
+                if 918 in self.cwes:
+                    ids = self._tids(fr.env.get(k[:-4], UNKNOWN))
+                    if ids:
+                        fr.validated |= ids
+                    fr.env[k[:-4]] = SAFE
+                continue
             if "[" in k:
                 fr.safe_exprs.add(k)
             else:

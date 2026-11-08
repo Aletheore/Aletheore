@@ -1220,7 +1220,22 @@ class RbInterp:
                     c = self._base(c)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes)
+        def attr(n):
+            if n is None or n.type != "call" or n.child_by_field_name("arguments") is not None:
+                return None
+            recv, m = n.child_by_field_name("receiver"), _t(n.child_by_field_name("method"))
+            if recv is None:
+                return None
+            if local(recv):
+                return (local(recv), m)
+            if recv.type == "call" and _t(recv.child_by_field_name("method")) in ("URI", "parse", "new"):  # URI(x).host, URI.parse(x).host
+                a = recv.child_by_field_name("arguments")
+                first = a.named_children[0] if a is not None and a.named_children else None
+                if first is not None and local(first):
+                    return (local(first), m)
+            return None
+
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr)
 
     def _narrow(self, names: set, fr: RFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)

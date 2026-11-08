@@ -16,6 +16,7 @@ from tree_sitter import Node
 
 from aletheore.flow.py_index import PyClass, PyFile, PyIndex
 from aletheore.flow.py_sinks import REQUEST_ATTRS_SAFE, SAFE_RESULT_CALLS, SANITIZERS
+from aletheore.flow import guards as G
 from aletheore.flow.values import (
     ClosureV, add_prefix, SAFE, UNKNOWN, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
@@ -80,6 +81,7 @@ class PyInterp:
         self.store_hook = store_hook    # hook(node, base_text, key, value, frame)
         self.return_hook = return_hook  # hook(node, value, frame)
         self.steps = 0
+        self._cur_env: dict = {}
         self.probes: dict[tuple, list] = {}
         self.probe_keys: set[tuple] = set()
         self.dead: list[tuple] = []
@@ -984,6 +986,27 @@ class PyInterp:
             out[k] = join(a[k], b[k]) if (k in a and k in b) else (a[k] if k in a else b[k])
         fr.env = out
 
+    def _mark_safe(self, g: str, fr: PFrame) -> None:
+        if g.endswith("@918"):
+            if 918 in self.cwes:  # an allowed host proves the URL cannot point elsewhere; it proves nothing about other classes
+                fr.env[g[:-4]] = SAFE
+        else:
+            fr.env[g] = SAFE
+
+    def _host_var(self, n: Node | None) -> str | None:
+        """`u.hostname`, `urlparse(u).netloc`: the local variable whose URL host this expression reads."""
+        if n is None or n.type != "attribute" or _t(n.child_by_field_name("attribute")) not in G.HOST_ATTRS:
+            return None
+        obj = n.child_by_field_name("object")
+        if obj is not None and obj.type == "identifier" and _t(obj) in self._cur_env:
+            return _t(obj)
+        if obj is not None and obj.type == "call":
+            a = obj.child_by_field_name("arguments")
+            first = a.named_children[0] if a is not None and a.named_children else None
+            if first is not None and first.type == "identifier" and _t(first) in self._cur_env:
+                return _t(first)
+        return None
+
     def _guarded_names(self, cond: Node | None, fr: PFrame, negated: bool = False) -> set[str]:
         """Names proven safe when `cond` holds (or, with negated=True, when it does NOT hold).
 
@@ -991,6 +1014,7 @@ class PyInterp:
         a conjunction guards everything either side guards, a disjunction only what both guard."""
         if cond is None:
             return set()
+        self._cur_env = fr.env
         t = cond.type
         if t == "parenthesized_expression":
             return self._guarded_names(cond.named_children[0] if cond.named_children else None, fr, negated)
@@ -1017,10 +1041,15 @@ class PyInterp:
             negative = ops in ("not in", "!=")
             if (positive and negated) or (negative and not negated) or not (positive or negative):
                 return set()
-            if operands[0].type == "identifier":
+            host = self._host_var(operands[0]) if ops in ("in", "not in", "==", "!=") else None
+            if host is not None:
+                name, other = host + "@918", operands[1]
+            elif operands[0].type == "identifier":
                 name, other = _t(operands[0]), operands[1]
             elif operands[1].type == "identifier" and ops in ("==", "!="):
                 name, other = _t(operands[1]), operands[0]
+            elif ops in ("==", "!=") and self._host_var(operands[1]) is not None:
+                name, other = self._host_var(operands[1]) + "@918", operands[0]
             else:
                 return set()
             val = self.eval(other, fr)
@@ -1070,7 +1099,7 @@ class PyInterp:
                 continue
             base = dict(fr.env)
             for g in self._guarded_names(cond_n, fr):
-                fr.env[g] = SAFE  # inside this branch the tested name has passed the check
+                self._mark_safe(g, fr)  # inside this branch the tested name has passed the check
             fr.branch += 1
             try:
                 term = self.exec(block, fr)
@@ -1092,7 +1121,7 @@ class PyInterp:
         for e in results[1:]:
             self._join_envs(fr, fr.env, e)
         for g in early_exit_guard:
-            fr.env[g] = SAFE  # `if not check(name): return` leaves only the passing path
+            self._mark_safe(g, fr)  # `if not check(name): return` leaves only the passing path
         return all_terminated and has_else
 
     def _loop(self, n: Node, fr: PFrame) -> bool:

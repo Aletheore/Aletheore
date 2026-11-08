@@ -7,6 +7,8 @@ starting with a dot) resolve to nothing, which the interpreter treats as unknown
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -88,6 +90,8 @@ def _scan(f: JsFile) -> None:
                         f.requires[_t(name_n)] = (spec, _t(val.child_by_field_name("property")))
                 elif val.type in ("string", "number", "template_string", "true", "false"):
                     f.constants[_t(name_n)] = val
+                elif val.type == "array" and not re.search(rb"\b" + re.escape(name_n.text) + rb"\s*(\.(push|unshift|splice|concat|fill|pop|shift)\(|\[[^\]]*\]\s*=[^=])", f.src):
+                    f.constants[_t(name_n)] = val  # a module-level list nothing in the file adds to: an allowlist
             elif name_n is not None and name_n.type == "object_pattern" and val is not None \
                     and val.type == "call_expression" and _t(val.child_by_field_name("function")) == "require":
                 args = val.child_by_field_name("arguments")

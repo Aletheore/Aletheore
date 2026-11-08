@@ -780,7 +780,19 @@ class GoInterp:
                 return const(first)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes)
+        def attr(n):
+            if n is None:
+                return None
+            if n.type == "selector_expression":  # u.Host
+                op = n.child_by_field_name("operand")
+                return (local(op), _t(n.child_by_field_name("field"))) if local(op) else None
+            if n.type == "call_expression" and n.child_by_field_name("function") is not None and n.child_by_field_name("function").type == "selector_expression":
+                fn = n.child_by_field_name("function")  # u.Hostname()
+                op = fn.child_by_field_name("operand")
+                return (local(op), _t(fn.child_by_field_name("field"))) if local(op) else None
+            return None
+
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr)
 
     def _narrow(self, names: set, fr: GFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)

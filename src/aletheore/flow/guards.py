@@ -63,6 +63,10 @@ def resolve(names: set, cwes: set[int]) -> set[str]:
     out: set[str] = set()
     tokens: dict[str, set[str]] = {}
     for n in names:
+        if n.endswith("@918"):
+            if 918 in cwes:
+                out.add(n[:-4])
+            continue
         if "#" in n:
             var, tok = n.split("#", 1)
             tokens.setdefault(var, set()).add(tok)
@@ -75,6 +79,7 @@ def resolve(names: set, cwes: set[int]) -> set[str]:
     return out
 
 
+HOST_ATTRS = {"host", "hostname", "netloc", "authority", "Host", "Hostname", "getHost", "getAuthority", "host_str", "HostName", "Authority", "origin"}
 EQUALS = {"equals", "Equals", "equalsIgnoreCase", "EqualsIgnoreCase", "contentEquals", "EqualFold", "eql?", "equal?", "casecmp?", "isEqualTo"}
 MATCHES = {"matches", "IsMatch", "MatchString", "match?", "test", "Match", "fullmatch", "is_match", "matches_x"}
 NUMERIC = {"isNumeric", "isDigits", "isCreatable", "isParsable", "isNumber", "is_numeric", "ctype_digit", "isInteger", "IsDigit", "isdigit", "isalnum", "isdecimal", "is_digit_x"}
@@ -92,7 +97,8 @@ class GuardEngine:
     pattern_source(node)  -> constant regex text the node stands for (a compiled pattern constant), else None
     """
 
-    def __init__(self, norm, local, const, safe, safe_collection, pattern_source, cwes, anchored=()):
+    def __init__(self, norm, local, const, safe, safe_collection, pattern_source, cwes, anchored=(), attr=None):
+        self.attr = attr or (lambda n: None)  # attr(node) -> (local variable, host-like attribute) for `u.host`, `new URL(u).hostname`, ...
         self.anchored = set(anchored)  # method names that match the whole string (Kotlin matches, Java matches)
         self.norm, self.local, self.const, self.safe = norm, local, const, safe
         self.safe_collection, self.pattern_source, self.cwes = safe_collection, pattern_source, cwes
@@ -115,6 +121,9 @@ class GuardEngine:
             return either(self.facts(n[1]), self.facts(n[2]))
         if k in ("eq", "ne"):
             for a, b in ((n[1], n[2]), (n[2], n[1])):
+                hv = self.attr(a)
+                if hv and hv[1] in HOST_ATTRS and b is not None and self.safe(b):
+                    return ({hv[0] + "@918"}, set()) if k == "eq" else (set(), {hv[0] + "@918"})
                 v = self.local(a)
                 if v and b is not None and self.safe(b):
                     return ({v}, set()) if k == "eq" else (set(), {v})
@@ -126,6 +135,9 @@ class GuardEngine:
             ops = ([recv] if recv is not None else []) + list(args)
             if len(ops) == 2:
                 for a, b in ((ops[0], ops[1]), (ops[1], ops[0])):
+                    hv = self.attr(a)
+                    if hv and hv[1] in HOST_ATTRS and b is not None and self.safe(b):
+                        return ({hv[0] + "@918"}, set())
                     v = self.local(a)
                     if v and b is not None and self.safe(b):
                         return ({v}, set())
@@ -162,6 +174,9 @@ class GuardEngine:
             v2 = self.local(args[0])
             if v2 and recv is not None and self.safe_collection(recv):
                 return ({v2}, set())
+            hv = self.attr(args[0])
+            if hv and hv[1] in HOST_ATTRS and recv is not None and self.safe_collection(recv):
+                return ({hv[0] + "@918"}, set())  # `ALLOWED_HOSTS.include?(u.host)`: the URL points at an allowed host
             return EMPTY
         if name in NUMERIC and (len(args) == 1 or (recv is not None and not args)):
             v = self.local(args[0]) if args else self.local(recv)

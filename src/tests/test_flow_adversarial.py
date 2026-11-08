@@ -198,3 +198,36 @@ def test_php_class_of_a_json_only_application_is_not_xss(tmp_path):
     d = tmp_path / "other"
     d.mkdir()
     assert "xss" in run(d, "page.php", '<?php\nclass P {\n  function go() { echo "<p>" . $_GET["q"] . "</p>"; }\n}\n')
+
+
+HOST_CASES = {
+    "ruby": ('require "sinatra"\nrequire "net/http"\nALLOWED = ["hooks.example.com"]\nget("/w") do\n  u = URI(params[:url])\n  halt 400 unless ALLOWED.include?(u.host)\n  Net::HTTP.get(u)\nend\n', "app.rb"),
+    "javascript": ('const express = require("express"); const axios = require("axios"); const app = express();\nconst ALLOWED = ["hooks.example.com"];\n'
+                   'app.get("/w", async (req, res) => {\n  const u = req.query.url;\n  if (!ALLOWED.includes(new URL(u).hostname)) { return res.status(400).end(); }\n  await axios.get(u);\n});\n', "a.js"),
+    "python": ('import requests\nfrom urllib.parse import urlparse\nfrom flask import request\nALLOWED = ["hooks.example.com"]\ndef f():\n    u = request.args.get("url")\n'
+               '    if urlparse(u).hostname not in ALLOWED:\n        return "no"\n    requests.get(u)\n', "a.py"),
+    "php": ('<?php\n$allowed = ["hooks.example.com"];\n$u = $_GET["url"];\nif (!in_array(parse_url($u, PHP_URL_HOST), $allowed, true)) { die("no"); }\nfile_get_contents($u);\n', "a.php"),
+    "java": ('import javax.servlet.http.*;\nimport java.util.*;\npublic class S extends HttpServlet {\n  static final List<String> OK = Arrays.asList("hooks.example.com");\n'
+             '  protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws Exception {\n    String u = req.getParameter("u");\n'
+             '    if (!OK.contains(new java.net.URL(u).getHost())) { return; }\n    new java.net.URL(u).openStream();\n  }\n}\n', "S.java"),
+    "csharp": ('[ApiController]\npublic class C : ControllerBase {\n  static readonly string[] Ok = new[] { "hooks.example.com" };\n  [HttpGet("/w")]\n'
+               '  public async Task<IActionResult> W() { var u = Request.Query["u"].ToString(); if (!Ok.Contains(new Uri(u).Host)) { return BadRequest(); }\n'
+               '    var s = await new HttpClient().GetStringAsync(u); return Ok(); }\n}\n', "C.cs"),
+}
+
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("lang", sorted(HOST_CASES))
+def test_host_allowlist_proves_the_url_safe_for_ssrf_only(tmp_path, lang):
+    src, name = HOST_CASES[lang]
+    assert "ssrf" not in run(tmp_path, name, src)
+    d = tmp_path / "unguarded"
+    d.mkdir()
+    # the same program without the allowlist check is still SSRF
+    lines = [l for l in src.splitlines(keepends=True) if "ALLOWED" not in l.split("(")[0] or "=" in l.split("ALLOWED")[0] or "include" not in l]
+    unguarded = src
+    import re
+    unguarded = re.sub(r"(halt 400 unless[^\n]*\n|if \(!ALLOWED[^\n]*\n|if urlparse[^\n]*\n\s*return \"no\"\n|if \(!in_array[^\n]*\n|if \(!OK\.contains[^\n]*\n|if \(!Ok\.Contains[^\n]*\n)", "", src)
+    assert "ssrf" in run(d, name, unguarded)

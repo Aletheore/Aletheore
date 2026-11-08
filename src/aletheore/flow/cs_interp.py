@@ -883,7 +883,21 @@ class CsInterp:
                     c = self.index.cls(c.bases[0], c.file) if c.bases else None
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes)
+        def attr(n):
+            if n is None or n.type != "member_access_expression":
+                return None
+            expr, nm = n.child_by_field_name("expression"), _t(n.child_by_field_name("name"))
+            if local(expr):
+                return (local(expr), nm)
+            if expr is not None and expr.type == "object_creation_expression":  # new Uri(x).Host
+                a = expr.child_by_field_name("arguments")
+                first = a.named_children[0] if a is not None and a.named_children else None
+                inner = first.named_children[-1] if first is not None and first.named_children else None
+                if inner is not None and local(inner):
+                    return (local(inner), nm)
+            return None
+
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr)
 
     def _guard_facts(self, cond: Node | None, fr: CFrame):
         return self._engine(fr).facts(cond)

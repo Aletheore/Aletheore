@@ -1123,8 +1123,24 @@ class Interp:
             v = self.eval(n, fr)
             return v if isinstance(v, Const) and isinstance(v.value, str) else None
 
+        def host_of(n: Node | None) -> str | None:
+            """The local variable whose URL host `n` reads: `u.getHost()`, `new URL(u).getHost()`, `URI.create(u).getHost()`."""
+            if n is None or n.type != "method_invocation" or _t(n.child_by_field_name("name")) not in ("getHost", "getAuthority", "getHostName"):
+                return None
+            o = n.child_by_field_name("object")
+            if local(o):
+                return local(o)
+            if o is not None and o.type in ("object_creation_expression", "method_invocation"):
+                a = o.child_by_field_name("arguments")
+                first = a.named_children[0] if a is not None and a.named_children else None
+                return local(first) if first is not None else None
+            return None
+
         if name in ("equals", "equalsIgnoreCase", "contentEquals") and len(args) == 1:
             for var_n, other in ((obj, args[0]), (args[0], obj)):
+                hv = host_of(var_n)
+                if hv and other is not None and classify(self.eval(other, fr)) == "safe":
+                    return ({hv + "@918"}, set())
                 v = local(var_n)
                 if v and other is not None and classify(self.eval(other, fr)) == "safe":
                     return ({v}, set())
@@ -1146,10 +1162,11 @@ class Interp:
             if v and tok is not None and tok.value in G.PATH_TOKENS:
                 return (set(), {f"{v}#{tok.value}"})
             v2 = local(args[0])
-            if v2:
+            hv = host_of(args[0])
+            if v2 or hv:
                 coll = self.eval(obj, fr)
                 if isinstance(coll, ListV) and coll.items and not coll.dirty and not coll.opaque and all(classify(i) == "safe" for i in coll.items):
-                    return ({v2}, set())
+                    return ({v2} if v2 else {hv + "@918"}, set())
             return G.EMPTY
         if name in ("isNumeric", "isDigits", "isCreatable", "isParsable", "isNumber") and len(args) == 1 and local(args[0]):
             return ({local(args[0])}, set())

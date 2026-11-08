@@ -946,7 +946,15 @@ class RsInterp:
                 return None
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes)
+        def attr(n):
+            n = strip_ref(n)
+            if n is not None and n.type == "call_expression" and n.child_by_field_name("function") is not None and n.child_by_field_name("function").type == "field_expression":
+                fn = n.child_by_field_name("function")  # u.host_str()
+                v = local(fn.child_by_field_name("value"))
+                return (v, _t(fn.child_by_field_name("field"))) if v else None
+            return None
+
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr)
 
     def _narrow(self, names: set, fr: SFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)

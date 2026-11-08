@@ -956,7 +956,21 @@ class KtInterp:
                         return pattern_source(init)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, anchored=("matches",))
+        def attr(n):
+            if n is None or n.type != "navigation_expression":
+                return None
+            recv_n, nm, _ = self._split_nav(n)
+            if local(recv_n):
+                return (local(recv_n), nm)
+            if recv_n is not None and recv_n.type == "call_expression" and recv_n.children and _t(recv_n.children[0]) in ("URI", "URL"):  # URI(x).host
+                va = next((c for c in recv_n.children if c.type == "value_arguments"), None)
+                first = va.named_children[0] if va is not None and va.named_children else None
+                kids = [c for c in (first.named_children if first is not None else []) if c.type != "annotation"]
+                if kids and local(kids[-1]):
+                    return (local(kids[-1]), nm)
+            return None
+
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, anchored=("matches",), attr=attr)
 
     def _regex_arg(self, call: Node, fr: KFrame) -> str | None:
         va = next((c for c in call.children if c.type == "value_arguments"), None)

@@ -100,10 +100,8 @@ def sink_args(cwe: int, name: str, cname: str | None, recv_type: str | None, rec
             return [0]
         return None
     if cwe == 918:
-        if name == "<init>" and cname in ("URL", "URI") and argc >= 1:
-            return [0]
-        if name == "create" and cname == "URI" and argc >= 1:
-            return [0]
+        if name in ("openConnection", "openStream", "getContent") and recv_tainted:
+            return []  # opening a URL built from request data (constructing one only parses it)
         if name in ("getForObject", "getForEntity", "postForObject", "postForEntity", "exchange", "execute", "headForHeaders", "postForLocation", "put") \
                 and recv_type in ("RestTemplate", "TestRestTemplate") and argc >= 1:
             return [0]
