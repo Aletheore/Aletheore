@@ -492,7 +492,7 @@ The read guard stays opt-in. If it has not recorded events, the meter says that 
 it for the current project, run `aletheore tokens meter --enable-read-guard`. Aletheore first prints the exact
 project-local `.claude/settings.local.json` hooks and ownership sidecar it would add, then requires you to type
 `yes`. A decline changes nothing. Use `aletheore tokens meter --disable-read-guard` to remove only the hook entries
-Aletheore added. Restart Claude Code after enabling or disabling. The hooks (this one, `evidence-snippet` and `hallbook hook`) start Python with `-P`, so a repository's own `aletheore/` package or `json.py` is never imported into them. Running `--enable-read-guard` again rewrites entries from an earlier version that lacked `-P` in place, and `--disable-read-guard` removes either shape. The read guard records only in a repo that already
+Aletheore added. Restart Claude Code after enabling or disabling. The hooks (this one, `evidence-snippet` and `hallbook hook`) start Python with `-P`, so a repository's own `aletheore/` package or `json.py` is never imported into them. Running `--enable-read-guard` again rewrites entries from an earlier version that lacked `-P` in place, and `--disable-read-guard` removes either shape. Entries you pasted yourself from `evidence-snippet` or `hallbook hook` are not touched: run the snippet command again and replace the old entry. The read guard records only in a repo that already
 has `.aletheore/` state (for example, after a scan); setup does not create scan state.
 
 Metering begins when this version records events, so earlier activity is not reconstructed. A denied reread's byte

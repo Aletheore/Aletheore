@@ -227,7 +227,7 @@ def plan_install(project: Path) -> InstallPlan:
         return InstallPlan(
             settings_path,
             sidecar_path,
-            changed or modern,
+            changed,
             after,
             {**sidecar, "entries": modern},
             settings_fingerprint,
@@ -283,6 +283,9 @@ def install(project: Path, plan: InstallPlan | None = None) -> InstallPlan:
         plan.sidecar_after,
         expected_fingerprint=plan.sidecar_fingerprint,
     )
+    if not plan.entries:
+        # The hooks in settings are already current; only the ownership record needed refreshing.
+        return plan
     try:
         _write_json(
             plan.settings_path,

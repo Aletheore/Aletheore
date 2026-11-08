@@ -146,3 +146,19 @@ def test_a_fresh_install_writes_the_isolated_shape(tmp_path):
     plan = read_guard_setup.plan_install(tmp_path)
     for entry in plan.entries.values():
         assert entry["hooks"][0]["args"][:4] == ["-X", "utf8", "-P", "-m"]
+
+
+def test_current_settings_with_an_old_ownership_record_only_refresh_the_record(tmp_path):
+    old = _install_old_shape(tmp_path)
+    settings_path = tmp_path / ".claude" / "settings.local.json"
+    settings_path.write_text(
+        json.dumps({"hooks": {e: [read_guard_setup._modern(v)] for e, v in old.items()}}), encoding="utf-8"
+    )
+    before = settings_path.read_bytes()
+    plan = read_guard_setup.plan_install(tmp_path)
+    assert plan.entries == {} and not plan.already_installed
+    read_guard_setup.install(tmp_path, plan)
+    assert settings_path.read_bytes() == before
+    sidecar = json.loads(plan.sidecar_path.read_text(encoding="utf-8"))
+    assert all(e["hooks"][0]["args"][2] == "-P" for e in sidecar["entries"].values())
+    assert read_guard_setup.plan_install(tmp_path).already_installed
