@@ -168,15 +168,20 @@ def validate_go_finding(repo: Path, rel_path: str, start: tuple[int, int], end: 
                 positions.update(pos)
         return exprs, positions
 
+    via_descent = False
     call, exprs, positions = top, [], set()
+    probes = []
     for cand in candidates:
         e_, p_ = describe(cand)
         if p_:
-            call, exprs, positions = cand, e_, p_
-            break
-    else:
+            if not probes:
+                call = cand
+            probes += [e_[i] for i in sorted(p_) if i < len(e_)]
+    if not probes and not via_descent:
         exprs, positions = describe(top)
-    probes = [exprs[i] for i in sorted(positions) if i < len(exprs)] if positions else exprs
+        probes = [exprs[i] for i in sorted(positions) if i < len(exprs)] if positions else exprs
+    if not probes and via_descent:
+        return Verdict("unknown", "finding spans several statements and none is a known sink")
     if not probes:
         return Verdict("unknown", "sink has no arguments to judge")
     scope = call

@@ -163,3 +163,120 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                 except (BudgetExceeded, RecursionError):
                     continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
+
+
+def validate_python_finding(repo: Path, rel_path: str, start: tuple[int, int], end: tuple[int, int], cwes: set[int], index: PyIndex | None = None):
+    """Refine mode: prove the sink value of a Semgrep finding safe, or keep it (see validate_php_finding)."""
+    from aletheore.flow.validate import Verdict, _offset
+
+    index = index or PyIndex(repo)
+    pf = index.file(repo / rel_path)
+    if pf is None:
+        return Verdict("unknown", "file unreadable")
+    s, e = _offset(pf.src, *start), _offset(pf.src, *end)
+    node = pf.root.descendant_for_byte_range(s, e)
+    top = node
+    while top is not None and top.type != "call":
+        top = top.parent
+    via_descent = top is None and node is not None
+    if top is None and node is not None:
+        down = [node]
+        while down and top is None:
+            cur = down.pop(0)
+            if cur.start_byte < s or cur.end_byte > e:
+                if cur.end_byte > s and cur.start_byte < e:
+                    down.extend(cur.children)
+                continue
+            if cur.type == "call":
+                top = cur
+            down.extend(cur.children)
+    if top is None:
+        return Verdict("unknown", "no call at the finding location")
+    cands = []
+    stack = [top]
+    while stack:
+        cur = stack.pop()
+        if cur.type == "call":
+            cands.append(cur)
+        stack.extend(cur.children)
+
+    def txt(n):
+        return n.text.decode("utf-8", "replace") if n is not None else ""
+
+    def describe(call):
+        fn = call.child_by_field_name("function")
+        an = call.child_by_field_name("arguments")
+        ex = [c for c in (an.named_children if an is not None else []) if c.type not in ("keyword_argument", "comment", "dictionary_splat", "list_splat")]
+        total = len(an.named_children) if an is not None else 0
+        if fn is not None and fn.type == "attribute":
+            name, recv, recv_n = txt(fn.child_by_field_name("attribute")), txt(fn.child_by_field_name("object")), fn.child_by_field_name("object")
+        else:
+            name, recv, recv_n = txt(fn), "", None
+        pos: set[int] = set()
+        for cwe in cwes:
+            p = sink_args(cwe, name, recv, total, {}, False)
+            if p:
+                pos.update(p)
+        if -1 in pos and recv_n is not None:
+            ex = [recv_n] + ex
+            pos = {0 if x == -1 else x + 1 for x in pos}
+        return ex, pos
+
+    call, exprs, positions = top, [], set()
+    probes = []
+    for cand in cands:
+        e_, p_ = describe(cand)
+        if p_:
+            if not probes:
+                call = cand
+            probes += [e_[i] for i in sorted(p_) if i < len(e_)]
+    if not probes and not via_descent:
+        exprs, positions = describe(top)
+        probes = [exprs[i] for i in sorted(positions) if i < len(exprs)] if positions else exprs
+    if not probes and via_descent:
+        return Verdict("unknown", "finding spans several statements and none is a known sink")
+    if not probes:
+        return Verdict("unknown", "sink has no arguments to judge")
+    scope = call
+    while scope is not None and scope.type != "function_definition":
+        scope = scope.parent
+    cls = None
+    if scope is not None:
+        for c in pf.classes.values():
+            if c.node.start_byte <= scope.start_byte and scope.end_byte <= c.node.end_byte:
+                cls = c
+    interp = PyInterp(index, cwes)
+    for p in probes:
+        interp.probe_keys.add((id(pf), p.start_byte, p.end_byte))
+    route = False
+    if scope is not None:
+        parent = scope.parent
+        if parent is not None and parent.type == "decorated_definition":
+            text = "".join(c.text.decode("utf-8", "replace") for c in parent.children if c.type == "decorator")
+            route = any(m in text for m in ROUTE_MARKERS)
+    fr = PFrame(pf, cls, Obj(cls=cls, type_name=cls.name) if cls is not None else None, 0, route=route)
+    try:
+        if scope is None:
+            interp.exec(pf.root, fr)
+        else:
+            interp.bind_entry(scope, fr, route)
+            interp.exec(scope.child_by_field_name("body"), fr)
+    except (BudgetExceeded, RecursionError):
+        return Verdict("unknown", "analysis budget exceeded")
+    kinds = []
+    for p in probes:
+        key = (id(pf), p.start_byte, p.end_byte)
+        vals = interp.probes.get(key)
+        if vals:
+            kinds.extend(c for _, c in vals)
+        elif any(d[0] == key[0] and d[1] <= key[1] and key[2] <= d[2] for d in interp.dead):
+            kinds.append("dead")
+        else:
+            kinds.append("unreached")
+    if "tainted" in kinds:
+        return Verdict("tainted")
+    if "unknown" in kinds or "unreached" in kinds:
+        return Verdict("unknown", ",".join(sorted(set(kinds))))
+    if all(k == "dead" for k in kinds):
+        return Verdict("unreachable", "sink is in a branch that cannot run")
+    return Verdict("safe", "every value reaching the sink is constant or benign")

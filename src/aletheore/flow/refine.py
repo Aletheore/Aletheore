@@ -14,6 +14,8 @@ from pathlib import Path
 
 from aletheore.flow.cs_index import CsIndex
 from aletheore.flow.discover_kt import validate_kt_finding
+from aletheore.flow.discover_py import validate_python_finding
+from aletheore.flow.py_index import PyIndex
 from aletheore.flow.discover_rs import validate_rs_finding
 from aletheore.flow.rs_index import RsIndex
 from aletheore.flow.discover_rb import validate_rb_finding
@@ -56,6 +58,7 @@ def refine_semgrep_results(repo_path: Path, results: list[dict], relative_path) 
     rb_index: RbIndex | None = None
     kt_index: KtIndex | None = None
     rs_index: RsIndex | None = None
+    py_index: PyIndex | None = None
     started = time.monotonic()
     evaluated = 0
     for item in results:
@@ -64,7 +67,7 @@ def refine_semgrep_results(repo_path: Path, results: list[dict], relative_path) 
             extra = item.get("extra") or {}
             cwes = cwes_from_metadata(extra.get("metadata"))
             eligible = (
-                path.endswith((".java", ".go", ".cs", ".rb", ".kt", ".rs") + tuple(PHP_EXTS))
+                path.endswith((".java", ".go", ".cs", ".rb", ".kt", ".rs", ".py") + tuple(PHP_EXTS))
                 and bool(cwes & TAINT_CWES)
                 and evaluated < MAX_FINDINGS
                 and time.monotonic() - started < MAX_SECONDS
@@ -83,6 +86,10 @@ def refine_semgrep_results(repo_path: Path, results: list[dict], relative_path) 
                 if go_index is None:
                     go_index = GoIndex(repo_path)
                 verdict = validate_go_finding(repo_path, rel, span[0], span[1], cwes, go_index)
+            elif path.endswith(".py"):
+                if py_index is None:
+                    py_index = PyIndex(repo_path)
+                verdict = validate_python_finding(repo_path, rel, span[0], span[1], cwes, py_index)
             elif path.endswith(".rs"):
                 if rs_index is None:
                     rs_index = RsIndex(repo_path)
