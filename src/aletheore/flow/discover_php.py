@@ -130,6 +130,8 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                     return
                 if _cwe == 601 and "location" not in text.lower():
                     return
+                if _cwe == 918 and _local_path_prefix(node):
+                    return  # "./x/" . $id is a local file read (path traversal at worst), not a request to another host
                 for i in positions:
                     if i >= len(args):
                         continue
@@ -164,6 +166,32 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
 
 # ---------------------------------------------------------------------------- validate mode
 _CALLS = ("function_call_expression", "member_call_expression", "nullsafe_member_call_expression", "scoped_call_expression")
+
+
+def _leading_literal(n: Node | None) -> str | None:
+    """Text the expression starts with when it begins with a literal ("./{$id}/x" -> "./"), else None."""
+    while n is not None:
+        if n.type == "encapsed_string":
+            first = next((c for c in n.children if c.type in ("string_content", "string_value", "escape_sequence", "variable_name", "member_access_expression") or c.is_named), None)
+            return first.text.decode("utf-8", "replace") if first is not None and first.type in ("string_content", "string_value") else None
+        if n.type in ("string", "string_value", "string_content"):
+            return n.text.decode("utf-8", "replace").strip("'\"")
+        if n.type == "binary_expression" and n.child_by_field_name("operator") is not None and n.child_by_field_name("operator").text == b".":
+            n = n.child_by_field_name("left")
+            continue
+        if n.type == "parenthesized_expression" and n.named_children:
+            n = n.named_children[0]
+            continue
+        return None
+    return None
+
+
+def _local_path_prefix(call: Node) -> bool:
+    args_n = call.child_by_field_name("arguments")
+    first = args_n.named_children[0] if args_n is not None and args_n.named_children else None
+    arg = first.named_children[-1] if first is not None and first.named_children else None
+    lit = _leading_literal(arg)
+    return bool(lit) and lit.startswith(("./", "../", "/")) and "://" not in lit and not lit.startswith("//")
 
 
 def _call_name(call: Node) -> tuple[str, str]:

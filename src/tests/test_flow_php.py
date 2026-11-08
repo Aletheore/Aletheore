@@ -206,3 +206,18 @@ def test_dot_in_a_validating_class_is_not_enough_for_paths(tmp_path):
     (tmp_path / "a.php").write_text(src)
     from aletheore.flow.discover_php import discover_php
     assert any("path-traversal" in f["rule_id"] for f in discover_php(tmp_path))
+
+
+def test_local_path_prefix_is_not_ssrf_but_stays_path_traversal(tmp_path):
+    src = '<?php\nfunction h() {\n  $id = $_GET["id"];\n  return file_get_contents("./{$id}/source/low.php");\n}\n'
+    (tmp_path / "a.php").write_text(src)
+    from aletheore.flow.discover_php import discover_php
+    kinds = {f["rule_id"].split(".")[-1] for f in discover_php(tmp_path)}
+    assert "ssrf" not in kinds and "path-traversal" in kinds
+
+
+def test_variable_url_is_still_ssrf(tmp_path):
+    src = '<?php\nfunction h() {\n  $u = $_GET["u"];\n  return file_get_contents($u);\n}\n'
+    (tmp_path / "a.php").write_text(src)
+    from aletheore.flow.discover_php import discover_php
+    assert any("ssrf" in f["rule_id"] for f in discover_php(tmp_path))
