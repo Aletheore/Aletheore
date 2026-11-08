@@ -1,0 +1,99 @@
+rules:
+  - id: java-session-trust-boundary
+    languages: [java]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-501: Trust Boundary Violation"
+      confidence: MEDIUM
+      references:
+        - https://cwe.mitre.org/data/definitions/501.html
+      # Added after the deterministic-scan benchmark (OWASP Benchmark for Java, 83 vulnerable and
+      # 120 safe trust-boundary tests): the Semgrep registry rule alone found 52% of the
+      # vulnerable cases, and Bearer's trust-boundary rule found 94% but flagged 91% of the safe
+      # ones. With this rule added to the registry rules, recall is 78% at 72% precision, a
+      # better true-positive-minus-false-positive score (20.2 vs 9.9, and vs 2.2 with Bearer).
+      # The remaining false positives on that suite are values the suite hides in collections
+      # that Semgrep's taint tracking treats as tainted.
+    message: >
+      An HTTP request value reaches HttpSession storage ('$ARG') without validation. Session
+      attributes are treated as trusted server-side state, and request input that chooses an
+      attribute name or becomes its value crosses a trust boundary (CWE-501). Validate or
+      canonicalize it first, or keep it out of the session. This is a review candidate: it does
+      not prove the input is attacker controlled.
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: (HttpServletRequest $REQ).getParameter(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getParameter(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getParameter(...)
+              - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getParameterValues(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getParameterValues(...)
+              - pattern: (HttpServletRequest $REQ).getParameterMap(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getParameterMap(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getParameterMap(...)
+              - pattern: (HttpServletRequest $REQ).getHeader(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getHeader(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getHeader(...)
+              - pattern: (HttpServletRequest $REQ).getHeaders(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getHeaders(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getHeaders(...)
+              - pattern: (HttpServletRequest $REQ).getQueryString(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getQueryString(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getQueryString(...)
+              - pattern: (HttpServletRequest $REQ).getCookies(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getCookies(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getCookies(...)
+              - pattern: (Cookie $COOKIE).getValue(...)
+              - pattern: (jakarta.servlet.http.Cookie $COOKIE).getValue(...)
+              - pattern: (javax.servlet.http.Cookie $COOKIE).getValue(...)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RET $M(..., @RequestParam $T $P, ...) { ... }
+              - pattern-inside: |
+                  $RET $M(..., @PathVariable $T $P, ...) { ... }
+              - pattern-inside: |
+                  $RET $M(..., @RequestHeader $T $P, ...) { ... }
+              - pattern-inside: |
+                  $RET $M(..., @CookieValue $T $P, ...) { ... }
+              - pattern-inside: |
+                  $RET $M(..., @RequestBody $T $P, ...) { ... }
+          - pattern: $P
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: (HttpSession $S).setAttribute($ARG, ...)
+              - pattern: (jakarta.servlet.http.HttpSession $S).setAttribute($ARG, ...)
+              - pattern: (javax.servlet.http.HttpSession $S).setAttribute($ARG, ...)
+              - pattern: (HttpSession $S).setAttribute($K, $ARG)
+              - pattern: (jakarta.servlet.http.HttpSession $S).setAttribute($K, $ARG)
+              - pattern: (javax.servlet.http.HttpSession $S).setAttribute($K, $ARG)
+              - pattern: (HttpSession $S).putValue($ARG, ...)
+              - pattern: (jakarta.servlet.http.HttpSession $S).putValue($ARG, ...)
+              - pattern: (javax.servlet.http.HttpSession $S).putValue($ARG, ...)
+              - pattern: (HttpSession $S).putValue($K, $ARG)
+              - pattern: (jakarta.servlet.http.HttpSession $S).putValue($K, $ARG)
+              - pattern: (javax.servlet.http.HttpSession $S).putValue($K, $ARG)
+              - pattern: (HttpServletRequest $R).getSession(...).setAttribute($ARG, ...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $R).getSession(...).setAttribute($ARG, ...)
+              - pattern: (javax.servlet.http.HttpServletRequest $R).getSession(...).setAttribute($ARG, ...)
+              - pattern: (HttpServletRequest $R).getSession(...).setAttribute($K, $ARG)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $R).getSession(...).setAttribute($K, $ARG)
+              - pattern: (javax.servlet.http.HttpServletRequest $R).getSession(...).setAttribute($K, $ARG)
+              - pattern: (HttpServletRequest $R).getSession(...).putValue($ARG, ...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $R).getSession(...).putValue($ARG, ...)
+              - pattern: (javax.servlet.http.HttpServletRequest $R).getSession(...).putValue($ARG, ...)
+              - pattern: (HttpServletRequest $R).getSession(...).putValue($K, $ARG)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $R).getSession(...).putValue($K, $ARG)
+              - pattern: (javax.servlet.http.HttpServletRequest $R).getSession(...).putValue($K, $ARG)
+          - focus-metavariable: $ARG
+    paths:
+      exclude:
+        - "**/*Test.java"
+        - "**/*Tests.java"
+        - "**/Test*.java"
+        - "**/test/**"
+        - "**/tests/**"
