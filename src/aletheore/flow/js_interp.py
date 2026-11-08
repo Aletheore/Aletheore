@@ -104,8 +104,9 @@ class JsInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
 
-    def __init__(self, index: JsIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None):
+    def __init__(self, index: JsIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None, stash: set | None = None):
         self.index = index
+        self.stash = stash if stash is not None else set()  # request properties written by one middleware and read by another
         self.cwes = cwes or set()
         self.sink_hook = sink_hook  # hook(node, name, recv_text, args, recv, frame)
         self.store_hook = store_hook  # hook(node, base_text, key, value, frame)
@@ -253,6 +254,8 @@ class JsInterp:
         if isinstance(base, Obj):
             if base.kind == "request":
                 if prop in REQUEST_PROPS or base.type_name == "KoaContext":
+                    return Tainted("request." + prop)
+                if prop in self.stash:
                     return Tainted("request." + prop)
                 if prop == "session":
                     return Obj(type_name="Session")
@@ -431,6 +434,8 @@ class JsInterp:
             base = self.eval(base_n, fr)
             if self.store_hook is not None:
                 self.store_hook(target, _t(base_n), Const(prop), val, fr)
+            if isinstance(base, Obj) and base.kind == "request" and prop not in REQUEST_PROPS and classify(val) == "tainted":
+                self.stash.add(prop)
             if isinstance(base, Obj):
                 old = base.fields.get(prop)
                 base.fields[prop] = join(old, val) if (fr.branch > 0 and old is not None) else val

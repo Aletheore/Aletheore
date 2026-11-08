@@ -122,10 +122,12 @@ def discover_go(repo: Path, index: GoIndex | None = None, budget_seconds: float 
                 if _cwe == 501 and base_text.endswith(".Values") and (_tainted_string(key) or _tainted_string(value)):
                     record(node, fr, "write to the session")
 
-            for rtype, fn in _functions(gf):
-                if time.monotonic() - started > budget_seconds:
+            stash: set = set()
+            fns = list(_functions(gf))
+            for step, (rtype, fn) in enumerate(fns + fns):  # a second pass sees state stored by a handler run later
+                if time.monotonic() - started > budget_seconds or (step >= len(fns) and not stash):
                     break
-                interp = GoInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                interp = GoInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
                 interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                 this = Obj(type_name=rtype) if rtype else None
                 fr = GFrame(gf, this, 0)

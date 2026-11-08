@@ -22,7 +22,7 @@ _SINK_WORDS = {
     89: (b"query(", b"execute(", b"raw(", b".run(", b".all(", b".get(", b"prepare("),
     78: (b"exec", b"spawn", b"fork(", b"child_process"),
     22: (b"fs.", b"fs\n", b"readFile", b"createReadStream", b"sendFile", b"download(", b"promises"),
-    79: (b"res.send", b"res.write", b"res.end", b"response.send", b"reply.send", b"ctx.body"),
+    79: (b"res.send", b"res.write", b"res.end", b"response.send", b"reply.send", b"ctx.body", b").send(", b").end(", b").write("),
     94: (b"eval(", b"Function(", b"runInNewContext", b"setTimeout(", b"setInterval("),
     601: (b"redirect(",),
     918: (b"axios", b"fetch(", b"request(", b"needle", b"http.get", b"https.get", b"got(", b"got."),
@@ -196,10 +196,11 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                 if _cwe == 501 and base_text.split(".")[-1] == "session" and (_tainted_string(key) or _tainted_string(value)):
                     record(node, fr, "write to the session")
 
-            for fn, route in entries:
-                if time.monotonic() - started > budget_seconds:
+            stash: set = set()
+            for step, (fn, route) in enumerate(entries + entries):  # a second pass sees request state written by a middleware that ran later
+                if time.monotonic() - started > budget_seconds or (step >= len(entries) and not stash):
                     break
-                interp = JsInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                interp = JsInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
                 interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                 fr = JFrame(jf, None, Obj(type_name="module"), 0, route=route)
                 try:

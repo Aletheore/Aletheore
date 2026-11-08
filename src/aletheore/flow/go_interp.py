@@ -94,8 +94,9 @@ class GoInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
 
-    def __init__(self, index: GoIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None):
+    def __init__(self, index: GoIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None, stash: set | None = None):
         self.index = index
+        self.stash = stash if stash is not None else set()  # request-carried state shared between handlers of one file
         self.cwes = cwes or set()
         self.sink_hook = sink_hook    # hook(node, name, recv_text, args, recv, frame)
         self.store_hook = store_hook  # hook(node, base_text, key, value, frame)
@@ -410,6 +411,10 @@ class GoInterp:
             args = self._args(args_n, fr)
             if self._sanitizer(name):
                 return SAFE
+            if name == "WithValue" and recv_text == "context" and len(args) == 3 and classify(args[2]) == "tainted":
+                self.stash.add("ctx")  # a request value stored in the context: another handler reads it back
+            if name == "Value" and len(args) == 1 and "ctx" in self.stash and op_n.type == "call_expression" and _t(op_n).endswith("Context()"):
+                return Tainted("request.context")
             if op_n.type == "identifier" and _t(op_n) not in fr.env:
                 hit = self.index.package_function(_t(op_n), name, fr.file)
                 if hit is not None:
