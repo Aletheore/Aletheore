@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from aletheore.subprocess_utils import command_argv
+from aletheore.flow.refine import refine_semgrep_results
 from aletheore.static_analysis._cwe import add_cwe
 from aletheore.static_analysis._exclusions import count_real_files, excluded_dir_names, filter_findings
 
@@ -209,7 +210,9 @@ def check_semgrep(repo_path: Path, timeout: int | None = None) -> dict:
 
     custom_rule_ids = _custom_rule_ids()
     findings = []
-    for item in payload.get("results", []):
+    # Drop a finding only when the flow engine proves its sink value safe; each drop is recorded.
+    results, suppressed = refine_semgrep_results(repo_path, payload.get("results", []), _relative_path)
+    for item in results:
         # `or {}`, not a bare .get(key, {}) default: semgrep can emit an
         # explicit `null` for a present key (not just omit it), and dict.get's
         # default only ever applies when the key is absent - a real bug found
@@ -236,4 +239,7 @@ def check_semgrep(repo_path: Path, timeout: int | None = None) -> dict:
                 (extra.get("metadata") or {}).get("cwe"),
             )
         )
-    return {"checked": True, "reason": None, "findings": filter_findings(findings, repo_path)}
+    out = {"checked": True, "reason": None, "findings": filter_findings(findings, repo_path)}
+    if suppressed:
+        out["suppressed"] = suppressed
+    return out

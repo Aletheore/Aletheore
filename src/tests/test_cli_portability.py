@@ -518,3 +518,15 @@ def test_scanner_failure_warnings_are_silent_when_nothing_failed_or_analysis_was
     assert _scanner_failure_warnings({}) == []
     assert _scanner_failure_warnings({"security": {"static_analysis": None}}) == []
     assert _scanner_failure_warnings({"security": {"static_analysis": {"tools_skipped": []}}}) == []
+
+
+def test_flow_suppression_notes_report_the_count_and_stay_silent_without_any():
+    from aletheore.cli import _flow_suppression_notes
+
+    assert _flow_suppression_notes({}) == []
+    assert _flow_suppression_notes({"security": {"static_analysis": {"findings": []}}}) == []
+    one = _flow_suppression_notes({"security": {"static_analysis": {"suppressed_findings": [{}]}}})
+    many = _flow_suppression_notes({"security": {"static_analysis": {"suppressed_findings": [{}, {}, {}]}}})
+    assert "proved 1 finding safe" in one[0] and "left it out" in one[0]
+    assert "proved 3 findings safe" in many[0] and "left them out" in many[0]
+    assert "suppressed_findings" in many[0] and "ALETHEORE_DISABLE_FLOW_REFINEMENT" in many[0]

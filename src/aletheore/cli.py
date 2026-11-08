@@ -405,6 +405,20 @@ def _free_pr_review_nudge() -> str:
     )
 
 
+def _flow_suppression_notes(evidence: dict) -> list[str]:
+    """Say how many findings flow analysis proved safe and dropped, so the drop is never silent."""
+    static = (evidence.get("security") or {}).get("static_analysis") or {}
+    count = len(static.get("suppressed_findings") or [])
+    if not count:
+        return []
+    noun = "finding" if count == 1 else "findings"
+    return [
+        f"Flow analysis proved {count} {noun} safe and left {'it' if count == 1 else 'them'} out of the results "
+        "(listed under security.static_analysis.suppressed_findings; "
+        "set ALETHEORE_DISABLE_FLOW_REFINEMENT=1 to turn this off)"
+    ]
+
+
 def _scanner_failure_warnings(evidence: dict) -> list[str]:
     """One plain-text line per default-on scanner that failed to run. Plain text on purpose:
     _print_result inserts each line as a literal value, so markup tags would print as-is."""
@@ -756,6 +770,7 @@ def _scan(
             "[yellow]Warning: secrets history scan timed out - findings reflect a partial scan[/yellow]"
         )
     result_lines.extend(_scanner_failure_warnings(evidence))
+    result_lines.extend(_flow_suppression_notes(evidence))
     _print_result("Scan complete", result_lines)
     return 0, evidence, evidence_path
 

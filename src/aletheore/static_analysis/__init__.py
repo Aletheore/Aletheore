@@ -3,6 +3,7 @@ from pathlib import Path
 
 from aletheore.static_analysis.bandit_scanner import check_bandit
 from aletheore.static_analysis.bearer_scanner import check_bearer
+from aletheore.static_analysis.flow_scanner import check_flow
 from aletheore.static_analysis.gosec_scanner import check_gosec
 from aletheore.static_analysis.joern_scanner import check_joern
 from aletheore.static_analysis.pmd_scanner import check_pmd
@@ -54,6 +55,7 @@ _SCANNERS = (
     ("bandit", check_bandit),
     ("trivy", check_trivy),
     ("pmd", check_pmd),
+    ("flow", check_flow),
 )
 
 
@@ -76,6 +78,22 @@ _OPTIONAL_SCANNERS = (
         "stateless subprocess call like the other scanners here)",
     ),
 )
+
+
+def _drop_duplicate_flow_findings(findings: list[dict]) -> list[dict]:
+    """The flow scanner often finds what Semgrep already reported. Keep the other tool's finding."""
+    others = [f for f in findings if f.get("tool") != "aletheore-flow"]
+
+    def duplicated(flow: dict) -> bool:
+        cwes = set(flow.get("cwe") or [])
+        return any(
+            o.get("path") == flow.get("path")
+            and abs(int(o.get("line") or 0) - int(flow.get("line") or 0)) <= 3
+            and cwes & set(o.get("cwe") or [])
+            for o in others
+        )
+
+    return [f for f in findings if f.get("tool") != "aletheore-flow" or not duplicated(f)]
 
 
 def _run_scanner_safely(name: str, scanner, *args, **kwargs) -> dict:
@@ -156,6 +174,7 @@ def check_static_analysis(
     sonarqube_host_url: str | None = None,
 ) -> dict:
     findings: list[dict] = []
+    suppressed: list[dict] = []
     tools_run: list[str] = []
     tools_skipped: list[dict] = []
     opted_in = {"bearer": run_bearer, "joern": run_joern}
@@ -184,6 +203,7 @@ def check_static_analysis(
         elif result["checked"]:
             tools_run.append(name)
             findings.extend(result["findings"])
+            suppressed.extend(result.get("suppressed") or [])
         else:
             tools_skipped.append({"tool": name, "reason": result["reason"]})
 
@@ -209,9 +229,13 @@ def check_static_analysis(
     else:
         tools_skipped.append({"tool": "sonarqube", "reason": sonarqube_result["reason"]})
 
-    return {
+    out = {
         "checked": True,
         "tools_run": tools_run,
         "tools_skipped": tools_skipped,
-        "findings": _add_content_fingerprints(findings, repo_path),
+        "findings": _add_content_fingerprints(_drop_duplicate_flow_findings(findings), repo_path),
     }
+    if suppressed:
+        # Findings the flow engine proved safe: kept out of `findings`, listed so they can be audited.
+        out["suppressed_findings"] = suppressed
+    return out

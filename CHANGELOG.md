@@ -5,6 +5,33 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Flow analysis now covers PHP, both discovery and checking Semgrep's findings. Superglobals are followed
+  through functions, classes and included files to SQL, command, path, output, file-inclusion, `eval`,
+  deserialization, request-forgery, redirect, LDAP, XPath and session sinks, and validations are tracked
+  per value, so a value checked with `is_numeric`, `in_array` or `strtolower($ext) == 'jpg'` is safe, and
+  so is anything derived only from it. On DVWA no finding is reported in the secure `impossible` level.
+- Flow discovery now covers JavaScript and TypeScript: request data from Express, Koa and similar
+  handlers is followed through functions, closures, constructor functions and `require`/`import`ed
+  modules to SQL, NoSQL (`$where`), command, path, XSS, `eval`, redirect, request-forgery,
+  deserialization and session sinks. On NodeGoat it finds all six of the app's documented injection
+  flaws, where Semgrep's registry reports one.
+- Flow discovery now covers Python: request data from Flask, Django and FastAPI entry points is followed
+  through functions, classes and imported modules to SQL, command, path, XSS, code-injection,
+  deserialization, request-forgery and redirect sinks, and the usual validations (membership tests,
+  `isalnum`, early exits, whitelist filters, `re.sub` character classes) are recognized.
+- Added flow discovery for Java: Aletheore now follows request data through the code, across methods
+  and files, and reports a finding where it reaches a SQL, command, file, output, LDAP, XPath or
+  session sink without being validated or encoded for it. It finds flows Semgrep's open-source engine
+  misses, such as SQL injection through a helper method in another file. Findings carry the tool name
+  `aletheore-flow`; one Semgrep already reported at the same place is dropped in favor of Semgrep's.
+  `ALETHEORE_DISABLE_FLOW_DISCOVERY=1` turns it off. On the OWASP Benchmark for Java the scan's
+  true-positive rate rises from 88% to 96% with the false-positive rate at 10% (from 42%).
+- Added flow refinement for Java: Semgrep findings for data-flow weaknesses are checked by a small
+  abstract interpreter that follows constants, constant branches, local lists and maps, and calls
+  across files, and leaves a finding out only when it proves the sink value safe. Suppressed
+  findings are listed under `security.static_analysis.suppressed_findings` and counted at the end of
+  `aletheore scan`; `ALETHEORE_DISABLE_FLOW_REFINEMENT=1` turns it off. On the OWASP Benchmark for
+  Java the false-positive rate falls from 42% to 10% with no vulnerable test losing its finding.
 - Added a bundled Semgrep rule, `java-session-trust-boundary` (CWE-501), that reports an HTTP
   request value written into `HttpSession` storage as an attribute name or value. On the OWASP
   Benchmark for Java it lifts recall on trust-boundary bugs from 52% to 78% with precision
