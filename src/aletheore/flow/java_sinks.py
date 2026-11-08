@@ -54,7 +54,7 @@ def sink_args(cwe: int, name: str, cname: str | None, recv_type: str | None, rec
         return None
     if cwe == 78:
         if name == "exec" and argc >= 1 and (recv_type == "Runtime" or recv_text.endswith("getRuntime()")):
-            return [0]
+            return list(range(min(argc, 2)))  # the command, and the environment (envp) the process starts with
         if name == "command" and argc >= 1 and recv_type == "ProcessBuilder":
             return _all(argc)
         if name == "<init>" and cname == "ProcessBuilder":
@@ -84,6 +84,8 @@ def sink_args(cwe: int, name: str, cname: str | None, recv_type: str | None, rec
             return [0, 1]
         return None
     if cwe == 643:
+        if name == "evaluate" and recv_type == "XPathExpression":
+            return None  # a compiled expression's evaluate() takes the document
         if name in ("evaluate", "compile") and argc >= 1 and (recv_type in XPATH_RECEIVERS or "xpath" in recv_text.lower()):
             return [0]
         if name in ("selectNodes", "selectSingleNode", "valueOf") and argc >= 1 and "xpath" not in recv_text.lower() and recv_type in ("Document", "Node", "Element"):
@@ -154,8 +156,9 @@ CWE_NAMES = {
 _PROBE_POSITIONS = {
     89: {"execute": [0], "executeQuery": [0], "executeUpdate": [0], "executeLargeUpdate": [0], "addBatch": [0],
          "prepareStatement": [0], "prepareCall": [0], "createQuery": [0], "createNativeQuery": [0],
-         "createSQLQuery": [0], "nativeSQL": [0]},
-    78: {"exec": [0]},
+         "createSQLQuery": [0], "nativeSQL": [0], "query": [0], "queryForObject": [0], "queryForList": [0], "queryForMap": [0],
+         "queryForRowSet": [0], "update": [0], "batchUpdate": [0], "queryForInt": [0], "queryForLong": [0]},
+    78: {"exec": [0, 1]},
     90: {"search": [0, 1]},
     643: {"evaluate": [0], "compile": [0], "selectNodes": [0], "selectSingleNode": [0]},
     79: {"print": [0], "println": [0], "append": [0], "write": [0]},

@@ -46,6 +46,8 @@ BENIGN_RESULT_METHODS = {
     "length", "size", "isEmpty", "equals", "equalsIgnoreCase", "contains", "startsWith", "endsWith",
     "indexOf", "lastIndexOf", "hashCode", "compareTo", "compareToIgnoreCase", "matches", "isBlank",
     "hasNext", "hasMoreElements", "ordinal",
+    # Metadata about the program itself, never request data: `this.getClass().getClassLoader()`, `Foo.class.getName()`.
+    "getClass", "getClassLoader", "getSimpleName", "getCanonicalName", "getPackage", "getModifiers",
 }
 PARSERS = {
     ("Integer", "parseInt"), ("Integer", "valueOf"), ("Long", "parseLong"), ("Long", "valueOf"),
@@ -77,6 +79,8 @@ PURE_STATIC_CLASSES = {
     "Math", "Integer", "Long", "Double", "Float", "Short", "Byte", "Boolean", "Character", "String", "Objects",
     "Arrays", "Collections", "UUID", "Paths", "Path", "Files", "Locale", "Charset", "StandardCharsets",
     "Instant", "LocalDate", "LocalDateTime", "TimeUnit", "Pattern",
+    # encoders and digests: taint passes through, nothing else is introduced
+    "Base64", "Hex", "DigestUtils", "URLEncoder", "URLDecoder", "StringUtils", "NumberUtils", "FilenameUtils",
 }
 PURE_STATIC_METHODS = {("System", "getProperty"), ("System", "getenv"), ("System", "lineSeparator"),
                        ("System", "currentTimeMillis"), ("System", "nanoTime")}
@@ -596,11 +600,15 @@ class Interp:
             if name in fr.env or (fr.this_obj and name in fr.this_obj.fields):
                 return None
             if name[:1].isupper():
+                if name.isupper() and len(name) > 1 and self.index.resolve_class(name, fr.file) is None:
+                    return None  # an ALL_CAPS constant, not a class
                 return name
             return None
         if obj_n.type == "field_access":
             fname = _t(obj_n.child_by_field_name("field"))
             inner = obj_n.child_by_field_name("object")
+            if fname.isupper() and len(fname) > 1 and self.index.resolve_class(fname, fr.file) is None:
+                return None  # Utils.TESTFILES_DIR: a constant of a class, not a class
             if fname[:1].isupper() and inner is not None and inner.type in ("identifier", "field_access"):
                 first = _t(inner).split(".")[0]
                 if first in fr.env or (fr.this_obj and first in fr.this_obj.fields):

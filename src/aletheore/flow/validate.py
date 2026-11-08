@@ -81,9 +81,20 @@ def _outer_calls(node: Node) -> list[Node]:
     return out
 
 
+def _is_compiled_xpath_evaluate(call: Node) -> bool:
+    """`xp.compile(expr).evaluate(doc, type)`: evaluate() of a compiled expression takes the document, not an expression."""
+    if call.type != "method_invocation":
+        return False
+    nm, obj = call.child_by_field_name("name"), call.child_by_field_name("object")
+    return nm is not None and nm.text == b"evaluate" and obj is not None and obj.type == "method_invocation" \
+        and obj.child_by_field_name("name") is not None and obj.child_by_field_name("name").text == b"compile"
+
+
 def _call_probes(call: Node, cwes: set[int] | None = None) -> list[Node]:
     args = call.child_by_field_name("arguments")
     named = list(args.named_children) if args is not None else []
+    if _is_compiled_xpath_evaluate(call):
+        return _call_probes(call.child_by_field_name("object"), cwes)  # the expression is compile()'s argument
     if named and cwes and call.type == "method_invocation":
         name = call.child_by_field_name("name")
         positions = probe_positions(cwes, name.text.decode("utf-8", "replace") if name is not None else "", len(named))
@@ -92,8 +103,51 @@ def _call_probes(call: Node, cwes: set[int] | None = None) -> list[Node]:
     return named if named else [call]
 
 
+def _all_calls(node: Node) -> list[Node]:
+    out: list[Node] = []
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if n.type in _CALLS:
+            out.append(n)
+        stack.extend(n.named_children)
+    out.sort(key=lambda n: n.start_byte)
+    return out
+
+
 def _probe_nodes(root: Node, s: int, e: int, cwes: set[int] | None = None) -> list[Node]:
+    hard, soft = _probe_split(root, s, e, cwes)
+    return hard + soft
+
+
+def _probe_split(root: Node, s: int, e: int, cwes: set[int] | None = None) -> tuple[list[Node], list[Node]]:
+    """(hard, soft) probes. Hard probes are the values a known sink receives and must be provably safe. Soft probes are the
+    arguments of other calls inside a wide range (a taint finding spans source to sink); they only count when they are
+    tainted, because the range is already pinned to a recognised sink among them."""
     node = root.descendant_for_byte_range(s, e)
+    if node is None:
+        return [], []
+    if node.type == "assignment_expression" or not (node.type in ("local_variable_declaration", "variable_declarator", "resource", "block") or node.type.endswith("_statement")):
+        return _probe_nodes_one(root, s, e, cwes, node), []
+    hard: list[Node] = []
+    soft: list[Node] = []
+    for call in _all_calls(node):
+        args = call.child_by_field_name("arguments")
+        named = list(args.named_children) if args is not None else []
+        nm = call.child_by_field_name("name") if call.type == "method_invocation" else None
+        positions = probe_positions(cwes, nm.text.decode("utf-8", "replace") if nm is not None else "", len(named)) if cwes and nm is not None else None
+        if _is_compiled_xpath_evaluate(call):
+            continue
+        if positions:
+            hard.extend(named[i] for i in positions)
+        else:
+            soft.extend(named)
+    if hard:
+        return hard, soft
+    return _probe_nodes_one(root, s, e, cwes, node), []
+
+
+def _probe_nodes_one(root: Node, s: int, e: int, cwes: set[int] | None, node: Node) -> list[Node]:
     if node is None:
         return []
     if node.type == "assignment_expression":
@@ -140,7 +194,7 @@ def validate_finding(
     if jf is None:
         return Verdict("unknown", "file unreadable")
     s, e = _offset(jf.src, *start), _offset(jf.src, *end)
-    probes = _probe_nodes(jf.root, s, e, cwes)
+    probes, soft = _probe_split(jf.root, s, e, cwes)
     if not probes:
         return Verdict("unknown", "no sink expression found")
     method = _enclosing(probes[0], ("method_declaration", "constructor_declaration"))
@@ -155,7 +209,7 @@ def validate_finding(
     interp = Interp(index, cwes)
     fr = Frame(file=jf, cls=cls, this_obj=Obj(cls=cls, type_name=cls.name), depth=0)
     interp.bind_entry_params(method, fr)
-    for p in probes:
+    for p in probes + soft:
         interp.probe_keys.add((id(jf), p.start_byte, p.end_byte))
     try:
         interp.exec(body, fr)
@@ -173,6 +227,10 @@ def validate_finding(
             kinds.append("dead")
         else:
             kinds.append("unreached")
+    for p in soft:
+        vals = interp.probes.get((id(jf), p.start_byte, p.end_byte))
+        if vals and any(c == "tainted" for _, c in vals):
+            kinds.append("tainted")
     if "tainted" in kinds:
         return Verdict("tainted")
     if "unknown" in kinds or "unreached" in kinds:
