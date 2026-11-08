@@ -7,6 +7,7 @@ from pathlib import Path
 
 from tree_sitter import Node
 
+from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.rb_index import RbClass, RbFile, RbIndex
 from aletheore.flow.rb_interp import BudgetExceeded, RbInterp, RFrame
@@ -159,6 +160,7 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
                         entries.append((m, False, True))
                 for m, is_action, singleton in entries:
                     interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                    interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                     fr = RFrame(rf, cls, Obj(cls=cls, type_name=cls.name), 0, singleton=singleton)
                     try:
                         interp.bind_entry(m, fr, is_action)
@@ -169,13 +171,16 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
                             else:
                                 interp.eval(body, fr)
                     except (BudgetExceeded, RecursionError):
+                        coverage.note(path)
                         continue
                 for blk in _sinatra_blocks(cls):
                     interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                    interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                     fr = RFrame(rf, cls, Obj(cls=cls, type_name=cls.name), 0)
                     try:
                         _exec_block(interp, blk, fr)
                     except (BudgetExceeded, RecursionError):
+                        coverage.note(path)
                         continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 

@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from aletheore.flow.java_index import JavaIndex, JavaFile
+from aletheore.flow import coverage
 from aletheore.flow.java_interp import BudgetExceeded, Frame, Interp
 from aletheore.flow.java_sinks import CWE_NAMES, DISCOVER_CWES, sink_args
 from aletheore.flow.values import Choice, Obj, Tainted, classify
@@ -141,12 +142,14 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                 try:
                     interp.exec(body, fr)
                 except (BudgetExceeded, RecursionError):
+                    coverage.note(jf.path)
                     continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
 
 def discover_repo(repo: Path, index: JavaIndex | None = None, budget_seconds: float = MAX_SECONDS) -> list[dict]:
     """Discover tainted flows in every supported language the repository contains."""
+    coverage.reset()
     from aletheore.flow.discover_cs import discover_cs, has_cs
     from aletheore.flow.discover_kt import discover_kt, has_kt
     from aletheore.flow.discover_rs import discover_rs, has_rs

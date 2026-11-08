@@ -154,3 +154,26 @@ def test_a_value_that_passed_a_guard_is_safe(tmp_path, name):
 def test_a_value_that_did_not_pass_a_guard_is_still_reported(tmp_path, name):
     src = ROUTE + GUARDED_TAINTED[name]
     assert kinds(run(tmp_path, {"v.py": src})) == ["sql-injection"], name
+
+
+def test_closure_reads_the_defining_functions_variable(tmp_path):
+    src = ("from flask import request\nimport os\n\ndef handler():\n    command = request.args.get('cmd')\n"
+           "    def run():\n        os.system(command)\n    run()\n")
+    (tmp_path / "a.py").write_text(src)
+    from aletheore.flow.discover_py import discover_python
+    assert any("command-injection" in f["rule_id"] for f in discover_python(tmp_path))
+
+
+def test_nonlocal_write_reaches_the_outer_function(tmp_path):
+    src = ("from flask import request\nimport os\n\ndef handler():\n    cmd = 'ls'\n    def set_it():\n        nonlocal cmd\n"
+           "        cmd = request.args.get('c')\n    set_it()\n    os.system(cmd)\n")
+    (tmp_path / "a.py").write_text(src)
+    from aletheore.flow.discover_py import discover_python
+    assert any("command-injection" in f["rule_id"] for f in discover_python(tmp_path))
+
+
+def test_closure_over_a_constant_stays_quiet(tmp_path):
+    src = "import os\n\ndef handler():\n    command = 'ls'\n    def run():\n        os.system(command)\n    run()\n"
+    (tmp_path / "a.py").write_text(src)
+    from aletheore.flow.discover_py import discover_python
+    assert discover_python(tmp_path) == []

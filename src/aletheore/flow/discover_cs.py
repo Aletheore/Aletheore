@@ -10,6 +10,7 @@ from tree_sitter import Node
 from aletheore.flow.cs_index import CsClass, CsFile, CsIndex
 from aletheore.flow.cs_interp import BudgetExceeded, CFrame, CsInterp
 from aletheore.flow.cs_sinks import CONTROLLER_BASES, CWE_NAMES_CS, DISCOVER_CWES_CS, SEVERITY_CS, sink_args
+from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.values import Choice, Const, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
@@ -132,6 +133,7 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
                 action_cls = _is_controller(cls)
                 for m, _ in _entry_methods(cls):
                     interp = CsInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                    interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                     fr = CFrame(cf, cls, Obj(cls=cls, type_name=cls.name), 0)
                     try:
                         interp.bind_entry(m, fr, action_cls and _is_public(m))
@@ -141,6 +143,7 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
                         else:
                             interp.exec(body, fr)
                     except (BudgetExceeded, RecursionError):
+                        coverage.note(path)
                         continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 

@@ -9,6 +9,7 @@ or encoded for it. Java and Python.
 import os
 from pathlib import Path
 
+from aletheore.flow import coverage
 from aletheore.flow.discover import discover_repo, has_source
 from aletheore.static_analysis._cwe import add_cwe
 from aletheore.static_analysis._exclusions import filter_findings
@@ -25,4 +26,8 @@ def check_flow(repo_path: Path, timeout: int | None = None) -> dict:
     findings = []
     for f in discover_repo(repo_path):
         findings.append(add_cwe({k: v for k, v in f.items() if k != "cwe"}, f.get("cwe")))
-    return {"checked": True, "reason": None, "findings": filter_findings(findings, repo_path)}
+    out = {"checked": True, "reason": None, "findings": filter_findings(findings, repo_path)}
+    incomplete = coverage.relative(repo_path)
+    if incomplete:
+        out["incomplete_files"] = incomplete[:100]
+    return out

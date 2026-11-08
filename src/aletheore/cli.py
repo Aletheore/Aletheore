@@ -419,6 +419,19 @@ def _flow_suppression_notes(evidence: dict) -> list[str]:
     ]
 
 
+def _flow_coverage_notes(evidence: dict) -> list[str]:
+    """Say which files flow analysis gave up on, so a file with no findings is not mistaken for a clean one."""
+    static = (evidence.get("security") or {}).get("static_analysis") or {}
+    files = static.get("flow_incomplete_files") or []
+    if not files:
+        return []
+    noun = "file" if len(files) == 1 else "files"
+    return [
+        f"Flow analysis ran out of budget on {len(files)} {noun} and may have missed findings there "
+        "(listed under security.static_analysis.flow_incomplete_files)"
+    ]
+
+
 def _scanner_failure_warnings(evidence: dict) -> list[str]:
     """One plain-text line per default-on scanner that failed to run. Plain text on purpose:
     _print_result inserts each line as a literal value, so markup tags would print as-is."""
@@ -771,6 +784,7 @@ def _scan(
         )
     result_lines.extend(_scanner_failure_warnings(evidence))
     result_lines.extend(_flow_suppression_notes(evidence))
+    result_lines.extend(_flow_coverage_notes(evidence))
     _print_result("Scan complete", result_lines)
     return 0, evidence, evidence_path
 

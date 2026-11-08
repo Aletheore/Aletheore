@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from aletheore.flow.js_index import FN_TYPES, JsFile, JsIndex
+from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.js_interp import BudgetExceeded, JFrame, JsInterp, request_like
 from aletheore.flow.js_sinks import CWE_NAMES_JS, DISCOVER_CWES_JS, ROUTE_METHODS, SEVERITY_JS, sink_args
@@ -187,6 +188,7 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                 if time.monotonic() - started > budget_seconds:
                     break
                 interp = JsInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                 fr = JFrame(jf, None, Obj(type_name="module"), 0, route=route)
                 try:
                     if fn is None:
@@ -195,6 +197,7 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                         interp.bind_entry(fn, fr, route)
                         interp._run_body(fn, fr)
                 except (BudgetExceeded, RecursionError):
+                    coverage.note(path)
                     continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 

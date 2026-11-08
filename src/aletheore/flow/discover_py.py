@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.py_index import PyFile, PyIndex
 from aletheore.flow.py_interp import BudgetExceeded, PFrame, PyInterp
@@ -151,6 +152,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                 if time.monotonic() - started > budget_seconds:
                     break
                 interp = PyInterp(index, {cwe}, **interp_args)
+                interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                 self_obj = Obj(cls=cls, type_name=cls.name) if cls is not None else None
                 fr = PFrame(pf, cls, self_obj, 0, route=route)
                 try:
@@ -161,6 +163,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                         interp.bind_entry(fnode, fr, route)
                         interp.exec(body, fr)
                 except (BudgetExceeded, RecursionError):
+                    coverage.note(path)
                     continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 

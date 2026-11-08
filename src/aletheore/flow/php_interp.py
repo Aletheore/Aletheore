@@ -358,8 +358,16 @@ class PhpInterp:
         obj_n, name_n = n.child_by_field_name("object"), n.child_by_field_name("name")
         base = self.eval(obj_n, fr)
         prop = _t(name_n)
+        if prop in ("query", "data", "cookies", "files", "params", "headers", "body") and "request" in _t(obj_n).lower() \
+                and not (isinstance(base, Obj) and prop in base.fields):
+            # `$request->query`, `Flight::request()->query`, `$this->request()->data`: framework request collections
+            return Tainted("request." + prop)
         if isinstance(base, Obj) and prop in base.fields:
             return base.fields[prop]
+        if isinstance(base, Obj) and "*dynamic*" in base.fields:
+            return join(base.fields["*dynamic*"], UNKNOWN)
+        if isinstance(base, Obj) and base.cls is not None and base.kind is None:
+            return UNKNOWN  # a property of a modelled class that was never written: not request data
         if classify(base) == "tainted":
             return self._combine(base)
         return UNKNOWN
@@ -487,7 +495,24 @@ class PhpInterp:
                 self._bind(tgt, src if src is not None else UNKNOWN, fr)
         elif t == "member_access_expression":
             base = self.eval(target.child_by_field_name("object"), fr)
-            prop = _t(target.child_by_field_name("name"))
+            name_n = target.child_by_field_name("name")
+            if name_n is not None and name_n.type != "name":
+                # `$this->{$k} = v` / `$this->$k = v`: the property written is whatever `$k` holds.
+                key = self.eval(name_n, fr)
+                names = [key] if isinstance(key, Const) else list(key.alts) if isinstance(key, Choice) and all(isinstance(a, Const) for a in key.alts) else None
+                if isinstance(base, Obj):
+                    if names is None:
+                        # A request-controlled name can hit any property; a name that merely comes from other program data
+                        # (a config array) is not treated as reaching properties it was never written to.
+                        if classify(key) == "tainted":
+                            old = base.fields.get("*dynamic*")
+                            base.fields["*dynamic*"] = join(old, val) if old is not None else val
+                    else:
+                        for k in names:
+                            old = base.fields.get(_s(k.value))
+                            base.fields[_s(k.value)] = join(old, val) if old is not None else val
+                return
+            prop = _t(name_n)
             if isinstance(base, Obj):
                 old = base.fields.get(prop)
                 base.fields[prop] = join(old, val) if (fr.branch > 0 and old is not None) else val
@@ -815,17 +840,23 @@ class PhpInterp:
                     return {key}
         return set()
 
-    @staticmethod
-    def _safe_regex(pattern: str) -> bool:
-        m = re.fullmatch(r"/\^\[([^\]]+)\][+*]?\$/[a-zA-Z]*", pattern) or re.fullmatch(r"/\^\[([^\]]+)\]\{\d*,?\d*\}\$/[a-zA-Z]*", pattern)
+    def _safe_regex(self, pattern: str) -> bool:
+        """An anchored pattern made only of simple character classes (identifier-like text), so a match proves the value harmless."""
         if re.fullmatch(r"/\^\\[dw][+*]?\$/[a-zA-Z]*", pattern):
             return True
+        m = re.fullmatch(r"/\^((?:\[[^\]]+\](?:[+*]|\{\d*,?\d*\})?)+)\$/[a-zA-Z]*", pattern)
         if not m:
             return False
-        rest = m.group(1)
-        for tok in ("a-z", "A-Z", "0-9", "\\w", "\\d", "_", "-", " "):
-            rest = rest.replace(tok, "")
-        return rest == ""
+        allowed = ["a-z", "A-Z", "0-9", "\\w", "\\d", "_", "-", " ", "$"]
+        if 22 not in self.cwes:
+            allowed.append(".")  # a dot is harmless except for path traversal
+        for cls in re.findall(r"\[([^\]]+)\]", m.group(1)):
+            rest = cls
+            for tok in allowed:
+                rest = rest.replace(tok, "")
+            if rest != "":
+                return False
+        return True
 
     def _expr_key(self, node: Node | None, fr: PFrame) -> str | None:
         if node is None:
@@ -867,6 +898,8 @@ class PhpInterp:
             terminated = False
             for c in n.named_children:
                 self.eval(c, fr)
+                if c.type == "throw_expression":
+                    terminated = True  # PHP 8: `throw new X;` is an expression statement
                 if c.type == "function_call_expression" and _t(c.child_by_field_name("function")).lower() in TERMINATORS:
                     args_n = c.child_by_field_name("arguments")
                     vals = [self.eval(a.named_children[-1], fr) for a in (args_n.named_children if args_n is not None else []) if a.named_children]
@@ -995,13 +1028,20 @@ class PhpInterp:
                     val_t = c.named_children[-1] if c.type == "by_ref" and c.named_children else c
             if isinstance(it, MapV) and not it.entries and not it.dirty and not it.opaque:
                 return False
-            if isinstance(it, MapV):
-                elem = join_all(list(it.entries.values()) + ([UNKNOWN] if it.dirty or it.opaque else []))
-                keys = join_all([Const(k) if not isinstance(k, tuple) else UNKNOWN for k in it.entries] + [UNKNOWN])
-            elif classify(it) == "tainted":
-                elem = keys = Tainted("derived")
+            def parts(v):
+                if isinstance(v, MapV):
+                    exact = not v.dirty and not v.opaque
+                    e_ = join_all(list(v.entries.values()) + ([UNKNOWN] if v.dirty or v.opaque else []))
+                    k_ = join_all([Const(k) if not isinstance(k, tuple) else UNKNOWN for k in v.entries] + ([] if exact and v.entries else [UNKNOWN]))
+                    return e_, k_
+                if classify(v) == "tainted":
+                    return Tainted("derived"), Tainted("derived")
+                return UNKNOWN, UNKNOWN
+            if isinstance(it, Choice):
+                ps = [parts(a) for a in it.alts]
+                elem, keys = join_all([p_[0] for p_ in ps]), join_all([p_[1] for p_ in ps])
             else:
-                elem = keys = UNKNOWN
+                elem, keys = parts(it)
             fr.branch += 1
             try:
                 if key_t is not None:

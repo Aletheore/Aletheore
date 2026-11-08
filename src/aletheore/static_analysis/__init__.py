@@ -175,6 +175,7 @@ def check_static_analysis(
 ) -> dict:
     findings: list[dict] = []
     suppressed: list[dict] = []
+    incomplete_files: list[str] = []
     tools_run: list[str] = []
     tools_skipped: list[dict] = []
     opted_in = {"bearer": run_bearer, "joern": run_joern}
@@ -204,6 +205,7 @@ def check_static_analysis(
             tools_run.append(name)
             findings.extend(result["findings"])
             suppressed.extend(result.get("suppressed") or [])
+            incomplete_files.extend(result.get("incomplete_files") or [])
         else:
             tools_skipped.append({"tool": name, "reason": result["reason"]})
 
@@ -235,6 +237,9 @@ def check_static_analysis(
         "tools_skipped": tools_skipped,
         "findings": _add_content_fingerprints(_drop_duplicate_flow_findings(findings), repo_path),
     }
+    if incomplete_files:
+        # Files the flow engine gave up on (analysis budget exceeded): findings in them may be missing.
+        out["flow_incomplete_files"] = sorted(set(incomplete_files))[:100]
     if suppressed:
         # Findings the flow engine proved safe: kept out of `findings`, listed so they can be audited.
         out["suppressed_findings"] = suppressed

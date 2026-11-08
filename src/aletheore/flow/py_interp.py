@@ -563,7 +563,7 @@ class PyInterp:
         if self._sanitizer(name):
             return SAFE
         if name in fr.local_funcs:
-            return self._run_function(fr.file, fr.local_funcs[name], None, None, args, kw, fr)
+            return self._run_function(fr.file, fr.local_funcs[name], None, None, args, kw, fr, closure=fr)
         hit = self.index.lookup(name, fr.file)
         if hit is not None:
             return self._run_symbol(hit, args, kw, fr)
@@ -615,19 +615,36 @@ class PyInterp:
             cur = nxt
         return None
 
-    def _run_function(self, file: PyFile, fnode: Node, cls: PyClass | None, self_obj: Obj | None, args: list[Val], kw: dict, fr: PFrame) -> Val:
+    def _run_function(self, file: PyFile, fnode: Node, cls: PyClass | None, self_obj: Obj | None, args: list[Val], kw: dict, fr: PFrame, closure: PFrame | None = None) -> Val:
         if fr.depth + 1 > self.MAX_DEPTH or id(fnode) in self._active:
             return self._opaque(self_obj, args + list(kw.values()))
         body = fnode.child_by_field_name("body")
         if body is None:
             return self._opaque(self_obj, args)
         inner = PFrame(file, cls, self_obj, fr.depth + 1)
+        if closure is not None:
+            # A nested function sees the variables of the function that defines it, as they are when it is called.
+            inner.env.update(closure.env)
+            inner.local_funcs.update(closure.local_funcs)
+            inner.route = closure.route
         self._bind_params(fnode, args, kw, inner, self_obj)
         self._active.add(id(fnode))
         try:
             self.exec(body, inner)
         finally:
             self._active.discard(id(fnode))
+        if closure is not None:
+            # `nonlocal x` writes reach the defining function.
+            stack = [body]
+            while stack:
+                cur = stack.pop()
+                if cur.type == "nonlocal_statement":
+                    for c in cur.named_children:
+                        nm = _t(c)
+                        if nm in inner.env:
+                            closure.env[nm] = join(closure.env[nm], inner.env[nm]) if nm in closure.env else inner.env[nm]
+                elif cur.type not in ("function_definition", "class_definition"):
+                    stack.extend(cur.children)
         return join_all(inner.rets) if inner.rets else Const(None)
 
     def _bind_params(self, fnode: Node, args: list[Val], kw: dict, inner: PFrame, self_obj: Obj | None) -> None:

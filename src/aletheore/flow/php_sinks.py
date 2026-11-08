@@ -101,6 +101,11 @@ def sink_args(cwe: int, name: str, recv: str, argc: int, recv_type: str | None =
         if not recv and n == "move_uploaded_file" and argc >= 2:
             return [1]
         return None
+    if cwe == 79:
+        # framework response objects: $this->response()->write($html), $response->setBody($html)
+        if recv and n in ("write", "send", "setbody", "setcontent", "body", "html", "setcontents", "withbody") and "response" in low and argc >= 1:
+            return [0]
+        return None
     if cwe == 98:
         return None  # include/require are handled as their own node type
     if cwe == 94:

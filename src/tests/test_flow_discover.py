@@ -141,3 +141,24 @@ def test_flow_findings_that_semgrep_already_reported_are_dropped():
     kept = _drop_duplicate_flow_findings([semgrep, same, other_class, far])
 
     assert kept == [semgrep, other_class, far]
+
+
+def test_sink_beyond_the_old_prefilter_cap_is_still_found(tmp_path):
+    from aletheore.flow.discover_py import discover_python
+    from aletheore.flow.discover import discover_repo
+    body = "# padding\n" * 250_000 + "from flask import request\nimport os\ndef h():\n    os.system(request.args.get('c'))\n"
+    (tmp_path / "big.py").write_text(body)
+    assert len(body) > 2_000_000
+    assert any("command-injection" in f["rule_id"] for f in discover_repo(tmp_path))
+
+
+def test_budget_exhaustion_is_reported_not_silent(tmp_path, monkeypatch):
+    from aletheore.flow.py_interp import BudgetExceeded, PyInterp
+    from aletheore.static_analysis.flow_scanner import check_flow
+
+    def boom(self):
+        raise BudgetExceeded
+    monkeypatch.setattr(PyInterp, "_tick", boom)
+    (tmp_path / "a.py").write_text("from flask import request\nimport os\n\ndef h():\n    a = 1\n    b = 2\n    c = 3\n    os.system(request.args.get('c'))\n")
+    result = check_flow(tmp_path)
+    assert result.get("incomplete_files") == ["a.py"]

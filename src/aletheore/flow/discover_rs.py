@@ -7,6 +7,7 @@ from pathlib import Path
 
 from tree_sitter import Node
 
+from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.rs_index import RsIndex, RsType, attrs_before, type_name
 from aletheore.flow.rs_interp import BudgetExceeded, RsInterp, SFrame
@@ -118,11 +119,13 @@ def discover_rs(repo: Path, index: RsIndex | None = None, budget_seconds: float 
                 for fns in ty.funcs.values():
                     for fn in fns:
                         interp = RsInterp(index, {cwe}, sink_hook=sink)
+                        interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                         fr = SFrame(rf, ty, Obj(cls=ty, type_name=ty.name) if ty.name != "<main>" else None, 0)
                         try:
                             interp.bind_entry(fn, fr, _is_action(fn))
                             interp.exec(fn.child_by_field_name("body"), fr)
                         except (BudgetExceeded, RecursionError):
+                            coverage.note(path)
                             continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 

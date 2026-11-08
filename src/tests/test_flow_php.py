@@ -155,3 +155,54 @@ def test_validate_mode_suppresses_a_provably_safe_finding_and_keeps_a_tainted_on
 
     assert verdict(4) in ("safe", "unreachable")
     assert verdict(6) == "tainted"
+
+
+def test_unwritten_property_of_a_modelled_class_is_not_request_data(tmp_path):
+    src = ("<?php\nclass R {\n  private $path = 'php://input';\n  public $type = '';\n"
+           "  function __construct(array $config = []) {\n    $config = ['type' => $_SERVER['CONTENT_TYPE'], 'query' => $_GET];\n    $this->init($config);\n  }\n"
+           "  function init(array $p = []) {\n    foreach ($p as $name => $value) { $this->{$name} = $value; }\n    $this->read();\n  }\n"
+           "  function read() { return file_get_contents($this->path); }\n}\n")
+    (tmp_path / "R.php").write_text(src)
+    from aletheore.flow.discover_php import discover_php
+    assert discover_php(tmp_path) == []
+
+
+def test_dynamic_property_write_with_request_key_still_flows(tmp_path):
+    src = ("<?php\nclass R {\n  private $path = 'x';\n  function go() {\n    $k = $_GET['k'];\n    $this->{$k} = $_GET['v'];\n    return file_get_contents($this->path);\n  }\n}\n")
+    (tmp_path / "R.php").write_text(src)
+    from aletheore.flow.discover_php import discover_php
+    assert any("path-traversal" in f["rule_id"] for f in discover_php(tmp_path))
+
+
+def test_framework_request_collection_is_a_source(tmp_path):
+    src = ("<?php\nclass E {\n  function jsonp($data, $param = 'jsonp') {\n    $cb = $this->request()->query[$param];\n"
+           "    echo $cb . '(' . json_encode($data) . ');';\n  }\n}\n")
+    (tmp_path / "E.php").write_text(src)
+    from aletheore.flow.discover_php import discover_php
+    assert any("xss" in f["rule_id"] for f in discover_php(tmp_path))
+
+
+def test_framework_response_write_is_an_xss_sink(tmp_path):
+    src = "<?php\nfunction h($app) {\n  $cb = $_GET['cb'];\n  $app->response()->write($cb . '(1);');\n}\n"
+    (tmp_path / "a.php").write_text(src)
+    from aletheore.flow.discover_php import discover_php
+    assert any("xss" in f["rule_id"] for f in discover_php(tmp_path))
+    ok = "<?php\nfunction h($app) {\n  $app->response()->write(htmlspecialchars($_GET['cb']));\n}\n"
+    (tmp_path / "a.php").write_text(ok)
+    assert discover_php(tmp_path) == []
+
+
+def test_compound_early_exit_guard_proves_the_value_safe(tmp_path):
+    src = ("<?php\nfunction h($req) {\n  $cb = (string) $_GET['cb'];\n"
+           "  if ($cb !== '' && !preg_match('/^[A-Za-z_$][\\w$.]{0,127}$/', $cb)) {\n    throw new Exception('bad');\n  }\n"
+           "  $req->response()->write($cb . '(1);');\n}\n")
+    (tmp_path / "a.php").write_text(src)
+    from aletheore.flow.discover_php import discover_php
+    assert discover_php(tmp_path) == []
+
+
+def test_dot_in_a_validating_class_is_not_enough_for_paths(tmp_path):
+    src = ("<?php\nfunction h() {\n  $f = $_GET['f'];\n  if (!preg_match('/^[\\w.]+$/', $f)) { die('x'); }\n  return file_get_contents('/d/' . $f);\n}\n")
+    (tmp_path / "a.php").write_text(src)
+    from aletheore.flow.discover_php import discover_php
+    assert any("path-traversal" in f["rule_id"] for f in discover_php(tmp_path))

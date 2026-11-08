@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_MAX_BYTES = 2_000_000
+_MAX_BYTES = 64_000_000
 
 
 def classes_present(files: list[Path], sink_words: dict[int, tuple[bytes, ...]]) -> set[int]:

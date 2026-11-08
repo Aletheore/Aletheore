@@ -8,6 +8,7 @@ from pathlib import Path
 from tree_sitter import Node
 
 from aletheore.flow.go_index import GoFile, GoIndex
+from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.go_interp import BudgetExceeded, GFrame, GoInterp
 from aletheore.flow.go_sinks import CWE_NAMES_GO, DISCOVER_CWES_GO, SEVERITY_GO, sink_args
@@ -123,12 +124,14 @@ def discover_go(repo: Path, index: GoIndex | None = None, budget_seconds: float 
                 if time.monotonic() - started > budget_seconds:
                     break
                 interp = GoInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                 this = Obj(type_name=rtype) if rtype else None
                 fr = GFrame(gf, this, 0)
                 try:
                     interp.bind_entry(fn, fr)
                     interp.exec(fn.child_by_field_name("body"), fr)
                 except (BudgetExceeded, RecursionError):
+                    coverage.note(path)
                     continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 

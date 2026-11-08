@@ -13,6 +13,7 @@ from pathlib import Path
 from tree_sitter import Node
 
 from aletheore.flow.php_index import EXTS, PhpFile, PhpIndex
+from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.php_interp import BudgetExceeded, PFrame, PhpInterp
 from aletheore.flow.php_sinks import (
@@ -25,7 +26,7 @@ _SINK_WORDS = {
     89: (b"query", b"mysql", b"pg_", b"sqlite", b"prepare", b"exec", b"->get_", b"odbc", b"oci_"),
     78: (b"exec", b"system", b"passthru", b"popen", b"proc_open", b"shell_exec", b"`"),
     22: (b"fopen", b"file_get_contents", b"file_put_contents", b"readfile", b"unlink", b"move_uploaded_file", b"copy(", b"rename(", b"mkdir", b"scandir", b"opendir", b"glob(", b"file(", b"touch(", b"highlight_file"),
-    79: (b"echo", b"print", b"die(", b"exit(", b"<?="),
+    79: (b"echo", b"print", b"die(", b"exit(", b"<?=", b"response", b"Response"),
     98: (b"include", b"require"),
     94: (b"eval", b"assert", b"create_function", b"call_user_func"),
     502: (b"unserialize", b"yaml_parse"),
@@ -113,6 +114,10 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                 if _cwe == 79:
                     if name == "echo" and any(tainted_string(a) for a in args):
                         record(node, fr, "output")
+                    elif name != "echo":
+                        positions = sink_args(79, name, recv_text, len(args))
+                        if positions and any(i < len(args) and tainted_string(args[i]) for i in positions):
+                            record(node, fr, f"argument 1 of {name}")
                     return
                 if _cwe == 98:
                     if name == "__include__" and args and classify(args[0]) == "tainted":
@@ -142,6 +147,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                 if time.monotonic() - started > budget_seconds:
                     break
                 interp = PhpInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                 this = Obj(cls=cls, type_name=cls.name) if cls is not None else None
                 fr = PFrame(pf, cls, this, 0)
                 try:
@@ -151,6 +157,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                         interp.bind_entry(fn, fr)
                         interp.exec(fn.child_by_field_name("body"), fr)
                 except (BudgetExceeded, RecursionError):
+                    coverage.note(path)
                     continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 

@@ -10,6 +10,7 @@ from tree_sitter import Node
 from aletheore.flow.kt_index import KtClass, KtIndex, annotations
 from aletheore.flow.kt_interp import BudgetExceeded, KFrame, KtInterp
 from aletheore.flow.kt_sinks import CONTROLLER_ANNOTATIONS, CWE_NAMES_KT, DISCOVER_CWES_KT, MAPPING_ANNOTATIONS, SEVERITY_KT, sink_args
+from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.values import Choice, Const, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
@@ -120,10 +121,12 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
             if b"call." in data and cwe in DISCOVER_CWES_KT:
                 for lam in _ktor_handlers(kf.root):
                     interp = KtInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                    interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                     fr = KFrame(kf, kf.main, None, 0)
                     try:
                         interp._run_lambda(lam, [], fr)
                     except (BudgetExceeded, RecursionError):
+                        coverage.note(path)
                         continue
             for cls in kf.classes:
                 if time.monotonic() - started > budget_seconds:
@@ -131,6 +134,7 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                 for fns in cls.funcs.values():
                     for fn in fns:
                         interp = KtInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                        interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                         fr = KFrame(kf, cls, Obj(cls=cls, type_name=cls.name) if cls.name != "<main>" else None, 0)
                         try:
                             interp.bind_entry(fn, fr, _is_action(cls, fn))
@@ -141,6 +145,7 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                             else:
                                 interp.exec(inner, fr)
                         except (BudgetExceeded, RecursionError):
+                            coverage.note(path)
                             continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
