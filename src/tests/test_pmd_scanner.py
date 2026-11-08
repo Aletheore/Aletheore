@@ -82,7 +82,7 @@ def test_check_pmd_normalizes_a_real_finding_shape(tmp_path):
             "tool": "pmd",
             "rule_id": "SystemPrintln",
             "severity": "major",
-            "type": "bug",
+            "type": "code_smell",
             "path": "App.java",
             "line": 4,
             "message": "Usage of System.out/err",
@@ -307,3 +307,29 @@ def test_check_pmd_does_not_report_a_crash_as_a_clean_scan(tmp_path):
         assert result["findings"] == []
         assert "without any output" in result["reason"]
         assert "OutOfMemoryError" in result["reason"]
+
+
+def test_check_pmd_types_findings_by_ruleset(tmp_path):
+    # Real rule/ruleset pairs from a PMD run over OWASP Benchmark test code (2026-11-08).
+    (tmp_path / "App.java").write_text("public class App {}\n")
+    violations = [
+        {"beginline": 1, "rule": "SystemPrintln", "ruleset": "Best Practices", "priority": 2, "description": "a"},
+        {"beginline": 2, "rule": "LiteralsFirstInComparisons", "ruleset": "Best Practices", "priority": 3, "description": "b"},
+        {"beginline": 3, "rule": "CloseResource", "ruleset": "Error Prone", "priority": 3, "description": "c"},
+        {"beginline": 4, "rule": "HardCodedCryptoKey", "ruleset": "Security", "priority": 3, "description": "d"},
+        {"beginline": 5, "rule": "SomethingNew", "ruleset": "A Ruleset PMD Added Later", "priority": 3, "description": "e"},
+    ]
+    payload = {"files": [{"filename": str(tmp_path / "App.java"), "violations": violations}]}
+
+    with patch("aletheore.static_analysis.pmd_scanner.shutil.which", return_value="/usr/local/bin/pmd"), \
+         patch("aletheore.static_analysis.pmd_scanner.subprocess.run", return_value=_mock_run(4, stdout=json.dumps(payload))):
+        result = check_pmd(tmp_path)
+
+    types = {f["rule_id"]: f["type"] for f in result["findings"]}
+    assert types == {
+        "SystemPrintln": "code_smell",
+        "LiteralsFirstInComparisons": "code_smell",
+        "CloseResource": "bug",
+        "HardCodedCryptoKey": "vulnerability",
+        "SomethingNew": "bug",  # unknown ruleset keeps the previous default
+    }

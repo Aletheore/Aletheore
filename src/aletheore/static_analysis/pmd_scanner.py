@@ -52,6 +52,16 @@ PMD_MAX_TIMEOUT_SECONDS = 1800
 # here maps its own tool-specific scale.
 _SEVERITY_MAP = {1: "critical", 2: "major", 3: "major", 4: "minor", 5: "info"}
 
+# PMD's own ruleset name, as it appears in its JSON report ("Best Practices", "Error Prone" and
+# "Security" confirmed against a real PMD run, 2026-11-08), mapped onto the shared finding type
+# taxonomy. Before this, everything outside Security was labeled "bug", so style rules such as
+# SystemPrintln and LiteralsFirstInComparisons showed up as bugs: on the OWASP Benchmark (Java)
+# that was 9,856 "bug" findings on 2,740 small files. Best Practices is the same kind of finding
+# Semgrep's own "best-practice" category already maps to "code_smell". Error Prone rules (for
+# example CloseResource) really are bug-shaped, and an unrecognized ruleset keeps the old "bug"
+# default rather than being silently downgraded.
+_RULESET_TYPE = {"Security": "vulnerability", "Best Practices": "code_smell", "Error Prone": "bug"}
+
 
 def _scaled_timeout(file_count: int) -> int:
     scaled = PMD_BASE_TIMEOUT_SECONDS + int(file_count * PMD_PER_FILE_SECONDS)
@@ -176,7 +186,7 @@ def check_pmd(repo_path: Path, timeout: int | None = None) -> dict:
                     "tool": "pmd",
                     "rule_id": rule,
                     "severity": _SEVERITY_MAP.get(violation.get("priority"), "minor"),
-                    "type": "vulnerability" if ruleset == "Security" else "bug",
+                    "type": _RULESET_TYPE.get(ruleset, "bug"),
                     "path": path,
                     "line": violation.get("beginline", 0),
                     "message": violation.get("description", "").strip(),
