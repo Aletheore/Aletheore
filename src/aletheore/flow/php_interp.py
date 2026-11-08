@@ -17,7 +17,7 @@ from aletheore.flow.php_index import PhpClass, PhpFile, PhpIndex
 from aletheore.flow.php_sinks import (
     CAST_SAFE, INCLUDE_KINDS, NAME_SANITIZERS, SAFE_FUNCS, SANITIZERS, SERVER_TAINTED_PREFIXES, SUPERGLOBALS,
 )
-from aletheore.flow.values import add_prefix, SAFE, UNKNOWN, Choice, Const, MapV, Obj, Tainted, Val, classify, join, join_all
+from aletheore.flow.values import ClosureV, add_prefix, SAFE, UNKNOWN, Choice, Const, MapV, Obj, Tainted, Val, classify, join, join_all
 
 PROPAGATING = {
     "str_replace", "str_ireplace", "preg_replace", "substr", "mb_substr", "trim", "rtrim", "ltrim", "chop", "strtolower", "strtoupper",
@@ -88,6 +88,7 @@ class PhpInterp:
         self.sink_hook = sink_hook    # hook(node, name, recv_text, args, recv, frame)
         self.store_hook = store_hook  # hook(node, base_text, key, value, frame)
         self.steps = 0
+        self._outs: list | None = None
         self.static_props: dict[str, Val] = {}
         self.probes: dict[tuple, list] = {}
         self.probe_keys: set[tuple] = set()
@@ -268,7 +269,9 @@ class PhpInterp:
             vals = [self.eval(c, fr) for c in n.named_children]
             self._hook(n, "echo", "", vals, None, fr)
             return Const(1)
-        if t in ("anonymous_function", "arrow_function", "anonymous_function_creation_expression"):
+        if t in ("anonymous_function", "arrow_function"):
+            return ClosureV(n, fr.file, dict(fr.env))  # keeps the variables it was created with
+        if t in ("anonymous_function_creation_expression",):
             return UNKNOWN
         if t == "reference_assignment_expression":
             return self.eval(n.child_by_field_name("right"), fr)
@@ -576,8 +579,11 @@ class PhpInterp:
         if fn_n is None:
             return UNKNOWN
         if fn_n.type not in ("name", "qualified_name"):
-            self.eval(fn_n, fr)
-            return self._opaque(None, self._args(args_n, fr))
+            callee = self.eval(fn_n, fr)
+            args = self._args(args_n, fr)
+            if isinstance(callee, ClosureV):
+                return self._call_closure(callee, args, fr)
+            return self._opaque(None, args)
         name = _t(fn_n).split("\\")[-1]
         low = name.lower()
         args = self._args(args_n, fr)
@@ -588,8 +594,35 @@ class PhpInterp:
             return SAFE
         hit = self.index.function(name, fr.file)
         if hit is not None:
+            self._outs = self._ref_args(args_n)
             return self._run_function(hit[0], hit[1], None, None, args, fr)
         return self._builtin(low, n, args, fr)
+
+    @staticmethod
+    def _ref_args(args_n: Node | None) -> list | None:
+        """(position, expression node) of every argument that is a plain variable or element: candidates for by-reference parameters."""
+        out = []
+        for i, a in enumerate(args_n.named_children if args_n is not None else []):
+            expr = a.named_children[-1] if a.type == "argument" and a.named_children else a
+            if expr.type in ("variable_name", "subscript_expression", "member_access_expression"):
+                out.append((i, expr))
+        return out or None
+
+    def _call_closure(self, c: ClosureV, args: list[Val], fr: PFrame) -> Val:
+        if fr.depth + 1 > self.MAX_DEPTH or id(c.node) in self._active:
+            return self._opaque(None, args)
+        inner = PFrame(c.file, fr.cls, fr.this_obj, fr.depth + 1)
+        inner.env.update(c.env)
+        self._bind_params(c.node, args, inner)
+        body = c.node.child_by_field_name("body")
+        self._active.add(id(c.node))
+        try:
+            if body is not None and body.type == "compound_statement":
+                self.exec(body, inner)
+                return join_all(inner.rets) if inner.rets else Const(None)
+            return self.eval(body, inner)
+        finally:
+            self._active.discard(id(c.node))
 
     def _builtin(self, low: str, n: Node, args: list[Val], fr: PFrame) -> Val:
         if low in SAFE_FUNCS:
@@ -731,11 +764,20 @@ class PhpInterp:
             return self._opaque(this_obj, args)
         inner = PFrame(file, cls, this_obj, fr.depth + 1)
         self._bind_params(fn, args, inner)
+        outs, self._outs = self._outs, None
         self._active.add(id(fn))
         try:
             self.exec(body, inner)
         finally:
             self._active.discard(id(fn))
+        if outs:
+            params = fn.child_by_field_name("parameters")
+            plist = [p for p in (params.named_children if params is not None else []) if p.type in ("simple_parameter", "property_promotion_parameter", "variadic_parameter")]
+            for i, target in outs:  # by-reference parameters: the callee's final value flows back into the caller's variable
+                if i < len(plist) and any(c.type == "reference_modifier" for c in plist[i].children):
+                    nm = next((c for c in plist[i].named_children if c.type == "variable_name"), None)
+                    if nm is not None and _vname(nm) in inner.env:
+                        self._bind(target, inner.env[_vname(nm)], fr)
         return join_all(inner.rets) if inner.rets else Const(None)
 
     def _bind_params(self, fn: Node, args: list[Val], inner: PFrame) -> None:

@@ -151,3 +151,50 @@ def test_python_lambda_callback_is_followed(tmp_path):
 def test_java_matches_without_anchors_is_a_whole_string_test(tmp_path):
     body = 'String c = req.getParameter("c"); if (c == null || !c.matches("[A-Za-z]+")) { return; } java.sql.DriverManager.getConnection("x").createStatement().executeQuery("select \'" + c + "\'");'
     assert run(tmp_path, "S.java", java(body)) == []
+
+
+def test_php_closure_and_reference_parameter(tmp_path):
+    src = ('<?php\nfunction a() { $x = $_GET["c"]; $run = function () use ($x) { shell_exec($x); }; $run(); }\n'
+           'function store(&$out, $v) { $out = $v; }\nfunction b() { $x = "date"; store($x, $_GET["c"]); shell_exec($x); }\n')
+    assert "command-injection" in run(tmp_path, "a.php", src)
+    d1, d2 = tmp_path / "c", tmp_path / "r"
+    d1.mkdir(); d2.mkdir()
+    assert run(d1, "a.php", '<?php\nfunction a() { $x = "ls"; $run = function () use ($x) { shell_exec($x); }; $run(); }\n') == []
+    assert run(d2, "a.php", '<?php\nfunction store(&$out, $v) { $out = $v; }\nfunction b() { $x = "date"; store($x, "pwd"); shell_exec($x); }\n') == []
+
+
+def test_go_pointer_argument_flows_back(tmp_path):
+    vuln = ('package p\nimport ("net/http"; "os/exec")\nfunc h(w http.ResponseWriter, r *http.Request) {\n  x := "date"\n  store(&x, r.FormValue("c"))\n  exec.Command("sh", "-c", x).Run()\n}\n'
+            'func store(out *string, v string) { *out = v }\n')
+    assert "command-injection" in run(tmp_path, "m.go", vuln)
+    safe = vuln.replace('r.FormValue("c")', '"pwd"')
+    d = tmp_path / "s"
+    d.mkdir()
+    assert run(d, "m.go", safe) == []
+
+
+def test_go_literal_allowlist_before_shell(tmp_path):
+    src = ('package p\nimport ("net/http"; "os/exec")\nfunc h(w http.ResponseWriter, r *http.Request) {\n  x := r.FormValue("c")\n  if x != "date" && x != "pwd" { return }\n  exec.Command("sh", "-c", x).Run()\n}\n')
+    assert run(tmp_path, "m.go", src) == []
+
+
+def test_java_unguessable_name_blocks_path_traversal_but_a_plain_suffix_does_not(tmp_path):
+    src = ('import javax.servlet.http.*;\npublic class U extends HttpServlet {\n  static final String DIR = "/tmp/up/";\n'
+           '  protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws Exception {\n'
+           '    String f = req.getParameter("f");\n    String suffix = f.substring(f.lastIndexOf("."));\n'
+           '    java.io.File c = new java.io.File(DIR + java.util.UUID.randomUUID() + suffix);\n    c.createNewFile();\n    new java.io.FileOutputStream(c);\n  }\n}\n')
+    assert run(tmp_path, "U.java", src) == []
+    d = tmp_path / "p"
+    d.mkdir()
+    assert "path-traversal" in run(d, "U.java", src.replace("java.util.UUID.randomUUID() + suffix", "suffix"))
+
+
+def test_php_class_of_a_json_only_application_is_not_xss(tmp_path):
+    (tmp_path / "public").mkdir()
+    (tmp_path / "public" / "index.php").write_text('<?php\nheader("Content-Type: application/json; charset=UTF-8");\n$c = new Ctl();\n$c->go();\n')
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "Ctl.php").write_text('<?php\nclass Ctl {\n  function go() { echo json_encode(["q" => $_GET["q"]]); }\n}\n')
+    assert "xss" not in {f["rule_id"].split(".")[-1] for f in discover_repo(tmp_path)}
+    d = tmp_path / "other"
+    d.mkdir()
+    assert "xss" in run(d, "page.php", '<?php\nclass P {\n  function go() { echo "<p>" . $_GET["q"] . "</p>"; }\n}\n')

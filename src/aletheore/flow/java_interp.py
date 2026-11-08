@@ -19,6 +19,7 @@ from tree_sitter import Node
 from aletheore.flow.java_index import ClassInfo, JavaFile, JavaIndex, simple_type_name
 from aletheore.flow import guards as G
 from aletheore.flow.values import (
+    RANDOM_MARK,
     add_prefix, SAFE,
     UNKNOWN,
     BuilderV,
@@ -562,6 +563,9 @@ class Interp:
             if obj_n is not None:
                 self.eval(obj_n, fr)
             return SAFE
+        # A freshly generated unguessable name: `Generators.timeBasedGenerator().generate()`, `UUID.randomUUID()`.
+        if name == "generate" and obj_n is not None and _t(obj_n).startswith("Generators."):
+            return Const(RANDOM_MARK)
         # Static call on a class name?
         if obj_n is not None:
             cname = self._class_ref(obj_n, fr)
@@ -600,15 +604,15 @@ class Interp:
             if name in fr.env or (fr.this_obj and name in fr.this_obj.fields):
                 return None
             if name[:1].isupper():
-                if name.isupper() and len(name) > 1 and self.index.resolve_class(name, fr.file) is None:
+                if name.isupper() and len(name) > 1 and name not in ("UUID", "URL", "URI", "URN", "XML", "JSON", "SQL", "DOM", "SAX", "ZIP") and self.index.resolve_class(name, fr.file) is None:
                     return None  # an ALL_CAPS constant, not a class
                 return name
             return None
         if obj_n.type == "field_access":
             fname = _t(obj_n.child_by_field_name("field"))
             inner = obj_n.child_by_field_name("object")
-            if fname.isupper() and len(fname) > 1 and self.index.resolve_class(fname, fr.file) is None:
-                return None  # Utils.TESTFILES_DIR: a constant of a class, not a class
+            if fname.isupper() and len(fname) > 1 and inner is not None and _t(inner).split(".")[-1][:1].isupper() and self.index.resolve_class(fname, fr.file) is None:
+                return None  # Utils.TESTFILES_DIR: a constant of a class, not a class (java.util.UUID: a class of a package)
             if fname[:1].isupper() and inner is not None and inner.type in ("identifier", "field_access"):
                 first = _t(inner).split(".")[0]
                 if first in fr.env or (fr.this_obj and first in fr.this_obj.fields):
@@ -619,6 +623,8 @@ class Interp:
     def _static_call(self, cname: str, name: str, args: list[Val], fr: Frame, node: Node) -> Val:
         if (cname, name) in PARSERS:
             return SAFE
+        if cname == "UUID" and name == "randomUUID" and not args:
+            return Const(RANDOM_MARK)
         cls = self.index.resolve_class(cname, fr.file)
         if cls is not None and name in cls.methods:
             return self._user_call(cls, cls.methods[name], None, args, fr)
@@ -652,6 +658,10 @@ class Interp:
                     v.opaque = True  # the callee may add anything to a container it is handed
         classes = [classify(v) for v in vals]
         if "tainted" in classes:
+            if pure:  # `new File(path)`: the same text, so what it was known to start with still holds
+                first = next((v for v in vals if isinstance(v, Tainted)), None)
+                if first is not None and (first.prefix or first.lead):
+                    return Tainted("through-call", 0, first.prefix, first.lead)
             return Tainted("through-call")
         if all(c == "safe" for c in classes) and (pure or recv is not None):
             return SAFE

@@ -7,6 +7,7 @@ decides whether the value reaching the sink is provably safe.
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -81,6 +82,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
     started = time.monotonic()
     found: dict[tuple, dict] = {}
     files = _php_files(repo)
+    json_roots = _json_api_roots(files)
     present = classes_present(files, _SINK_WORDS)
     for path in files:
         if time.monotonic() - started > budget_seconds:
@@ -112,6 +114,8 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
             def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
                 text = node.text.decode("utf-8", "replace")
                 if _cwe == 79:
+                    if json_roots and _json_class_file(fr.file.path, fr.file.src, json_roots):
+                        return  # a class of an application whose entry script declares `Content-Type: application/json`
                     if name == "echo" and any(tainted_string(a) for a in args):
                         record(node, fr, "output")
                     elif name != "echo":
@@ -196,6 +200,27 @@ def _local_path_prefix(call: Node) -> bool:
     arg = first.named_children[-1] if first is not None and first.named_children else None
     lit = _leading_literal(arg)
     return bool(lit) and lit.startswith(("./", "../", "/")) and "://" not in lit and not lit.startswith("//")
+
+
+_JSON_HEADER = re.compile(rb"header\s*\(\s*['\"]Content-Type:\s*application/json", re.I)
+
+
+def _json_class_file(path: Path, src: bytes, roots: set[Path]) -> bool:
+    return re.search(rb"\bclass\s+\w+", src) is not None and any(r in path.resolve().parents for r in roots)
+
+
+def _json_api_roots(files: list[Path]) -> set[Path]:
+    """Directories of applications that answer every request as JSON: an entry script (usually public/index.php) sets the header once."""
+    roots: set[Path] = set()
+    for p in files:
+        try:
+            data = p.read_bytes()
+        except OSError:
+            continue
+        if _JSON_HEADER.search(data):
+            d = p.resolve().parent
+            roots.add(d.parent if d.name in ("public", "web", "www", "html", "htdocs") else d)
+    return roots
 
 
 def _call_name(call: Node) -> tuple[str, str]:

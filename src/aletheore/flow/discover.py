@@ -16,7 +16,7 @@ from aletheore.flow.java_index import JavaIndex, JavaFile
 from aletheore.flow import coverage
 from aletheore.flow.java_interp import BudgetExceeded, Frame, Interp
 from aletheore.flow.java_sinks import CWE_NAMES, DISCOVER_CWES, sink_args
-from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, ListV, Obj, Tainted, classify
+from aletheore.flow.values import random_adjacent, host_is_fixed, path_prefix_safe, Choice, Const, ListV, Obj, Tainted, classify
 from aletheore.flow.prefilter import classes_present
 from aletheore.scanner.detect import IGNORED_DIRS
 
@@ -132,10 +132,12 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                             return  # constant program with separate arguments: no shell, no injection of a second command
                     for i in positions:
                         if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
-                            continue  # a fixed scheme://host/ prefix: only the path is attacker data
+                            continue  # a fixed scheme://host/ or same-site path prefix: only the rest is attacker data
                         value = recv if i == -1 else args[i] if i < len(args) else None
                         if value is None:
                             continue
+                        if _cwe == 22 and random_adjacent(value):
+                            continue  # appended to an unguessable generated name: no traversal out of it
                         # A trust-boundary finding needs a tainted STRING; an object bound from a form and
                         # stored in the session (the usual Spring pattern) is not reported.
                         hit = _direct_taint(value) if _cwe == 501 else _string_taint(value) if _cwe in (79, 601) else classify(value) == "tainted"

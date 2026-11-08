@@ -104,6 +104,7 @@ class GoInterp:
         self.probe_keys: set[tuple] = set()
         self.dead: list[tuple] = []
         self._active: set[int] = set()
+        self._outs: list | None = None
 
     # ------------------------------------------------------------------ helpers
     def _tick(self) -> None:
@@ -207,7 +208,7 @@ class GoInterp:
                 return Const(not v.value)
             if op in ("-", "+", "^"):
                 return SAFE
-            return v  # &x and <-ch keep the value
+            return v  # &x, *p and <-ch keep the value
         if t == "composite_literal":
             return self._composite(n, fr)
         if t == "func_literal":
@@ -391,11 +392,18 @@ class GoInterp:
         if func is None:
             return UNKNOWN
         t = func.type
+        outs = [(i, a.child_by_field_name("operand")) for i, a in enumerate(args_n.named_children if args_n is not None else [])
+                if a.type == "unary_expression" and _t(a.child_by_field_name("operator")) == "&" and a.child_by_field_name("operand") is not None
+                and a.child_by_field_name("operand").type == "identifier"]
         if t == "identifier":
             name = _t(func)
             args = self._args(args_n, fr)
             self._hook(n, name, "", args, None, fr)
-            return self._call_name(name, n, args, fr)
+            self._outs = outs or None
+            try:
+                return self._call_name(name, n, args, fr)
+            finally:
+                self._outs = None
         if t == "selector_expression":
             op_n, name_n = func.child_by_field_name("operand"), func.child_by_field_name("field")
             name, recv_text = _t(name_n), _t(op_n)
@@ -406,12 +414,20 @@ class GoInterp:
                 hit = self.index.package_function(_t(op_n), name, fr.file)
                 if hit is not None:
                     self._hook(n, name, recv_text, args, None, fr)
-                    return self._run_function(hit[0], hit[1], None, args, fr)
+                    self._outs = outs or None
+                    try:
+                        return self._run_function(hit[0], hit[1], None, args, fr)
+                    finally:
+                        self._outs = None
                 self._hook(n, name, recv_text, args, None, fr)
                 return self._pkg_call(_t(op_n), name, n, args, fr)
             recv = self.eval(op_n, fr)
             self._hook(n, name, recv_text, args, recv, fr)
-            return self._method(recv, name, args, fr, recv_text, n)
+            self._outs = outs or None
+            try:
+                return self._method(recv, name, args, fr, recv_text, n)
+            finally:
+                self._outs = None
         if t == "func_literal":
             return self._run_function(fr.file, func, None, self._args(args_n, fr), fr, closure=fr.env)
         # a type conversion such as []byte(x) or string(x) written with a composite type
@@ -527,6 +543,7 @@ class GoInterp:
     def _run_function(self, file: GoFile, fn: Node, this_obj: Obj | None, args: list[Val], fr: GFrame, closure: dict | None = None) -> Val:
         if fr.depth + 1 > self.MAX_DEPTH or id(fn) in self._active:
             return self._opaque(this_obj, args)
+        outs, self._outs = self._outs, None
         body = fn.child_by_field_name("body")
         if body is None:
             return self._opaque(this_obj, args)
@@ -538,6 +555,15 @@ class GoInterp:
             self.exec(body, inner)
         finally:
             self._active.discard(id(fn))
+        if outs:
+            params = fn.child_by_field_name("parameters")
+            names = []
+            for p in (params.named_children if params is not None else []):
+                ids = [c for c in p.named_children if c.type == "identifier"]
+                names.extend(_t(i) for i in ids) if ids else names.append("")
+            for i, target in outs:  # `&x` arguments: what the callee wrote through the pointer lands in the caller's x
+                if i < len(names) and names[i] in inner.env:
+                    fr.env[_t(target)] = inner.env[names[i]]
         if not inner.rets:
             return Const(None)
         multi = [r for r in inner.rets]
@@ -561,6 +587,9 @@ class GoInterp:
         if target is None:
             return
         t = target.type
+        if t == "unary_expression" and _t(target.child_by_field_name("operator")) == "*":
+            target = target.child_by_field_name("operand")  # `*out = x`: write through the pointer
+            t = target.type if target is not None else ""
         if t == "identifier":
             if _t(target) != "_":
                 fr.env[_t(target)] = val

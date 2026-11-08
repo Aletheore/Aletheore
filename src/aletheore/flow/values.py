@@ -28,6 +28,7 @@ class Tainted(Val):
     why: str = "source"
     tid: int = 0  # identity of this tainted value, for interpreters that track validation (0 = untracked)
     prefix: str = ""  # constant text the value is known to start with ("https://api.example.com/" + key)
+    lead: str = ""  # constant text immediately before the tainted part ("uploads/" + uuid + SUFFIX: ends with the random token)
 
 
 class Unknown(Val):
@@ -169,26 +170,33 @@ def classify(v: Val, _depth: int = 0) -> str:
 
 
 def add_prefix(result: Val, vals) -> Val:
-    """A tainted result of concatenating `vals` (in order) remembers the constant text it starts with, cut at the first
-    character that could be a format placeholder, so a fixed host or a local-path start survives string building."""
-    if not isinstance(result, Tainted) or result.prefix:
+    """A tainted result of concatenating `vals` (in order) remembers the constant text it starts with (cut at the first character
+    that could be a format placeholder, so a fixed host or a local-path start survives string building) and the constant text
+    directly before the first tainted part."""
+    if not isinstance(result, Tainted) or (result.prefix and result.lead):
         return result
-    acc = ""
+    acc, lead, cur, seen_unknown, prefix_done = "", "", "", False, False
     for v in vals:
-        if isinstance(v, Const) and isinstance(v.value, str):
-            acc += v.value
-        elif isinstance(v, Const) and v.value is not None and not isinstance(v.value, bool):
-            acc += str(v.value)
+        if isinstance(v, Const) and v.value is not None and not isinstance(v.value, bool):
+            txt = v.value if isinstance(v.value, str) else str(v.value)
+            cur += txt
+            if not seen_unknown:
+                acc += txt
         elif isinstance(v, Tainted):
-            acc += v.prefix
+            lead = cur + (v.lead if not cur else "")
+            if not seen_unknown:
+                acc += v.prefix
             break
         else:
-            break
+            seen_unknown = True
+            cur = ""
     for i, ch in enumerate(acc):
         if ch in "%{$#":
             acc = acc[:i]
             break
-    return Tainted(result.why, result.tid, acc) if acc else result
+    if not acc and not lead:
+        return result
+    return Tainted(result.why, result.tid, acc or result.prefix, lead or result.lead)
 
 
 # Looks like `scheme://host/`: once the path slash is reached nothing the program appends can change the host.
@@ -215,3 +223,12 @@ _LOCAL_PATH = _re.compile(r"^/[^/\\]")
 def path_prefix_safe(v: Val) -> bool:
     """A value that starts with `/segment`: a same-site path, so a redirect or fetch built on it cannot leave the site."""
     return isinstance(v, Tainted) and bool(_LOCAL_PATH.match(v.prefix))
+
+
+RANDOM_MARK = "\x01RANDOM"  # stands for an unguessable generated token (UUID.randomUUID())
+
+
+def random_adjacent(v: Val) -> bool:
+    """Attacker text appended directly to an unguessable name (`uploads/` + uuid + suffix): a `..` component cannot be formed,
+    and later components resolve inside a directory nobody can guess, so path traversal is not possible."""
+    return isinstance(v, Tainted) and v.lead.endswith(RANDOM_MARK)
