@@ -1211,6 +1211,9 @@ class RbInterp:
         if not has_else:
             envs.append(base)
             lasts.append(Const(None))
+        if not envs:
+            fr.env = base
+            return True
         fr.env = envs[0]
         for e in envs[1:]:
             self._join_envs(fr, fr.env, e)

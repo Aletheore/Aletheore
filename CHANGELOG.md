@@ -5,6 +5,10 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Flow analysis now covers Kotlin, for both discovery and checking Semgrep's findings: Spring annotated parameters
+  (`@RequestParam`, `@PathVariable`, `@RequestBody`), servlet requests and Ktor `call` handlers are followed through
+  functions, objects and companion constants to SQL, command, path, XSS, redirect, SSRF, deserialization, code-injection
+  and session sinks. `$name` and `${expr}` templates, `const val`, `toInt()` and escaping helpers are understood.
 - Flow analysis now covers Ruby, for both discovery and checking Semgrep's findings: `params`, `cookies` and `request` data
   is followed through Rails controllers, Sinatra routes, methods and classes to SQL, command, path, XSS, redirect, SSRF,
   deserialization, code-injection and session sinks. Hash and array-bound queries (`where(name: x)`, `where("a = ?", x)`),

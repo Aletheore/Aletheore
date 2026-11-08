@@ -118,7 +118,7 @@ class Wrapper { HttpServletRequest r; Wrapper(HttpServletRequest r) { this.r = r
 
 def test_check_flow_reports_not_applicable_without_java_and_can_be_disabled(tmp_path, monkeypatch):
     (tmp_path / "a.txt").write_text("nothing to analyze\n")
-    assert check_flow(tmp_path)["not_applicable"] == "no Java, Python, JavaScript, PHP, Go, C# or Ruby source files"
+    assert check_flow(tmp_path)["not_applicable"] == "no Java, Python, JavaScript, PHP, Go, C#, Ruby or Kotlin source files"
     monkeypatch.setenv("ALETHEORE_DISABLE_FLOW_DISCOVERY", "1")
     assert check_flow(tmp_path)["checked"] is False
 
