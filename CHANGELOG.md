@@ -5,6 +5,15 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Flow analysis now covers C#, for both discovery and checking Semgrep's findings: request data from ASP.NET and
+  WebForms (`Request[...]`, `[FromQuery]` and other model-bound action parameters) is followed through methods and
+  classes to SQL, command, path, XSS, redirect, SSRF, XPath, deserialization and session sinks. Class `const` and
+  `static readonly` values resolve, so a table name built from a constant no longer counts as injectable.
+- Flow analysis now covers Go, for both discovery and checking Semgrep's findings: request data from
+  `net/http`, gin, echo and fiber handlers is followed through functions, methods, closures and imported
+  packages to SQL, command, path, output, redirect, request-forgery and other sinks. Command-line
+  arguments are no longer treated as attacker input in any language, and discovery skips weakness classes
+  that have no sink anywhere in the repository, which makes it noticeably faster.
 - Flow analysis now covers PHP, both discovery and checking Semgrep's findings. Superglobals are followed
   through functions, classes and included files to SQL, command, path, output, file-inclusion, `eval`,
   deserialization, request-forgery, redirect, LDAP, XPath and session sinks, and validations are tracked

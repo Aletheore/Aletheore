@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from aletheore.flow.prefilter import classes_present
 from aletheore.flow.py_index import PyFile, PyIndex
 from aletheore.flow.py_interp import BudgetExceeded, PFrame, PyInterp
 from aletheore.flow.py_sinks import CWE_NAMES_PY, DISCOVER_CWES_PY, ROUTE_MARKERS, SEVERITY_PY, sink_args
@@ -85,7 +86,9 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
     repo_r = repo.resolve()
     started = time.monotonic()
     found: dict[tuple, dict] = {}
-    for path in _py_files(repo):
+    files = _py_files(repo)
+    present = classes_present(files, _SINK_WORDS)
+    for path in files:
         if time.monotonic() - started > budget_seconds:
             break
         try:
@@ -93,7 +96,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
         except OSError:
             continue
         entry_file = any(w in data for w in _ENTRY_WORDS)
-        cwes = list(DISCOVER_CWES_PY) if entry_file else [c for c in DISCOVER_CWES_PY if any(w in data for w in _SINK_WORDS[c])]
+        cwes = [c for c in DISCOVER_CWES_PY if c in present] if entry_file else [c for c in DISCOVER_CWES_PY if any(w in data for w in _SINK_WORDS[c])]
         if not cwes:
             continue
         pf = index.file(path)

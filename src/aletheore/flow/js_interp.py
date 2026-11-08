@@ -246,8 +246,6 @@ class JsInterp:
 
     def _member(self, n: Node, fr: JFrame) -> Val:
         obj_n, prop = n.child_by_field_name("object"), _t(n.child_by_field_name("property"))
-        if _t(obj_n) == "process" and prop == "argv":
-            return Tainted("process.argv")
         base = self.eval(obj_n, fr)
         if isinstance(base, Obj):
             if base.kind == "request":

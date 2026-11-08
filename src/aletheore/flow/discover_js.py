@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from aletheore.flow.js_index import FN_TYPES, JsFile, JsIndex
+from aletheore.flow.prefilter import classes_present
 from aletheore.flow.js_interp import BudgetExceeded, JFrame, JsInterp, request_like
 from aletheore.flow.js_sinks import CWE_NAMES_JS, DISCOVER_CWES_JS, ROUTE_METHODS, SEVERITY_JS, sink_args
 from aletheore.flow.values import Choice, Const, MapV, Obj, Tainted, classify
@@ -102,7 +103,9 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
     repo_r = repo.resolve()
     started = time.monotonic()
     found: dict[tuple, dict] = {}
-    for path in _js_files(repo):
+    files = _js_files(repo)
+    present = classes_present(files, _SINK_WORDS)
+    for path in files:
         if time.monotonic() - started > budget_seconds:
             break
         try:
@@ -110,7 +113,7 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
         except OSError:
             continue
         entry_file = any(w in data for w in _ENTRY_WORDS)
-        cwes = list(DISCOVER_CWES_JS) if entry_file else [c for c in DISCOVER_CWES_JS if any(w in data for w in _SINK_WORDS[c])]
+        cwes = [c for c in DISCOVER_CWES_JS if c in present] if entry_file else [c for c in DISCOVER_CWES_JS if any(w in data for w in _SINK_WORDS[c])]
         if not cwes:
             continue
         jf = index.file(path)

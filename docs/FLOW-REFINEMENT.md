@@ -52,6 +52,16 @@ from validated values (while the unvalidated parent it came from stays tainted).
 `$_FILES[...]['tmp_name']` is server generated, and escaping helpers are recognized per weakness class, by
 their standard names and by convention (`quoteString`, `backquote`, `esc_html`).
 
+Go follows `*http.Request` (`FormValue`, `URL.Query().Get`, `Header.Get`, `Cookie`, `Body`) and gin, echo and fiber
+contexts through functions, struct methods, closures registered with `http.HandleFunc` and packages resolved
+through their imports to SQL, command, path, output, redirect, request-forgery, LDAP, XPath, code-loading,
+deserialization and session sinks. A prepared statement's `Query`/`Exec` arguments are bound parameters, not SQL
+text; `exec.Command("sh", "-c", ...)` is judged on the whole argument list; an explicit non-HTML `Content-Type`
+set through `w.Header().Set` is respected; `os.Stat` is an existence check, not file access; and a method on a
+record fetched by a tainted key (a database lookup) does not return a tainted string. Command-line arguments
+(`os.Args`, `sys.argv`, `process.argv`, `$argv`) and `input()` are not treated as attacker input in any language:
+they are the invoking user's own authority and produced noise on every real project tried.
+
 ## What it models
 
 - Constants and arithmetic, and string and `char` operations on constants.
@@ -78,7 +88,9 @@ dropped, next to safe ones that must.
 
 - `ALETHEORE_DISABLE_FLOW_REFINEMENT=1` turns it off.
 - `aletheore scan` prints how many findings it suppressed.
-- Limits: at most 20,000 findings and 120 seconds per scan; beyond that findings are kept unexamined.
+- Limits: at most 20,000 findings and 120 seconds per scan for refinement and 150 seconds per language for
+discovery; beyond that findings are kept unexamined. A weakness class is skipped entirely when none of its sink
+names appears anywhere in the repository.
 
 ## Measured effect
 

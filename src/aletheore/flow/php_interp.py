@@ -321,8 +321,6 @@ class PhpInterp:
             return Obj(type_name="Server")
         if name == "_SESSION":
             return Obj(type_name="Session")
-        if name == "argv":
-            return self._fresh("argv")
         if name == "this":
             return fr.this_obj or UNKNOWN
         return UNKNOWN

@@ -13,6 +13,7 @@ from pathlib import Path
 from tree_sitter import Node
 
 from aletheore.flow.php_index import EXTS, PhpFile, PhpIndex
+from aletheore.flow.prefilter import classes_present
 from aletheore.flow.php_interp import BudgetExceeded, PFrame, PhpInterp
 from aletheore.flow.php_sinks import (
     CWE_NAMES_PHP, DISCOVER_CWES_PHP, INCLUDE_KINDS, SEVERITY_PHP, sink_args,
@@ -78,7 +79,9 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
     repo_r = repo.resolve()
     started = time.monotonic()
     found: dict[tuple, dict] = {}
-    for path in _php_files(repo):
+    files = _php_files(repo)
+    present = classes_present(files, _SINK_WORDS)
+    for path in files:
         if time.monotonic() - started > budget_seconds:
             break
         try:
@@ -86,7 +89,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
         except OSError:
             continue
         entry_file = any(w in data for w in _ENTRY_WORDS)
-        cwes = list(DISCOVER_CWES_PHP) if entry_file else [c for c in DISCOVER_CWES_PHP if any(w in data for w in _SINK_WORDS[c])]
+        cwes = [c for c in DISCOVER_CWES_PHP if c in present] if entry_file else [c for c in DISCOVER_CWES_PHP if any(w in data for w in _SINK_WORDS[c])]
         if not cwes:
             continue
         pf = index.file(path)

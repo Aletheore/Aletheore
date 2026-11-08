@@ -12,7 +12,11 @@ import re
 import time
 from pathlib import Path
 
+from aletheore.flow.cs_index import CsIndex
+from aletheore.flow.discover_cs import validate_cs_finding
+from aletheore.flow.discover_go import validate_go_finding
 from aletheore.flow.discover_php import validate_php_finding
+from aletheore.flow.go_index import GoIndex
 from aletheore.flow.java_index import JavaIndex
 from aletheore.flow.php_index import EXTS as PHP_EXTS, PhpIndex
 from aletheore.flow.validate import TAINT_CWES, validate_finding
@@ -41,6 +45,8 @@ def refine_semgrep_results(repo_path: Path, results: list[dict], relative_path) 
     suppressed: list[dict] = []
     index: JavaIndex | None = None
     php_index: PhpIndex | None = None
+    go_index: GoIndex | None = None
+    cs_index: CsIndex | None = None
     started = time.monotonic()
     evaluated = 0
     for item in results:
@@ -49,7 +55,7 @@ def refine_semgrep_results(repo_path: Path, results: list[dict], relative_path) 
             extra = item.get("extra") or {}
             cwes = cwes_from_metadata(extra.get("metadata"))
             eligible = (
-                path.endswith((".java",) + tuple(PHP_EXTS))
+                path.endswith((".java", ".go", ".cs") + tuple(PHP_EXTS))
                 and bool(cwes & TAINT_CWES)
                 and evaluated < MAX_FINDINGS
                 and time.monotonic() - started < MAX_SECONDS
@@ -64,6 +70,14 @@ def refine_semgrep_results(repo_path: Path, results: list[dict], relative_path) 
                 if index is None:
                     index = JavaIndex(repo_path)
                 verdict = validate_finding(repo_path, rel, span[0], span[1], cwes, index)
+            elif path.endswith(".go"):
+                if go_index is None:
+                    go_index = GoIndex(repo_path)
+                verdict = validate_go_finding(repo_path, rel, span[0], span[1], cwes, go_index)
+            elif path.endswith(".cs"):
+                if cs_index is None:
+                    cs_index = CsIndex(repo_path)
+                verdict = validate_cs_finding(repo_path, rel, span[0], span[1], cwes, cs_index)
             else:
                 if php_index is None:
                     php_index = PhpIndex(repo_path)

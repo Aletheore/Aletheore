@@ -254,8 +254,6 @@ class PyInterp:
 
     def _attr(self, n: Node, fr: PFrame) -> Val:
         obj_n, attr = n.child_by_field_name("object"), _t(n.child_by_field_name("attribute"))
-        if _t(obj_n) == "sys" and attr == "argv":
-            return Tainted("sys.argv")
         base = self.eval(obj_n, fr)
         if isinstance(base, Obj):
             if base.kind == "request":
@@ -571,8 +569,6 @@ class PyInterp:
             return self._run_symbol(hit, args, kw, fr)
         if name in SAFE_RESULT_CALLS:
             return SAFE
-        if name == "input":
-            return Tainted("input()")
         if name in ("list", "set", "frozenset") and args and isinstance(args[0], ListV):
             return ListV(list(args[0].items), birth_depth=fr.branch)
         if name == "dict" and args and isinstance(args[0], MapV):

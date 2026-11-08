@@ -16,6 +16,7 @@ from aletheore.flow.java_index import JavaIndex, JavaFile
 from aletheore.flow.java_interp import BudgetExceeded, Frame, Interp
 from aletheore.flow.java_sinks import CWE_NAMES, DISCOVER_CWES, sink_args
 from aletheore.flow.values import Choice, Obj, Tainted, classify
+from aletheore.flow.prefilter import classes_present
 from aletheore.scanner.detect import IGNORED_DIRS
 
 # A file is only run for a weakness class when it contains a word that class's sinks need, or when it
@@ -72,7 +73,9 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
     index = index or JavaIndex(repo)
     started = time.monotonic()
     found: dict[tuple, dict] = {}
-    for path in _java_files(repo):
+    files = _java_files(repo)
+    present = classes_present(files, _SINK_WORDS)
+    for path in files:
         if time.monotonic() - started > budget_seconds:
             break
         try:
@@ -83,7 +86,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
         cwes = [c for c in DISCOVER_CWES if any(w in data for w in _SINK_WORDS[c])]
         # A request-handling file may call a helper that holds the sink, so every class is tried.
         if is_entry_file:
-            cwes = list(DISCOVER_CWES)
+            cwes = [c for c in DISCOVER_CWES if c in present]
         if not cwes:
             continue
         jf = index.file(path)
@@ -144,6 +147,8 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
 
 def discover_repo(repo: Path, index: JavaIndex | None = None, budget_seconds: float = MAX_SECONDS) -> list[dict]:
     """Discover tainted flows in every supported language the repository contains."""
+    from aletheore.flow.discover_cs import discover_cs, has_cs
+    from aletheore.flow.discover_go import discover_go, has_go
     from aletheore.flow.discover_js import discover_javascript, has_javascript
     from aletheore.flow.discover_php import discover_php, has_php
     from aletheore.flow.discover_py import discover_python, has_python
@@ -155,12 +160,18 @@ def discover_repo(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
         out += discover_javascript(repo, None, budget_seconds)
     if has_php(repo):
         out += discover_php(repo, None, budget_seconds)
+    if has_go(repo):
+        out += discover_go(repo, None, budget_seconds)
+    if has_cs(repo):
+        out += discover_cs(repo, None, budget_seconds)
     return sorted(out, key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
 
 def has_source(repo: Path) -> bool:
+    from aletheore.flow.discover_cs import has_cs
+    from aletheore.flow.discover_go import has_go
     from aletheore.flow.discover_js import has_javascript
     from aletheore.flow.discover_php import has_php
     from aletheore.flow.discover_py import has_python
 
-    return has_java(repo) or has_python(repo) or has_javascript(repo) or has_php(repo)
+    return has_java(repo) or has_python(repo) or has_javascript(repo) or has_php(repo) or has_go(repo) or has_cs(repo)
