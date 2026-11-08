@@ -897,7 +897,7 @@ class CsInterp:
                     return (local(inner), nm)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr)
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, canon=lambda var: G.canonical_assignment(fr.file.src, var))
 
     def _guard_facts(self, cond: Node | None, fr: CFrame):
         return self._engine(fr).facts(cond)

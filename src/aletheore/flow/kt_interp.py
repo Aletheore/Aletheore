@@ -970,7 +970,7 @@ class KtInterp:
                     return (local(kids[-1]), nm)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, anchored=("matches",), attr=attr)
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, anchored=("matches",), attr=attr, canon=lambda var: G.canonical_assignment(fr.file.src, var))
 
     def _regex_arg(self, call: Node, fr: KFrame) -> str | None:
         va = next((c for c in call.children if c.type == "value_arguments"), None)

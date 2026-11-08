@@ -792,7 +792,7 @@ class GoInterp:
                 return (local(op), _t(fn.child_by_field_name("field"))) if local(op) else None
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr)
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, canon=lambda var: G.canonical_assignment(fr.file.src, var))
 
     def _narrow(self, names: set, fr: GFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)

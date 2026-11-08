@@ -153,6 +153,10 @@ def _java_int_div(a: int, b: int) -> int:
     return q if (a >= 0) == (b >= 0) else -q
 
 
+def jf_src(fr) -> bytes:
+    return fr.file.src
+
+
 class Interp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
@@ -1168,9 +1172,14 @@ class Interp:
                 if isinstance(coll, ListV) and coll.items and not coll.dirty and not coll.opaque and all(classify(i) == "safe" for i in coll.items):
                     return ({v2} if v2 else {hv + "@918"}, set())
             return G.EMPTY
+        if name == "startsWith" and len(args) == 1 and local(obj) and classify(self.eval(args[0], fr)) == "safe" and G.canonical_assignment(jf_src(fr), local(obj)):
+            return ({local(obj) + "@canon"}, set())  # a canonical path that starts with the fixed root stays inside it
         if name in ("isNumeric", "isDigits", "isCreatable", "isParsable", "isNumber") and len(args) == 1 and local(args[0]):
             return ({local(args[0])}, set())
         return G.EMPTY
+
+    def _noop(self):
+        return None
 
     def _pattern_source(self, node: Node | None, fr: Frame) -> str | None:
         """The constant regex behind `PATTERN` (a static final Pattern.compile("...")) or an inline Pattern.compile("...")."""

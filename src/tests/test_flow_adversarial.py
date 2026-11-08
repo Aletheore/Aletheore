@@ -231,3 +231,24 @@ def test_host_allowlist_proves_the_url_safe_for_ssrf_only(tmp_path, lang):
     import re
     unguarded = re.sub(r"(halt 400 unless[^\n]*\n|if \(!ALLOWED[^\n]*\n|if urlparse[^\n]*\n\s*return \"no\"\n|if \(!in_array[^\n]*\n|if \(!OK\.contains[^\n]*\n|if \(!Ok\.Contains[^\n]*\n)", "", src)
     assert "ssrf" in run(d, name, unguarded)
+
+
+def test_prefix_check_proves_a_path_only_after_canonicalisation(tmp_path):
+    safe = ('[ApiController]\npublic class C : ControllerBase {\n  static readonly string Root = Path.GetFullPath("/srv/uploads");\n  [HttpGet("/d")]\n'
+            '  public IActionResult D() { var n = Request.Query["n"].ToString(); var t = Path.GetFullPath(Path.Combine(Root, n));\n'
+            '    if (!t.StartsWith(Root + Path.DirectorySeparatorChar)) { return BadRequest(); }\n    return Content(System.IO.File.ReadAllText(t)); }\n}\n')
+    assert run(tmp_path, "C.cs", safe) == []
+    d = tmp_path / "raw"
+    d.mkdir()
+    # the same check on the raw name proves nothing: "/srv/uploads/../../etc/passwd" starts with the root
+    raw = safe.replace('var t = Path.GetFullPath(Path.Combine(Root, n));', 'var t = "/srv/uploads/" + n;')
+    assert "path-traversal" in run(d, "C.cs", raw)
+    j = tmp_path / "j"
+    j.mkdir()
+    java = ('import javax.servlet.http.*;\nimport java.nio.file.*;\npublic class D extends HttpServlet {\n  static final Path ROOT = Paths.get("/srv/up").toAbsolutePath().normalize();\n'
+            '  protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws Exception {\n    String n = req.getParameter("n");\n'
+            '    Path t = ROOT.resolve(n).normalize().toAbsolutePath();\n    if (!t.startsWith("/srv/up")) { return; }\n    Files.readAllBytes(t);\n  }\n}\n')
+    assert run(j, "D.java", java) == []
+    k = tmp_path / "k"
+    k.mkdir()
+    assert "path-traversal" in run(k, "D.java", java.replace("ROOT.resolve(n).normalize().toAbsolutePath()", "Paths.get(\"/srv/up/\" + n)"))
