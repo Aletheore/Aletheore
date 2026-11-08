@@ -21,7 +21,7 @@ def check_flow(repo_path: Path, timeout: int | None = None) -> dict:
     if os.environ.get(_DISABLE_ENV, "").strip().lower() in _OFF:
         return {"checked": False, "reason": f"flow discovery disabled ({_DISABLE_ENV} is set)", "findings": []}
     if not has_source(repo_path):
-        return {"checked": True, "reason": None, "findings": [], "not_applicable": "no Java, Python, JavaScript, PHP, Go, C#, Ruby or Kotlin source files"}
+        return {"checked": True, "reason": None, "findings": [], "not_applicable": "no Java, Python, JavaScript, PHP, Go, C#, Ruby, Kotlin or Rust source files"}
     findings = []
     for f in discover_repo(repo_path):
         findings.append(add_cwe({k: v for k, v in f.items() if k != "cwe"}, f.get("cwe")))

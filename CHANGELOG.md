@@ -5,6 +5,10 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Flow analysis now covers Rust, for both discovery and checking Semgrep's findings: actix-web, axum and Rocket extractors
+  (`web::Query`, `Path`, `Json`, `Form`) and `HttpRequest` data are followed through functions, `impl` blocks and
+  `format!` strings to SQL, command, path, XSS, redirect, SSRF and code-loading sinks. `const` items, bound query
+  parameters, numeric extractors and `.parse()` count as safe.
 - Flow analysis now covers Kotlin, for both discovery and checking Semgrep's findings: Spring annotated parameters
   (`@RequestParam`, `@PathVariable`, `@RequestBody`), servlet requests and Ktor `call` handlers are followed through
   functions, objects and companion constants to SQL, command, path, XSS, redirect, SSRF, deserialization, code-injection
