@@ -197,3 +197,116 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                 except (BudgetExceeded, RecursionError):
                     continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
+
+
+def validate_javascript_finding(repo: Path, rel_path: str, start: tuple[int, int], end: tuple[int, int], cwes: set[int], index: JsIndex | None = None):
+    """Refine mode: prove the sink value of a Semgrep finding safe, or keep it (see validate_php_finding)."""
+    from aletheore.flow.validate import Verdict, _offset
+
+    index = index or JsIndex(repo)
+    jf = index.file(repo / rel_path)
+    if jf is None:
+        return Verdict("unknown", "file unreadable")
+    s, e = _offset(jf.src, *start), _offset(jf.src, *end)
+    node = jf.root.descendant_for_byte_range(s, e)
+    top = node
+    while top is not None and top.type != "call_expression":
+        top = top.parent
+    via_descent = top is None and node is not None
+    if via_descent:
+        down = [node]
+        while down and top is None:
+            cur = down.pop(0)
+            if cur.start_byte < s or cur.end_byte > e:
+                if cur.end_byte > s and cur.start_byte < e:
+                    down.extend(cur.children)
+                continue
+            if cur.type == "call_expression":
+                top = cur
+            down.extend(cur.children)
+    if top is None:
+        return Verdict("unknown", "no call at the finding location")
+    cands = []
+    stack = [top]
+    while stack:
+        cur = stack.pop()
+        if cur.type == "call_expression":
+            cands.append(cur)
+        stack.extend(cur.children)
+
+    def txt(n):
+        return n.text.decode("utf-8", "replace") if n is not None else ""
+
+    def describe(call):
+        fn = call.child_by_field_name("function")
+        an = call.child_by_field_name("arguments")
+        ex = [c for c in (an.named_children if an is not None else []) if c.type not in ("comment", "spread_element")]
+        if fn is not None and fn.type == "member_expression":
+            name, recv = txt(fn.child_by_field_name("property")), txt(fn.child_by_field_name("object"))
+        else:
+            name, recv = txt(fn), ""
+        pos: set[int] = set()
+        for cwe in cwes:
+            p = sink_args(cwe, name, recv, len(ex))
+            if p:
+                pos.update(p)
+        return ex, pos
+
+    call, probes = top, []
+    for cand in cands:
+        e_, p_ = describe(cand)
+        if p_:
+            if not probes:
+                call = cand
+            probes += [e_[i] for i in sorted(p_) if i < len(e_)]
+    if not probes and not via_descent:
+        ex, _ = describe(top)
+        probes = ex
+    if not probes and via_descent:
+        return Verdict("unknown", "finding spans several statements and none is a known sink")
+    if not probes:
+        return Verdict("unknown", "sink has no arguments to judge")
+    handler_starts = {h.start_byte for h in _route_handlers(jf)}
+    chain = []
+    cur = call.parent
+    while cur is not None:
+        if cur.type in FN_TYPES or cur.type == "method_definition":
+            chain.append(cur)
+        cur = cur.parent
+    scope = None
+    for fn in reversed(chain):  # outermost first
+        if fn.start_byte in handler_starts or _request_like(fn):
+            scope = fn
+            break
+    if scope is None and chain:
+        scope = chain[0]
+    route = scope is not None and scope.start_byte in handler_starts
+    interp = JsInterp(index, cwes)
+    for p in probes:
+        interp.probe_keys.add((id(jf), p.start_byte, p.end_byte))
+    fr = JFrame(jf, None, Obj(type_name="module"), 0, route=route)
+    try:
+        if scope is None:
+            interp.exec(jf.root, fr)
+        else:
+            interp.bind_entry(scope, fr, route)
+            interp._run_body(scope, fr)
+    except (BudgetExceeded, RecursionError):
+        return Verdict("unknown", "analysis budget exceeded")
+    kinds = []
+    for p in probes:
+        key = (id(jf), p.start_byte, p.end_byte)
+        vals = interp.probes.get(key)
+        if vals:
+            kinds.extend(c for _, c in vals)
+        elif any(d[0] == key[0] and d[1] <= key[1] and key[2] <= d[2] for d in interp.dead):
+            kinds.append("dead")
+        else:
+            kinds.append("unreached")
+    if "tainted" in kinds:
+        return Verdict("tainted")
+    if "unknown" in kinds or "unreached" in kinds:
+        return Verdict("unknown", ",".join(sorted(set(kinds))))
+    if all(k == "dead" for k in kinds):
+        return Verdict("unreachable", "sink is in a branch that cannot run")
+    return Verdict("safe", "every value reaching the sink is constant or benign")

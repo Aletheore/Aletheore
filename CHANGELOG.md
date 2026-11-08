@@ -5,6 +5,9 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Checking Semgrep's findings now also works for Python and JavaScript/TypeScript. A finding whose location spans several
+  statements (a taint finding from source to sink) is now judged by the sink calls inside it, never by the first call, and
+  is kept when none of them is a known sink. This closes a case where a real SQL injection could have been dropped.
 - Flow analysis now covers Rust, for both discovery and checking Semgrep's findings: actix-web, axum and Rocket extractors
   (`web::Query`, `Path`, `Json`, `Form`) and `HttpRequest` data are followed through functions, `impl` blocks and
   `format!` strings to SQL, command, path, XSS, redirect, SSRF and code-loading sinks. `const` items, bound query

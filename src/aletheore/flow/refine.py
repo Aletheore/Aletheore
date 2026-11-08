@@ -14,7 +14,9 @@ from pathlib import Path
 
 from aletheore.flow.cs_index import CsIndex
 from aletheore.flow.discover_kt import validate_kt_finding
+from aletheore.flow.discover_js import validate_javascript_finding
 from aletheore.flow.discover_py import validate_python_finding
+from aletheore.flow.js_index import JsIndex
 from aletheore.flow.py_index import PyIndex
 from aletheore.flow.discover_rs import validate_rs_finding
 from aletheore.flow.rs_index import RsIndex
@@ -31,6 +33,7 @@ from aletheore.flow.validate import TAINT_CWES, validate_finding
 
 _DISABLE_ENV = "ALETHEORE_DISABLE_FLOW_REFINEMENT"
 _OFF = {"1", "true", "yes", "on"}
+JS_EXTS = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")
 MAX_FINDINGS = 20000
 MAX_SECONDS = 120.0
 
@@ -59,6 +62,7 @@ def refine_semgrep_results(repo_path: Path, results: list[dict], relative_path) 
     kt_index: KtIndex | None = None
     rs_index: RsIndex | None = None
     py_index: PyIndex | None = None
+    js_index: JsIndex | None = None
     started = time.monotonic()
     evaluated = 0
     for item in results:
@@ -67,7 +71,7 @@ def refine_semgrep_results(repo_path: Path, results: list[dict], relative_path) 
             extra = item.get("extra") or {}
             cwes = cwes_from_metadata(extra.get("metadata"))
             eligible = (
-                path.endswith((".java", ".go", ".cs", ".rb", ".kt", ".rs", ".py") + tuple(PHP_EXTS))
+                path.endswith((".java", ".go", ".cs", ".rb", ".kt", ".rs", ".py") + JS_EXTS + tuple(PHP_EXTS))
                 and bool(cwes & TAINT_CWES)
                 and evaluated < MAX_FINDINGS
                 and time.monotonic() - started < MAX_SECONDS
@@ -86,6 +90,10 @@ def refine_semgrep_results(repo_path: Path, results: list[dict], relative_path) 
                 if go_index is None:
                     go_index = GoIndex(repo_path)
                 verdict = validate_go_finding(repo_path, rel, span[0], span[1], cwes, go_index)
+            elif path.endswith(JS_EXTS):
+                if js_index is None:
+                    js_index = JsIndex(repo_path)
+                verdict = validate_javascript_finding(repo_path, rel, span[0], span[1], cwes, js_index)
             elif path.endswith(".py"):
                 if py_index is None:
                     py_index = PyIndex(repo_path)
