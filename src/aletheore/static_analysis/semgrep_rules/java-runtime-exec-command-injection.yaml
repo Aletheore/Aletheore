@@ -10,108 +10,92 @@ rules:
       confidence: MEDIUM
       references:
         - https://owasp.org/www-community/attacks/Command_Injection
+      # Taint rule, replacing an earlier structural pattern rule. Measured on the OWASP Benchmark
+      # for Java (2,740 tests): the structural rule flagged every Runtime.exec/ProcessBuilder call
+      # whose command was any variable. It hit 95 tests, 46 vulnerable and 49 safe, and the 13
+      # tests only it flagged were 2 vulnerable and 11 safe (a variable from a trusted helper
+      # with only the environment array differing). Together with the Semgrep registry rules it
+      # moved command injection from a score of +5.7 to -1.6 (TPR minus FPR, in points).
+      # As a taint rule it keeps everything the fixture requires, including the original gap this
+      # rule was written for (a String method parameter passed straight to exec), flags 38 of
+      # the same tests with 16 false positives instead of 49, and adds no false positive beyond
+      # the registry rules.
     message: >
-      Review the variable command or executable '$COMMAND'. If untrusted input controls it,
-      Runtime.exec/ProcessBuilder can execute an attacker-chosen program. Prefer a fixed executable
-      with separately validated arguments. This structural check does not prove input provenance or
-      allowlist safety.
-    pattern-either:
-      # Scalar overloads: only the command/executable position matters. A fixed
-      # executable followed by a variable ordinary argument is not a finding.
+      The command or executable passed to Runtime.exec/ProcessBuilder here can be influenced by a
+      method parameter or an HTTP request value ('$CMD'). If untrusted input controls it, this is
+      OS command injection (CWE-78). Prefer a fixed executable with separately validated
+      arguments. This is a review candidate: it does not prove the value is attacker controlled or
+      that validation is absent.
+    mode: taint
+    pattern-sources:
+      # HTTP request inputs.
       - patterns:
           - pattern-either:
-              - pattern: Runtime.getRuntime().exec((String $COMMAND), ...)
-              - pattern: Runtime.getRuntime().exec((java.lang.String $COMMAND), ...)
-              - pattern: java.lang.Runtime.getRuntime().exec((String $COMMAND), ...)
-              - pattern: java.lang.Runtime.getRuntime().exec((java.lang.String $COMMAND), ...)
-              - pattern: (Runtime $RUNTIME).exec((String $COMMAND), ...)
-              - pattern: (Runtime $RUNTIME).exec((java.lang.String $COMMAND), ...)
-              - pattern: (java.lang.Runtime $RUNTIME).exec((String $COMMAND), ...)
-              - pattern: (java.lang.Runtime $RUNTIME).exec((java.lang.String $COMMAND), ...)
-              - pattern: new ProcessBuilder((String $COMMAND), ...)
-              - pattern: new ProcessBuilder((java.lang.String $COMMAND), ...)
-              - pattern: new java.lang.ProcessBuilder((String $COMMAND), ...)
-              - pattern: new java.lang.ProcessBuilder((java.lang.String $COMMAND), ...)
-              - pattern: (ProcessBuilder $BUILDER).command((String $COMMAND), ...)
-              - pattern: (ProcessBuilder $BUILDER).command((java.lang.String $COMMAND), ...)
-              - pattern: (java.lang.ProcessBuilder $BUILDER).command((String $COMMAND), ...)
-              - pattern:
-                  (java.lang.ProcessBuilder $BUILDER).command((java.lang.String $COMMAND), ...)
-          - metavariable-pattern:
-              metavariable: $COMMAND
-              patterns:
-                - pattern: $VALUE
-                - pattern-not: '"..."'
-                - pattern-not: $LEFT + $RIGHT
-      # String concatenations are common command construction, but Semgrep's
-      # shallow type inference need not label the whole expression as String.
-      - patterns:
-          - pattern-either:
-              - pattern: Runtime.getRuntime().exec($COMMAND, ...)
-              - pattern: java.lang.Runtime.getRuntime().exec($COMMAND, ...)
-              - pattern: (Runtime $RUNTIME).exec($COMMAND, ...)
-              - pattern: (java.lang.Runtime $RUNTIME).exec($COMMAND, ...)
-              - pattern: new ProcessBuilder($COMMAND, ...)
-              - pattern: new java.lang.ProcessBuilder($COMMAND, ...)
-              - pattern: (ProcessBuilder $BUILDER).command($COMMAND, ...)
-              - pattern: (java.lang.ProcessBuilder $BUILDER).command($COMMAND, ...)
-          - metavariable-pattern:
-              metavariable: $COMMAND
-              patterns:
-                - pattern: $LEFT + $RIGHT
-                # Inline arrays are handled below, using only their executable.
-                - pattern-not-inside: new $TYPE[] { ... }
-                - pattern-not: '"..."'
-      # Inline arrays expose the executable directly. Do not flag an ordinary
-      # variable argument elsewhere in an array whose first element is fixed.
-      - patterns:
-          - pattern-either:
-              - pattern: Runtime.getRuntime().exec(new String[] { $COMMAND, ... }, ...)
-              - pattern: Runtime.getRuntime().exec(new java.lang.String[] { $COMMAND, ... }, ...)
-              - pattern: java.lang.Runtime.getRuntime().exec(new String[] { $COMMAND, ... }, ...)
-              - pattern:
-                  java.lang.Runtime.getRuntime().exec(new java.lang.String[] { $COMMAND, ... }, ...)
-              - pattern: (Runtime $RUNTIME).exec(new String[] { $COMMAND, ... }, ...)
-              - pattern: (Runtime $RUNTIME).exec(new java.lang.String[] { $COMMAND, ... }, ...)
-              - pattern: (java.lang.Runtime $RUNTIME).exec(new String[] { $COMMAND, ... }, ...)
-              - pattern:
-                  (java.lang.Runtime $RUNTIME).exec(new java.lang.String[] { $COMMAND, ... }, ...)
-              - pattern: new ProcessBuilder(new String[] { $COMMAND, ... })
-              - pattern: new ProcessBuilder(new java.lang.String[] { $COMMAND, ... })
-              - pattern: new java.lang.ProcessBuilder(new String[] { $COMMAND, ... })
-              - pattern: new java.lang.ProcessBuilder(new java.lang.String[] { $COMMAND, ... })
-              - pattern: (ProcessBuilder $BUILDER).command(new String[] { $COMMAND, ... })
-              - pattern: (ProcessBuilder $BUILDER).command(new java.lang.String[] { $COMMAND, ... })
-              - pattern: (java.lang.ProcessBuilder $BUILDER).command(new String[] { $COMMAND, ... })
-              - pattern:
-                  (java.lang.ProcessBuilder $BUILDER).command(new java.lang.String[] { $COMMAND, ...
-                  })
-          - metavariable-pattern:
-              metavariable: $COMMAND
-              patterns:
-                - pattern: $VALUE
-                - pattern-not: '"..."'
-                # Array elements do not always receive constant folding.
-                # Exclude complete chains of string literals, including escapes.
-                - pattern-not-regex: '\A\s*"(?:\\.|[^"\\])*"(?:\s*\+\s*"(?:\\.|[^"\\])*")+\s*\z'
-      # A whole command array supplied as a method parameter has an unknown
-      # executable. Local array/list aliases and interprocedural flows are
-      # outside this rule's scope; they need dataflow analysis.
+              - pattern: (HttpServletRequest $REQ).getParameter(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getParameter(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getParameter(...)
+              - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getParameterValues(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getParameterValues(...)
+              - pattern: (HttpServletRequest $REQ).getParameterMap(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getParameterMap(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getParameterMap(...)
+              - pattern: (HttpServletRequest $REQ).getHeader(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getHeader(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getHeader(...)
+              - pattern: (HttpServletRequest $REQ).getHeaders(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getHeaders(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getHeaders(...)
+              - pattern: (HttpServletRequest $REQ).getQueryString(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getQueryString(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getQueryString(...)
+              - pattern: (HttpServletRequest $REQ).getInputStream(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getInputStream(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getInputStream(...)
+              - pattern: (HttpServletRequest $REQ).getCookies(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $REQ).getCookies(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $REQ).getCookies(...)
+              - pattern: (Cookie $COOKIE).getValue(...)
+              - pattern: (javax.servlet.http.Cookie $COOKIE).getValue(...)
+              - pattern: (jakarta.servlet.http.Cookie $COOKIE).getValue(...)
+      # A String or String[] parameter of the enclosing method: the case this rule was first
+      # written for (2026-09-23), a toy method passing its parameter straight to exec().
       - patterns:
           - pattern-either:
               - pattern-inside: |
-                  $RETURN $METHOD(..., String[] $COMMAND, ...) { ... }
+                  $RETURN $METHOD(..., String $PARAM, ...) { ... }
               - pattern-inside: |
-                  $RETURN $METHOD(..., java.lang.String[] $COMMAND, ...) { ... }
+                  $RETURN $METHOD(..., java.lang.String $PARAM, ...) { ... }
+              - pattern-inside: |
+                  $RETURN $METHOD(..., String[] $PARAM, ...) { ... }
+              - pattern-inside: |
+                  $RETURN $METHOD(..., java.lang.String[] $PARAM, ...) { ... }
+          - pattern: $PARAM
+    pattern-sinks:
+      # Only the command or executable position counts: a fixed executable followed by a
+      # variable argument is not a finding.
+      - patterns:
           - pattern-either:
-              - pattern: Runtime.getRuntime().exec($COMMAND, ...)
-              - pattern: java.lang.Runtime.getRuntime().exec($COMMAND, ...)
-              - pattern: (Runtime $RUNTIME).exec($COMMAND, ...)
-              - pattern: (java.lang.Runtime $RUNTIME).exec($COMMAND, ...)
-              - pattern: new ProcessBuilder($COMMAND)
-              - pattern: new java.lang.ProcessBuilder($COMMAND)
-              - pattern: (ProcessBuilder $BUILDER).command($COMMAND)
-              - pattern: (java.lang.ProcessBuilder $BUILDER).command($COMMAND)
+              - pattern: Runtime.getRuntime().exec($CMD, ...)
+              - pattern: java.lang.Runtime.getRuntime().exec($CMD, ...)
+              - pattern: (Runtime $RUNTIME).exec($CMD, ...)
+              - pattern: (java.lang.Runtime $RUNTIME).exec($CMD, ...)
+              - pattern: new ProcessBuilder($CMD, ...)
+              - pattern: new java.lang.ProcessBuilder($CMD, ...)
+              - pattern: (ProcessBuilder $BUILDER).command($CMD, ...)
+              - pattern: (java.lang.ProcessBuilder $BUILDER).command($CMD, ...)
+          - focus-metavariable: $CMD
+    pattern-sanitizers:
+      # An array or list whose first element is a fixed program name has a fixed executable, even
+      # when a later element is variable.
+      - pattern: new String[] {"...", ...}
+      - pattern: new java.lang.String[] {"...", ...}
+      - pattern: java.util.List.of("...", ...)
+      - patterns:
+          - pattern-inside: |
+              String[] $ARRAY = {"...", ...};
+              ...
+          - pattern: $ARRAY
     paths:
       exclude:
         - "**/*Test.java"

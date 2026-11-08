@@ -130,6 +130,17 @@ class CommandExamples {
         builder.command(new java.lang.String[] {"echo", argument});
     }
 
+    void requestSources(javax.servlet.http.HttpServletRequest request, jakarta.servlet.http.HttpServletRequest other) throws Exception {
+        String viaJavax = request.getParameter("cmd");
+        // ruleid: java-runtime-exec-command-injection
+        Runtime.getRuntime().exec(viaJavax);
+        String viaJakarta = other.getHeader("X-Cmd");
+        // ruleid: java-runtime-exec-command-injection
+        new ProcessBuilder(viaJakarta);
+        // ok: java-runtime-exec-command-injection
+        Runtime.getRuntime().exec("echo " + "safe");
+    }
+
     void unrelatedMethod(Unrelated tool, String command) {
         // ok: java-runtime-exec-command-injection
         tool.command(command);
