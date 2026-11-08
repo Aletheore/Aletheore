@@ -1,4 +1,5 @@
 import json
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -221,6 +222,26 @@ def _unexpected_tool_skips(tools_skipped: list[dict]) -> list[dict]:
         skip
         for skip in tools_skipped
         if not str(skip.get("reason", "")).startswith(_INTENTIONAL_SKIP_MARKERS)
+    ]
+
+
+# The only "not applicable" reasons the scanners report: nothing of that language to analyze
+# (bandit, gosec, joern, pmd). That is a normal outcome, not a failure.
+_NOT_APPLICABLE_REASON = re.compile(r"^no \w+ source files$")
+
+
+def failed_tool_skips(tools_skipped: list[dict]) -> list[dict]:
+    """tools_skipped entries for scanners that were SUPPOSED to run and did not: a crash, a
+    timeout or a missing binary. Excludes opt-in/unconfigured scanners (see
+    _unexpected_tool_skips) and scanners with nothing to analyze in this repo.
+
+    Found by the deterministic-scan benchmark: on a machine where Semgrep crashed on import,
+    `aletheore scan` printed "Scan complete" and the only trace was a truncated line inside
+    air.json, so a user just saw fewer findings and could not tell why."""
+    return [
+        skip
+        for skip in _unexpected_tool_skips(tools_skipped)
+        if not _NOT_APPLICABLE_REASON.match(str(skip.get("reason", "")))
     ]
 
 

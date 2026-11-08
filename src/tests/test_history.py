@@ -1062,3 +1062,19 @@ def test_diff_uses_the_full_identity_once_both_sides_are_hashed():
 
     assert len(result["secrets"]["new"]) == 1
     assert len(result["secrets"]["resolved"]) == 1
+
+
+def test_failed_tool_skips_keeps_only_scanners_that_should_have_run():
+    from aletheore.history import failed_tool_skips
+
+    skips = [
+        {"tool": "semgrep", "reason": "semgrep exited 1 without any output: Traceback ..."},
+        {"tool": "pmd", "reason": "pmd timed out after 180s"},
+        {"tool": "gosec", "reason": "no Go source files"},
+        {"tool": "bandit", "reason": "no Python source files"},
+        {"tool": "bearer", "reason": "skipped (opt-in - pass --check-bearer to include it)"},
+        {"tool": "sonarqube", "reason": "SonarQube not configured (set SONARQUBE_HOST_URL to enable)"},
+    ]
+
+    assert [s["tool"] for s in failed_tool_skips(skips)] == ["semgrep", "pmd"]
+    assert failed_tool_skips([]) == []

@@ -495,3 +495,26 @@ def test_windows_pmd_ignores_global_classpath(tmp_path, monkeypatch):
     argv = subprocess_utils.command_argv(str(shim), 'check', cwd=tmp_path)
     assert argv[2] == f"{home / 'conf'};{home / 'lib' / '*'}"
     assert 'old-pmd.jar' not in argv[2]
+
+
+def test_scanner_failure_warnings_name_each_scanner_that_failed_to_run():
+    from aletheore.cli import _scanner_failure_warnings
+
+    evidence = {"security": {"static_analysis": {"tools_skipped": [
+        {"tool": "semgrep", "reason": "semgrep exited 1 without any output: mport FastMCP\n  File ..."},
+        {"tool": "gosec", "reason": "no Go source files"},
+        {"tool": "bearer", "reason": "skipped (opt-in - pass --check-bearer to include it)"},
+    ]}}}
+
+    assert _scanner_failure_warnings(evidence) == [
+        "Warning: semgrep did not run (semgrep exited 1 without any output); "
+        "static analysis results do not include its findings"
+    ]
+
+
+def test_scanner_failure_warnings_are_silent_when_nothing_failed_or_analysis_was_off():
+    from aletheore.cli import _scanner_failure_warnings
+
+    assert _scanner_failure_warnings({}) == []
+    assert _scanner_failure_warnings({"security": {"static_analysis": None}}) == []
+    assert _scanner_failure_warnings({"security": {"static_analysis": {"tools_skipped": []}}}) == []

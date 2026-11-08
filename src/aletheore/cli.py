@@ -70,7 +70,7 @@ from aletheore.evidence import (
 from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
 from aletheore.healthcheck import is_healthy_status, run_healthcheck, save_healthcheck
 from aletheore.evidence_diff import real_new_secrets, vulnerability_check_skipped_in
-from aletheore.history import compute_diff, list_snapshots, save_snapshot, to_sarif
+from aletheore.history import compute_diff, failed_tool_skips, list_snapshots, save_snapshot, to_sarif
 from aletheore.managed_audit_client import ManagedAuditError, run_managed_audit_request
 from aletheore.query import (
     BranchNotFoundInEvidenceError,
@@ -403,6 +403,22 @@ def _free_pr_review_nudge() -> str:
         "[bold cyan]https://github.com/apps/aletheore/installations/new[/bold cyan]\n"
         "[dim](free tier is globally rate-limited)[/dim]"
     )
+
+
+def _scanner_failure_warnings(evidence: dict) -> list[str]:
+    """One plain-text line per default-on scanner that failed to run. Plain text on purpose:
+    _print_result inserts each line as a literal value, so markup tags would print as-is."""
+    static = (evidence.get("security") or {}).get("static_analysis") or {}
+    warnings = []
+    for skip in failed_tool_skips(static.get("tools_skipped") or []):
+        # The stored reason can end in a long stderr tail; the part before the first ": " is
+        # the readable summary ("semgrep exited 1 without any output", "semgrep timed out ...").
+        summary = str(skip.get("reason", "")).split(": ", 1)[0].strip() or "unknown reason"
+        warnings.append(
+            f"Warning: {skip.get('tool', 'a scanner')} did not run ({summary}); "
+            "static analysis results do not include its findings"
+        )
+    return warnings
 
 
 def _print_result(title: str, lines: list[str], color: str = "green") -> None:
@@ -739,6 +755,7 @@ def _scan(
         result_lines.append(
             "[yellow]Warning: secrets history scan timed out - findings reflect a partial scan[/yellow]"
         )
+    result_lines.extend(_scanner_failure_warnings(evidence))
     _print_result("Scan complete", result_lines)
     return 0, evidence, evidence_path
 
