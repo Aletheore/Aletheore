@@ -198,3 +198,12 @@ _FIXED_HOST = _re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://[^/?#@\\]+/")
 
 def host_is_fixed(v: Val) -> bool:
     return isinstance(v, Tainted) and bool(_FIXED_HOST.match(v.prefix))
+
+
+@dataclass(eq=False)
+class ClosureV(Val):
+    """A lambda value with the variables it was created with, so calling it later sees what it captured."""
+
+    node: object
+    file: object
+    env: dict

@@ -1113,15 +1113,15 @@ class Interp:
             return G.EMPTY
         if name == "matches" and len(args) == 1 and local(obj):
             rx = const_of(args[0])
-            return ({local(obj)}, set()) if rx is not None and G.safe_regex(str(rx.value), self.cwes) else G.EMPTY
+            return ({local(obj)}, set()) if rx is not None and G.safe_regex(str(rx.value), self.cwes, implicit_anchor=True) else G.EMPTY
         if name == "matches" and obj is not None and _t(obj) == "Pattern" and len(args) == 2 and local(args[1]):
             rx = const_of(args[0])
-            return ({local(args[1])}, set()) if rx is not None and G.safe_regex(str(rx.value), self.cwes) else G.EMPTY
+            return ({local(args[1])}, set()) if rx is not None and G.safe_regex(str(rx.value), self.cwes, implicit_anchor=True) else G.EMPTY
         if name == "matches" and not args and obj is not None and obj.type == "method_invocation" and _t(obj.child_by_field_name("name")) in ("matcher",):
             m_args = list(obj.child_by_field_name("arguments").named_children) if obj.child_by_field_name("arguments") is not None else []
             target = local(m_args[0]) if len(m_args) == 1 else None
             rx = self._pattern_source(obj.child_by_field_name("object"), fr)
-            return ({target}, set()) if target and rx is not None and G.safe_regex(rx, self.cwes) else G.EMPTY
+            return ({target}, set()) if target and rx is not None and G.safe_regex(rx, self.cwes, implicit_anchor=True) else G.EMPTY
         if name == "contains" and len(args) == 1 and obj is not None:
             tok = const_of(args[0])
             v = local(obj)

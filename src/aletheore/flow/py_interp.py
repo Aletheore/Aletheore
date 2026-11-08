@@ -17,7 +17,7 @@ from tree_sitter import Node
 from aletheore.flow.py_index import PyClass, PyFile, PyIndex
 from aletheore.flow.py_sinks import REQUEST_ATTRS_SAFE, SAFE_RESULT_CALLS, SANITIZERS
 from aletheore.flow.values import (
-    add_prefix, SAFE, UNKNOWN, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    ClosureV, add_prefix, SAFE, UNKNOWN, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 
 BENIGN_METHODS = {"startswith", "endswith", "isdigit", "isalpha", "isalnum", "isnumeric", "isdecimal", "isspace", "islower",
@@ -203,7 +203,9 @@ class PyInterp:
             return val
         if t in ("await", "yield"):
             return self.eval(n.named_children[0], fr) if n.named_children else UNKNOWN
-        if t in ("lambda", "ellipsis"):
+        if t == "lambda":
+            return ClosureV(n, fr.file, dict(fr.env))
+        if t in ("ellipsis",):
             return UNKNOWN
         return UNKNOWN
 
@@ -565,7 +567,28 @@ class PyInterp:
         self.eval(func, fr)
         return self._opaque(None, args)
 
+    def _call_closure(self, c: ClosureV, args: list[Val], kw: dict, fr: PFrame) -> Val:
+        if fr.depth + 1 > self.MAX_DEPTH or id(c.node) in self._active:
+            return self._opaque(None, args + list(kw.values()))
+        inner = PFrame(c.file, fr.cls, fr.self_obj, fr.depth + 1, route=fr.route)
+        inner.env.update(c.env)
+        inner.local_funcs.update(fr.local_funcs)
+        params = c.node.child_by_field_name("parameters")
+        pos = list(args)
+        for p in (params.named_children if params is not None else []):
+            nm = p if p.type == "identifier" else p.child_by_field_name("name") if p.type in ("default_parameter",) else None
+            if nm is not None:
+                inner.env[_t(nm)] = pos.pop(0) if pos else kw.get(_t(nm), UNKNOWN)
+        self._active.add(id(c.node))
+        try:
+            return self.eval(c.node.child_by_field_name("body"), inner)
+        finally:
+            self._active.discard(id(c.node))
+
     def _call_name(self, name: str, n: Node, args: list[Val], kw: dict, fr: PFrame) -> Val:
+        held = fr.env.get(name)
+        if isinstance(held, ClosureV):
+            return self._call_closure(held, args, kw, fr)
         if self._sanitizer(name):
             return SAFE
         if name in fr.local_funcs:

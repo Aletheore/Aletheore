@@ -13,7 +13,7 @@ from aletheore.flow import guards as G
 from aletheore.flow.cs_index import CsClass, CsFile, CsIndex
 from aletheore.flow.cs_sinks import PURE_TYPES, REQUEST_PROPS, SAFE_METHODS, SANITIZERS
 from aletheore.flow.values import (
-    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    ClosureV, add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 
 STRING_PURE = {"ToLower", "ToUpper", "ToLowerInvariant", "ToUpperInvariant", "Trim", "TrimStart", "TrimEnd", "Replace", "Substring", "PadLeft", "PadRight",
@@ -195,7 +195,9 @@ class CsInterp:
             return self.eval(n.named_children[0], fr) if n.named_children else UNKNOWN
         if t in ("array_creation_expression", "implicit_array_creation_expression", "initializer_expression", "collection_expression"):
             return self._array(n, fr)
-        if t in ("lambda_expression", "anonymous_method_expression", "is_expression", "is_pattern_expression", "typeof_expression", "sizeof_expression", "default_expression", "nameof_expression"):
+        if t in ("lambda_expression", "anonymous_method_expression"):
+            return ClosureV(n, fr.file, dict(fr.env))
+        if t in ("is_expression", "is_pattern_expression", "typeof_expression", "sizeof_expression", "default_expression", "nameof_expression"):
             return UNKNOWN if t in ("lambda_expression", "anonymous_method_expression") else SAFE
         return UNKNOWN
 
@@ -424,6 +426,9 @@ class CsInterp:
             name = _t(func)
             args = self._args(args_n, fr)
             self._hook(n, name, "", args, None, fr)
+            held = fr.env.get(name)
+            if isinstance(held, ClosureV):
+                return self._call_closure(held, args, fr)
             self._outs = outs or None
             try:
                 return self._call_unqualified(name, args, fr)
@@ -460,6 +465,31 @@ class CsInterp:
             return self._call_unqualified(name, args, fr)
         self.eval(func, fr)
         return self._opaque(None, self._args(args_n, fr))
+
+    def _call_closure(self, c: ClosureV, args: list[Val], fr: CFrame) -> Val:
+        if fr.depth + 1 > self.MAX_DEPTH or id(c.node) in self._active:
+            return self._opaque(None, args)
+        inner = CFrame(c.file, fr.cls, fr.this_obj, fr.depth + 1)
+        inner.env.update(c.env)
+        params = c.node.child_by_field_name("parameters") or next((x for x in c.node.children if x.type in ("parameter_list", "implicit_parameter", "identifier")), None)
+        names = []
+        if params is not None:
+            if params.type in ("identifier", "implicit_parameter"):
+                names = [_t(params)]
+            else:
+                names = [_t(([x for x in p.named_children if x.type == "identifier"] or [p])[-1]) for p in params.named_children]
+        pos = list(args)
+        for nm in names:
+            inner.env[nm] = pos.pop(0) if pos else UNKNOWN
+        body = c.node.child_by_field_name("body") or c.node.named_children[-1]
+        self._active.add(id(c.node))
+        try:
+            if body.type == "block":
+                self.exec(body, inner)
+                return join_all(inner.rets) if inner.rets else Const(None)
+            return self.eval(body, inner)
+        finally:
+            self._active.discard(id(c.node))
 
     def _find_method(self, cls: CsClass, name: str, argc: int):
         seen: set[int] = set()

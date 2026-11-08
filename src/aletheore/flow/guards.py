@@ -30,11 +30,13 @@ def either(a: Facts, b: Facts) -> Facts:
 _ALLOWED_CLASS = ("a-z", "A-Z", "0-9", "\\w", "\\d", "_", "-", " ", "$", "\\-", "\\_")
 
 
-def safe_regex(pattern: str, cwes: set[int] | None = None) -> bool:
+def safe_regex(pattern: str, cwes: set[int] | None = None, implicit_anchor: bool = False) -> bool:
     """An anchored pattern whose every match is harmless text: only fixed characters and simple character classes,
     each with an optional quantifier, optionally grouped into alternatives of fixed text. Slashes, dots outside a
     class that excludes traversal, quotes, spaces in SQL and so on are not allowed."""
     p = pattern
+    if implicit_anchor and not p.startswith("^") and not p.startswith("/") and not p.startswith("\\A"):
+        p = "^" + p + "$"  # String.matches / Matcher.matches must match the whole input
     if p.startswith("/") and re.search(r"/[a-zA-Z]*$", p):
         p = p[1:p.rindex("/")]
     if not (p.startswith("^") and p.endswith("$")) and not (p.startswith("\\A") and (p.endswith("\\z") or p.endswith("\\Z"))):

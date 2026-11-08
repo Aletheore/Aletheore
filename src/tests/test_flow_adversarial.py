@@ -132,3 +132,22 @@ def test_laravel_request_and_raw_query(tmp_path):
     d = tmp_path / "ok"
     d.mkdir()
     assert run(d, "U.php", "<?php\nclass U { public function login(Request $request) {\n  return DB::table('u')->where('n', $request->input('n'))->first();\n } }\n") == []
+
+
+def test_csharp_closure_and_ref_argument(tmp_path):
+    src = ('class C { void H(HttpRequest request) {\n  string v = request.QueryString["n"];\n  Action run = () => new SqlCommand("select " + v).ExecuteReader();\n  run();\n } }\n')
+    assert "sql-injection" in run(tmp_path, "C.cs", src)
+    d = tmp_path / "r"
+    d.mkdir()
+    src2 = ('class C { static void M(ref string a, string b) { a = b; }\n void H(HttpRequest request) {\n  string q = "x";\n  M(ref q, request.QueryString["n"]);\n  new SqlCommand("select " + q).ExecuteReader();\n } }\n')
+    assert "sql-injection" in run(d, "C.cs", src2)
+
+
+def test_python_lambda_callback_is_followed(tmp_path):
+    src = "from flask import request\nimport os\ndef invoke(cb):\n    cb()\ndef h():\n    c = request.args.get('c')\n    invoke(lambda: os.system(c))\n"
+    assert "command-injection" in run(tmp_path, "a.py", src)
+
+
+def test_java_matches_without_anchors_is_a_whole_string_test(tmp_path):
+    body = 'String c = req.getParameter("c"); if (c == null || !c.matches("[A-Za-z]+")) { return; } java.sql.DriverManager.getConnection("x").createStatement().executeQuery("select \'" + c + "\'");'
+    assert run(tmp_path, "S.java", java(body)) == []
