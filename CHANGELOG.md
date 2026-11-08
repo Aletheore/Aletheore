@@ -5,6 +5,26 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Added a bundled Semgrep rule, `java-session-trust-boundary` (CWE-501), that reports an HTTP
+  request value written into `HttpSession` storage as an attribute name or value. On the OWASP
+  Benchmark for Java it lifts recall on trust-boundary bugs from 52% to 78% with precision
+  unchanged at about 72%, where Semgrep's registry rules alone missed most of them. It
+  recognizes both `javax.servlet` and `jakarta.servlet` types.
+- The bundled `java-runtime-exec-command-injection` Semgrep rule is now a taint rule: it reports a
+  `Runtime.exec` or `ProcessBuilder` command only when it can come from an HTTP request or a
+  `String` method parameter, instead of any variable. On the OWASP Benchmark for Java this removes
+  the rule's false positives from command injection (49 down to 16 for the rule alone, and none
+  added on top of Semgrep's registry rules) without losing a detection the fixture requires.
+- Static-analysis findings from Semgrep, Bandit, Bearer and gosec now carry an optional `cwe`
+  list (for example `["CWE-78"]`) taken from each tool's own report, so findings from different
+  scanners can be compared by weakness class. The field is omitted when a tool reports none.
+- PMD findings from its Best Practices ruleset (style and hygiene rules such as `SystemPrintln`)
+  are now typed `code_smell` instead of `bug`, matching how Semgrep's best-practice rules are
+  typed. Error Prone rules stay `bug` and Security rules stay `vulnerability`. Severity is
+  unchanged.
+- `aletheore scan` now prints a warning when a default-on scanner did not run, for example when
+  Semgrep crashes on start. Before, the scan reported success and the failure appeared only inside
+  `air.json`, so results silently lacked that scanner's findings.
 - Added `aletheore shield`, a local safety net for AI-written changes in a Git repository.
   After one confirmation it registers Claude Code hooks and a Git pre-commit hook that report
   new or suspicious dependencies, affected files and candidate tests, signature changes and new
