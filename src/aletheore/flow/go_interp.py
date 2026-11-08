@@ -11,11 +11,12 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import guards as G
 from aletheore.flow.go_index import GoFile, GoIndex
 from aletheore.flow.go_sinks import (
     PURE_PKGS, REQUEST_FIELDS, REQUEST_METHODS, REQUEST_PARAM_TYPES, RESPONSE_PARAM_TYPES, SAFE_FUNCS, SANITIZERS,
 )
-from aletheore.flow.values import SAFE, UNKNOWN, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all
+from aletheore.flow.values import add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all
 
 
 class BudgetExceeded(Exception):
@@ -128,7 +129,7 @@ class GoInterp:
             c = classify(v)
             if rank[c] > rank[worst]:
                 worst = c
-        return {"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst]
+        return add_prefix({"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst], vals)
 
     def _mutating(self, fr: GFrame, c) -> None:
         if fr.branch > c.birth_depth:
@@ -182,7 +183,10 @@ class GoInterp:
         if t == "nil":
             return Const(None)
         if t == "identifier":
-            return fr.env.get(_t(n), UNKNOWN)
+            name = _t(n)
+            if name in fr.env:
+                return fr.env[name]
+            return self._package_value(name, fr)
         if t == "parenthesized_expression":
             return self.eval(n.named_children[0], fr) if n.named_children else UNKNOWN
         if t == "selector_expression":
@@ -213,6 +217,25 @@ class GoInterp:
         if t == "type_conversion_expression":
             return self.eval(n.child_by_field_name("operand"), fr) if n.child_by_field_name("operand") else UNKNOWN
         return UNKNOWN
+
+    def _package_value(self, name: str, fr: GFrame) -> Val:
+        """A package-level constant (`const T = "users"`) or a package variable nothing ever assigns to: its value when it
+        evaluates to something safe."""
+        hit = self.index.package_value(name, fr.file)
+        if hit is None or id(hit[1]) in self._active or fr.depth > self.MAX_DEPTH:
+            return UNKNOWN
+        gf, node = hit
+        decl = node.parent
+        while decl is not None and decl.type not in ("const_spec", "var_spec"):
+            decl = decl.parent
+        if decl is None or (decl.type != "const_spec" and self.index.package_assigned(name, fr.file)):
+            return UNKNOWN  # a package variable some function assigns to is not a constant
+        self._active.add(id(node))
+        try:
+            v = self.eval(node, GFrame(gf, None, 0))
+        finally:
+            self._active.discard(id(node))
+        return v if classify(v) == "safe" else UNKNOWN
 
     def _selector(self, n: Node, fr: GFrame) -> Val:
         op_n, field_n = n.child_by_field_name("operand"), n.child_by_field_name("field")
@@ -282,6 +305,8 @@ class GoInterp:
         type_n, body = n.child_by_field_name("type"), n.child_by_field_name("body")
         ttext = _t(type_n)
         elems = body.named_children if body is not None else []
+        if ttext in ("strings.Builder", "bytes.Buffer"):
+            return BuilderV([], birth_depth=fr.branch)
         if ttext.startswith("map["):
             m = MapV({}, birth_depth=fr.branch)
             for e in elems:
@@ -472,6 +497,19 @@ class GoInterp:
             return self._opaque(recv, args)
         if isinstance(recv, FnV):
             return self._run_function(recv.file, recv.node, None, args, fr, closure={**recv.env, **fr.env})
+        if isinstance(recv, BuilderV):
+            if name in ("WriteString", "Write", "WriteByte", "WriteRune") and args:
+                if fr.branch > recv.birth_depth:
+                    recv.dirty = True
+                recv.parts.append(args[0])
+                return UNKNOWN
+            if name == "String":
+                return Const("".join(str(p.value) for p in recv.parts)) if not recv.dirty and not recv.opaque and all(isinstance(p, Const) for p in recv.parts) \
+                    else self._combine(*recv.parts, *([UNKNOWN] if recv.opaque else []))
+            if name in ("Reset", "Truncate", "Grow"):
+                recv.dirty = True
+                return UNKNOWN
+            return self._opaque(recv, args)
         if isinstance(recv, Tainted) and recv.why == "through-call":
             return UNKNOWN  # an object returned by an unmodeled call (a database record): its methods are not known to return the input
         if classify(recv) == "tainted":
@@ -616,8 +654,9 @@ class GoInterp:
                     if vals:
                         self._bind_many(names, vals, fr, single_call=bool(rights and rights[0].type == "call_expression"))
                     else:
+                        tn = _t(sp.child_by_field_name("type")).replace(" ", "")
                         for nm in names:
-                            fr.env[_t(nm)] = UNKNOWN
+                            fr.env[_t(nm)] = BuilderV([], birth_depth=fr.branch) if tn in ("strings.Builder", "bytes.Buffer") else UNKNOWN
             return False
         if t == "inc_dec_statement":
             return False
@@ -663,6 +702,60 @@ class GoInterp:
             out[k] = join(a[k], b[k]) if (k in a and k in b) else (a[k] if k in a else b[k])
         fr.env = out
 
+    # ------------------------------------------------------------------ guards
+    def _engine(self, fr: GFrame) -> G.GuardEngine:
+        def norm(n):
+            t = n.type
+            if t == "parenthesized_expression":
+                return ("paren", n.named_children[0] if n.named_children else None)
+            if t == "unary_expression" and _t(n.child_by_field_name("operator")) == "!":
+                return ("not", n.child_by_field_name("operand"))
+            if t == "binary_expression":
+                op = _t(n.child_by_field_name("operator"))
+                l, r = n.child_by_field_name("left"), n.child_by_field_name("right")
+                return {"&&": ("and", l, r), "||": ("or", l, r), "==": ("eq", l, r), "!=": ("ne", l, r)}.get(op, ("other",))
+            if t == "call_expression":
+                fn = n.child_by_field_name("function")
+                args_n = n.child_by_field_name("arguments")
+                args = list(args_n.named_children) if args_n is not None else []
+                if fn is not None and fn.type == "selector_expression":
+                    return ("call", _t(fn.child_by_field_name("field")), fn.child_by_field_name("operand"), args, _t(fn.child_by_field_name("operand")))
+                return ("call", _t(fn), None, args, "")
+            return ("other",)
+
+        def local(n):
+            return _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None
+
+        def const(n):
+            if n is None:
+                return None
+            v = self.eval(n, fr)
+            return v.value if isinstance(v, Const) and isinstance(v.value, str) else None
+
+        def safe(n):
+            return classify(self.eval(n, fr)) == "safe"
+
+        def coll(n):
+            v = self.eval(n, fr)
+            return isinstance(v, ListV) and bool(v.items) and not v.dirty and not v.opaque and all(classify(i) == "safe" for i in v.items)
+
+        def pattern_source(n):
+            if n is None:
+                return None
+            if n.type == "identifier":
+                hit = self.index.package_value(_t(n), fr.file)
+                n = hit[1] if hit is not None else None
+            if n is not None and n.type == "call_expression" and _t(n.child_by_field_name("function")).endswith(("MustCompile", "Compile")):
+                args_n = n.child_by_field_name("arguments")
+                first = args_n.named_children[0] if args_n is not None and args_n.named_children else None
+                return const(first)
+            return None
+
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes)
+
+    def _narrow(self, names: set, fr: GFrame) -> None:
+        G.apply(names, self.cwes, fr.env, SAFE)
+
     def _if(self, n: Node, fr: GFrame) -> bool:
         init = n.child_by_field_name("initializer")
         if init is not None:
@@ -673,11 +766,14 @@ class GoInterp:
             self._dead(fr, alt if cond.value else cons)
             return self.exec(cons, fr) if cond.value else (self.exec(alt, fr) if alt is not None else False)
         base = dict(fr.env)
+        facts = self._engine(fr).facts(n.child_by_field_name("condition"))
         fr.branch += 1
         try:
+            self._narrow(facts[0], fr)
             term_a = self.exec(cons, fr)
             env_a = fr.env
             fr.env = dict(base)
+            self._narrow(facts[1], fr)
             term_b = self.exec(alt, fr) if alt is not None else False
             env_b = fr.env
         finally:

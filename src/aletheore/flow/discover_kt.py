@@ -12,7 +12,7 @@ from aletheore.flow.kt_interp import BudgetExceeded, KFrame, KtInterp
 from aletheore.flow.kt_sinks import CONTROLLER_ANNOTATIONS, CWE_NAMES_KT, DISCOVER_CWES_KT, MAPPING_ANNOTATIONS, SEVERITY_KT, sink_args
 from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
-from aletheore.flow.values import Choice, Const, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, Choice, Const, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -107,6 +107,8 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                 if not positions:
                     return
                 for i in positions:
+                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     if i >= len(args):
                         continue
                     hit = _tainted_string(args[i]) if _cwe in (79, 601) else classify(args[i]) == "tainted"
@@ -135,7 +137,7 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                     for fn in fns:
                         interp = KtInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                         interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                        fr = KFrame(kf, cls, Obj(cls=cls, type_name=cls.name) if cls.name != "<main>" else None, 0)
+                        fr = KFrame(kf, cls, interp.make_this(cls, kf) if cls.name != "<main>" else None, 0)
                         try:
                             interp.bind_entry(fn, fr, _is_action(cls, fn))
                             body = next((c for c in fn.children if c.type == "function_body"), None)

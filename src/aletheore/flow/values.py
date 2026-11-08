@@ -27,6 +27,7 @@ class Const(Val):
 class Tainted(Val):
     why: str = "source"
     tid: int = 0  # identity of this tainted value, for interpreters that track validation (0 = untracked)
+    prefix: str = ""  # constant text the value is known to start with ("https://api.example.com/" + key)
 
 
 class Unknown(Val):
@@ -165,3 +166,35 @@ def classify(v: Val, _depth: int = 0) -> str:
                     return "tainted"
         return worst
     return "unknown"
+
+
+def add_prefix(result: Val, vals) -> Val:
+    """A tainted result of concatenating `vals` (in order) remembers the constant text it starts with, cut at the first
+    character that could be a format placeholder, so a fixed host or a local-path start survives string building."""
+    if not isinstance(result, Tainted) or result.prefix:
+        return result
+    acc = ""
+    for v in vals:
+        if isinstance(v, Const) and isinstance(v.value, str):
+            acc += v.value
+        elif isinstance(v, Const) and v.value is not None and not isinstance(v.value, bool):
+            acc += str(v.value)
+        elif isinstance(v, Tainted):
+            acc += v.prefix
+            break
+        else:
+            break
+    for i, ch in enumerate(acc):
+        if ch in "%{$#":
+            acc = acc[:i]
+            break
+    return Tainted(result.why, result.tid, acc) if acc else result
+
+
+# Looks like `scheme://host/`: once the path slash is reached nothing the program appends can change the host.
+import re as _re
+_FIXED_HOST = _re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://[^/?#@\\]+/")
+
+
+def host_is_fixed(v: Val) -> bool:
+    return isinstance(v, Tainted) and bool(_FIXED_HOST.match(v.prefix))

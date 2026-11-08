@@ -15,7 +15,7 @@ from aletheore.flow.rb_sinks import (
     DB_FINDERS, PURE_RECEIVERS, REQUEST_NAMES, REQUEST_OBJ_NAMES, SAFE_METHODS, SANITIZERS, SINATRA_VERBS,
 )
 from aletheore.flow.values import (
-    SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 
 BENIGN_REQ = {"host", "host_with_port", "base_url", "protocol", "scheme", "port", "remote_ip", "ip", "ssl?", "get?", "post?", "put?", "delete?", "xhr?", "xml_http_request?", "local?", "request_method", "method", "request_id", "format_x"}
@@ -123,7 +123,7 @@ class RbInterp:
             c = classify(v)
             if rank[c] > rank[worst]:
                 worst = c
-        return {"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst]
+        return add_prefix({"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst], vals)
 
     def _mutating(self, fr: RFrame, c) -> None:
         if fr.branch > c.birth_depth:
@@ -717,6 +717,13 @@ class RbInterp:
         if init is not None:
             self._run_method(init[0], init[1], obj, args, fr)
         return obj
+
+    def make_this(self, cls: RbClass, rf: RbFile) -> Obj:
+        try:
+            obj = self._instantiate(cls, [], RFrame(rf, cls, None, 0))
+        except (BudgetExceeded, RecursionError):
+            return Obj(cls=cls, type_name=cls.name)
+        return obj if isinstance(obj, Obj) else Obj(cls=cls, type_name=cls.name)
 
     def _method(self, recv: Val, name: str, args: list[Val], fr: RFrame, recv_n: Node | None, block: Node | None) -> Val:
         if isinstance(recv, Choice):

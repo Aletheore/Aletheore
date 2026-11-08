@@ -15,7 +15,7 @@ from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.js_interp import BudgetExceeded, JFrame, JsInterp, request_like
 from aletheore.flow.js_sinks import CWE_NAMES_JS, DISCOVER_CWES_JS, ROUTE_METHODS, SEVERITY_JS, sink_args
-from aletheore.flow.values import Choice, Const, MapV, Obj, Tainted, classify
+from aletheore.flow.values import ListV, host_is_fixed, Choice, Const, MapV, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -171,7 +171,19 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                     ctype = recv.fields["_ctype"].value
                     if "html" not in ctype:
                         return  # an explicit non-HTML content type (JSON, event stream, plain text) is not XSS
+                if _cwe == 78 and name in ("spawn", "spawnSync", "execFile", "execFileSync") and len(args) >= 2 and isinstance(args[0], Const) \
+                        and str(args[0].value).rsplit("/", 1)[-1] in ("sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "dash") and isinstance(args[1], ListV):
+                    # spawn("sh", ["-c", "convert " + x]): the script after -c is the command line
+                    items = args[1].items
+                    for k, it_ in enumerate(items[:-1]):
+                        if isinstance(it_, Const) and str(it_.value) in ("-c", "/c", "/C", "-lc") and classify(items[k + 1]) == "tainted":
+                            record(node, fr, f"shell script passed to {name}")
+                            return
+                    if args[1].opaque or args[1].dirty:
+                        positions = [1]
                 for i in positions:
+                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     if i >= len(args):
                         continue
                     value = args[i]

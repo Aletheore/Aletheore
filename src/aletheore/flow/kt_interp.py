@@ -15,7 +15,7 @@ from aletheore.flow.kt_sinks import (
     PARAM_ANNOTATIONS, PURE_TYPES, REQUEST_TYPES, SAFE_METHODS, SAFE_PARAM_TYPES, SANITIZERS, SERVLET_BENIGN,
 )
 from aletheore.flow.values import (
-    SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 
 LOOP_FUNS = {"forEach", "map", "filter", "flatMap", "mapNotNull", "forEachIndexed", "mapIndexed", "let", "also", "apply", "run", "with", "takeIf", "takeUnless", "use",
@@ -111,7 +111,7 @@ class KtInterp:
             c = classify(v)
             if rank[c] > rank[worst]:
                 worst = c
-        return {"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst]
+        return add_prefix({"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst], vals)
 
     def _mutating(self, fr: KFrame, c) -> None:
         if fr.branch > c.birth_depth:
@@ -554,6 +554,13 @@ class KtInterp:
         for blk in cls.inits:
             self.exec(next((c for c in blk.children if c.type == "block"), None), inner)
         return obj
+
+    def make_this(self, cls: KtClass, kf: KtFile) -> Obj:
+        try:
+            obj = self._instantiate(cls, [], KFrame(kf, cls, None, 0))
+        except (BudgetExceeded, RecursionError):
+            return Obj(cls=cls, type_name=cls.name)
+        return obj if isinstance(obj, Obj) else Obj(cls=cls, type_name=cls.name)
 
     def _static(self, cname: str, name: str, args: list[Val], fr: KFrame, lam: Node | None) -> Val:
         cls = self.index.cls(cname, fr.file)

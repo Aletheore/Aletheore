@@ -11,9 +11,10 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import guards as G
 from aletheore.flow.js_index import FN_TYPES, JsClass, JsFile, JsIndex
 from aletheore.flow.js_sinks import KOA_ROOT, REQ_NAMES, REQUEST_METHODS, REQUEST_PROPS, SAFE_RESULT, SANITIZERS
-from aletheore.flow.values import SAFE, UNKNOWN, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all
+from aletheore.flow.values import add_prefix, SAFE, UNKNOWN, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all
 
 BENIGN = {"includes", "startsWith", "endsWith", "indexOf", "lastIndexOf", "test", "match", "has", "hasOwnProperty",
           "isArray", "isInteger", "isNaN", "isFinite", "localeCompare", "charCodeAt", "codePointAt"}
@@ -138,7 +139,7 @@ class JsInterp:
             c = classify(v)
             if rank[c] > rank[worst]:
                 worst = c
-        return {"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst]
+        return add_prefix({"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst], vals)
 
     def _mutating(self, fr: JFrame, c) -> None:
         if fr.branch > c.birth_depth:
@@ -171,6 +172,8 @@ class JsInterp:
 
     def _eval(self, n: Node, fr: JFrame) -> Val:
         t = n.type
+        if t in ("arrow_function", "function_expression", "function"):
+            return FnV(n, fr.file, dict(fr.env))  # a closure: it keeps the variables it was created with
         if t == "string":
             return Const("".join(_unescape(_t(c)) for c in n.children if c.type in ("string_fragment", "escape_sequence")))
         if t == "template_string":
@@ -883,6 +886,59 @@ class JsInterp:
             out[k] = join(a[k], b[k]) if (k in a and k in b) else (a[k] if k in a else b[k])
         fr.env = out
 
+    # ------------------------------------------------------------------ guards
+    def _engine(self, fr: JFrame) -> G.GuardEngine:
+        def norm(n):
+            t = n.type
+            if t == "parenthesized_expression":
+                return ("paren", n.named_children[0] if n.named_children else None)
+            if t == "unary_expression" and _t(n.child_by_field_name("operator")) == "!":
+                return ("not", n.child_by_field_name("argument"))
+            if t == "binary_expression":
+                op = _t(n.child_by_field_name("operator"))
+                l, r = n.child_by_field_name("left"), n.child_by_field_name("right")
+                return {"&&": ("and", l, r), "||": ("or", l, r), "===": ("eq", l, r), "==": ("eq", l, r), "!==": ("ne", l, r), "!=": ("ne", l, r)}.get(op, ("other",))
+            if t == "call_expression":
+                fn = n.child_by_field_name("function")
+                args_n = n.child_by_field_name("arguments")
+                args = list(args_n.named_children) if args_n is not None else []
+                if fn is not None and fn.type == "member_expression":
+                    return ("call", _t(fn.child_by_field_name("property")), fn.child_by_field_name("object"), args, _t(fn.child_by_field_name("object")))
+                return ("call", _t(fn), None, args, "")
+            return ("other",)
+
+        def local(n):
+            return _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None
+
+        def const(n):
+            if n is None:
+                return None
+            if n.type == "regex":
+                return _t(n)
+            v = self.eval(n, fr)
+            return v.value if isinstance(v, Const) and isinstance(v.value, str) else None
+
+        def safe(n):
+            return classify(self.eval(n, fr)) == "safe"
+
+        def coll(n):
+            v = self.eval(n, fr)
+            return isinstance(v, ListV) and bool(v.items) and not v.dirty and not v.opaque and all(classify(i) == "safe" for i in v.items)
+
+        def pattern_source(n):
+            if n is not None and n.type == "regex":
+                return _t(n)
+            if n is not None and n.type == "identifier" and fr.file is not None:
+                init = fr.file.constants.get(_t(n))
+                if init is not None and init.type == "regex":
+                    return _t(init)
+            return None
+
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes)
+
+    def _narrow(self, names: set, fr: JFrame) -> None:
+        G.apply(names, self.cwes, fr.env, SAFE)
+
     def _if(self, n: Node, fr: JFrame) -> bool:
         cond_n = n.child_by_field_name("condition")
         cons_n = n.child_by_field_name("consequence")
@@ -896,11 +952,14 @@ class JsInterp:
                 return self.exec(cons_n, fr)
             return self.exec(alt_n, fr) if alt_n is not None else False
         base = dict(fr.env)
+        facts = self._engine(fr).facts(cond_n)
         fr.branch += 1
         try:
+            self._narrow(facts[0], fr)
             term_a = self.exec(cons_n, fr)
             env_a = fr.env
             fr.env = dict(base)
+            self._narrow(facts[1], fr)
             term_b = self.exec(alt_n, fr) if alt_n is not None else False
             env_b = fr.env
         finally:

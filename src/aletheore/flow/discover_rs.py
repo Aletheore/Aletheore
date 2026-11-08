@@ -12,7 +12,7 @@ from aletheore.flow.prefilter import classes_present
 from aletheore.flow.rs_index import RsIndex, RsType, attrs_before, type_name
 from aletheore.flow.rs_interp import BudgetExceeded, RsInterp, SFrame
 from aletheore.flow.rs_sinks import CWE_NAMES_RS, DISCOVER_CWES_RS, EXTRACTORS, REQUEST_TYPES, ROUTE_ATTRS, SEVERITY_RS, sink_args
-from aletheore.flow.values import Choice, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, Choice, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -106,6 +106,8 @@ def discover_rs(repo: Path, index: RsIndex | None = None, budget_seconds: float 
                 if not positions:
                     return
                 for i in positions:
+                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     if i >= len(args):
                         continue
                     hit = _tainted_string(args[i]) if _cwe in (79, 601) else classify(args[i]) == "tainted"

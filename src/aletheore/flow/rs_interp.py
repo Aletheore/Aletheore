@@ -15,7 +15,7 @@ from aletheore.flow.rs_sinks import (
     EXTRACTORS, PASS_METHODS, REQUEST_BENIGN, REQUEST_TYPES, SAFE_METHODS, SAFE_PARAM_TYPES, SANITIZERS,
 )
 from aletheore.flow.values import (
-    SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 from aletheore.scanner.graph import RUST_LANGUAGE
 
@@ -159,7 +159,7 @@ class RsInterp:
             c = classify(v)
             if rank[c] > rank[worst]:
                 worst = c
-        return {"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst]
+        return add_prefix({"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst], vals)
 
     def _mutating(self, fr: SFrame, c) -> None:
         if fr.branch > c.birth_depth:

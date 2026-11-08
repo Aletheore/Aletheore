@@ -15,7 +15,7 @@ from tree_sitter import Node
 from aletheore.flow.py_index import PyClass, PyFile, PyIndex
 from aletheore.flow.py_sinks import REQUEST_ATTRS_SAFE, SAFE_RESULT_CALLS, SANITIZERS
 from aletheore.flow.values import (
-    SAFE, UNKNOWN, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    add_prefix, SAFE, UNKNOWN, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 
 BENIGN_METHODS = {"startswith", "endswith", "isdigit", "isalpha", "isalnum", "isnumeric", "isdecimal", "isspace", "islower",
@@ -107,7 +107,7 @@ class PyInterp:
             c = classify(v)
             if rank[c] > rank[worst]:
                 worst = c
-        return {"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst]
+        return add_prefix({"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst], vals)
 
     def _mutating(self, fr: PFrame, c) -> None:
         if fr.branch > c.birth_depth:
@@ -539,6 +539,10 @@ class PyInterp:
         if func.type == "identifier":
             name = _t(func)
             self._hook(n, name, "", args, kw, None, fr)
+            imp = fr.file.imports.get(name)
+            if imp is not None and imp[1] and imp[0] and name not in fr.file.functions and name not in fr.file.classes:
+                # `from subprocess import run as run_proc`: the call is subprocess.run
+                self._hook(n, imp[1], imp[0], args, kw, None, fr)
             return self._call_name(name, n, args, kw, fr)
         if func.type == "attribute":
             obj_n, name = func.child_by_field_name("object"), _t(func.child_by_field_name("attribute"))
@@ -598,6 +602,13 @@ class PyInterp:
         if init is not None:
             self._run_function(init[0].file, init[1], init[0], obj, args, kw, fr)
         return obj
+
+    def make_this(self, cls: PyClass, pf: PyFile) -> Obj:
+        try:
+            obj = self._run_symbol(("class", cls, cls.file), [], {}, PFrame(pf, cls, None, 0))
+        except (BudgetExceeded, RecursionError):
+            return Obj(cls=cls, type_name=cls.name)
+        return obj if isinstance(obj, Obj) else Obj(cls=cls, type_name=cls.name)
 
     def _find_method(self, cls: PyClass, name: str):
         seen: set[int] = set()

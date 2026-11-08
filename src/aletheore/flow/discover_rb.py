@@ -12,7 +12,7 @@ from aletheore.flow.prefilter import classes_present
 from aletheore.flow.rb_index import RbClass, RbFile, RbIndex
 from aletheore.flow.rb_interp import BudgetExceeded, RbInterp, RFrame
 from aletheore.flow.rb_sinks import CWE_NAMES_RB, DISCOVER_CWES_RB, SEVERITY_RB, SINATRA_VERBS, sink_args
-from aletheore.flow.values import Choice, Const, MapV, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, Choice, Const, MapV, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -132,6 +132,8 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
                 if _cwe == 601 and args and isinstance(args[-1], MapV) and isinstance(args[-1].entries.get("allow_other_host"), Const) and args[-1].entries["allow_other_host"].value is False:
                     return
                 for i in positions:
+                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     val = recv if i == -1 else (args[i] if i < len(args) else None)
                     if val is None or isinstance(val, MapV):
                         continue
@@ -161,7 +163,7 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
                 for m, is_action, singleton in entries:
                     interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                    fr = RFrame(rf, cls, Obj(cls=cls, type_name=cls.name), 0, singleton=singleton)
+                    fr = RFrame(rf, cls, interp.make_this(cls, rf) if not singleton else Obj(cls=cls, type_name=cls.name), 0, singleton=singleton)
                     try:
                         interp.bind_entry(m, fr, is_action)
                         body = m.child_by_field_name("body")

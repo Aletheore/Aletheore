@@ -17,8 +17,9 @@ from dataclasses import dataclass, field
 from tree_sitter import Node
 
 from aletheore.flow.java_index import ClassInfo, JavaFile, JavaIndex, simple_type_name
+from aletheore.flow import guards as G
 from aletheore.flow.values import (
-    SAFE,
+    add_prefix, SAFE,
     UNKNOWN,
     BuilderV,
     Char,
@@ -187,7 +188,7 @@ class Interp:
             c = classify(v)
             if rank[c] > rank[worst]:
                 worst = c
-        return {"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst]
+        return add_prefix({"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst], vals)
 
     def _mutating(self, fr: Frame, container) -> None:
         if fr.branch > container.birth_depth:
@@ -277,7 +278,10 @@ class Interp:
             return ListV([], birth_depth=fr.branch, dirty=True)
         if t == "array_initializer":
             return self._array_init(node, fr)
-        if t in ("lambda_expression", "instanceof_expression", "switch_expression_value", "method_reference"):
+        if t == "lambda_expression":
+            self._run_lambda(node, fr)
+            return UNKNOWN
+        if t in ("instanceof_expression", "switch_expression_value", "method_reference"):
             return UNKNOWN
         if t == "switch_expression":
             return self._switch_expr(node, fr)
@@ -285,6 +289,49 @@ class Interp:
 
     def _array_init(self, node: Node, fr: Frame) -> Val:
         return ListV([self.eval(c, fr) for c in node.named_children], birth_depth=fr.branch)
+
+    def make_this(self, cls: ClassInfo, jf: JavaFile) -> Obj:
+        """`this` for an entry point: the object as a constructor would have left it (fields set by the constructor)."""
+        obj = Obj(cls=cls, type_name=cls.name)
+        if cls.ctors:
+            fr = Frame(file=jf, cls=cls, this_obj=obj, depth=0)
+            try:
+                self._run_method(cls, cls.ctors[0], obj, [], fr, ctor=True)
+            except (BudgetExceeded, RecursionError):
+                pass
+        return obj
+
+    def _run_lambda(self, node: Node, fr: Frame) -> None:
+        """Run a lambda body where it is written (a Thread/executor/stream callback): what it does with captured request data
+        counts. Its own parameters are unknown, and nothing it writes or returns leaks into the enclosing method."""
+        if fr.depth > self.MAX_DEPTH or id(node) in self._active:
+            return
+        params = node.child_by_field_name("parameters")
+        names: list[str] = []
+        if params is not None:
+            if params.type == "identifier":
+                names.append(_t(params))
+            else:
+                for c in params.named_children:
+                    nm = c if c.type == "identifier" else c.child_by_field_name("name")
+                    if nm is not None:
+                        names.append(_t(nm))
+        saved_env, saved_types, saved_rets, saved_branch = dict(fr.env), dict(fr.types), len(fr.rets), fr.branch
+        for nm in names:
+            fr.env[nm] = UNKNOWN
+        fr.branch += 1
+        self._active.add(id(node))
+        try:
+            body = node.child_by_field_name("body")
+            if body is not None and body.type == "block":
+                self.exec(body, fr)
+            else:
+                self.eval(body, fr)
+        finally:
+            self._active.discard(id(node))
+            fr.branch = saved_branch
+            fr.env, fr.types = saved_env, saved_types
+            del fr.rets[saved_rets:]
 
     def _lookup(self, name: str, fr: Frame) -> Val:
         if name in fr.env:
@@ -296,7 +343,22 @@ class Interp:
             if name in cls.static_finals:
                 return self._static_init_value(cls, name, fr)
             cls = cls.outer
-        return UNKNOWN
+        lazy = self._lazy_field(name, fr)
+        return lazy if lazy is not None else UNKNOWN
+
+    def _lazy_field(self, name: str, fr: Frame) -> Val | None:
+        """An instance field with an initializer (`private Db db = new Db();`) that an entry point reads before anything wrote it."""
+        obj, cls = fr.this_obj, fr.cls
+        init = cls.field_inits.get(name) if cls is not None else None
+        if obj is None or init is None or id(init) in self._active or fr.depth > self.MAX_DEPTH:
+            return None
+        self._active.add(id(init))
+        try:
+            val = self.eval(init, Frame(cls.file, cls, obj, fr.depth + 1))
+        finally:
+            self._active.discard(id(init))
+        obj.fields[name] = val
+        return val
 
     def _field(self, node: Node, fr: Frame) -> Val:
         obj_node = node.child_by_field_name("object")
@@ -304,7 +366,8 @@ class Interp:
         if obj_node is not None and obj_node.type == "this":
             if fr.this_obj is not None and fname in fr.this_obj.fields:
                 return fr.this_obj.fields[fname]
-            return UNKNOWN
+            lazy = self._lazy_field(fname, fr)
+            return lazy if lazy is not None else UNKNOWN
         cname = self._class_ref(obj_node, fr) if obj_node is not None else None
         if cname is not None:
             return self._static_field(cname, fname, fr)
@@ -436,7 +499,8 @@ class Interp:
     def _store(self, target: Node, val: Val, fr: Frame) -> None:
         if target.type == "identifier":
             name = _t(target)
-            if name in fr.env or not (fr.this_obj is not None and name in fr.this_obj.fields):
+            is_field = fr.this_obj is not None and (name in fr.this_obj.fields or (name not in fr.env and fr.cls is not None and name in fr.cls.field_inits))
+            if name in fr.env or not is_field:
                 fr.env[name] = self._guard(fr, name, val)
             else:
                 fr.this_obj.fields[name] = self._guard_field(fr, fr.this_obj.fields.get(name), val)
@@ -978,12 +1042,17 @@ class Interp:
             self._mark_dead(fr, cons_n)
             return self.exec(alt_n, fr) if alt_n is not None else False
         base = self._fork(fr)
+        facts = self._facts(cond_n, fr)
         fr.branch += 1
         try:
+            self._narrow(facts[0], fr)
             term_a = self.exec(cons_n, fr)
             env_a = fr.env
             fr.env = dict(base)
+            self._narrow(facts[1], fr)
             term_b = self.exec(alt_n, fr) if alt_n is not None else False
+            if alt_n is None and not term_a:
+                pass
             env_b = fr.env
         finally:
             fr.branch -= 1
@@ -997,6 +1066,95 @@ class Interp:
         else:
             self._join_envs(fr, env_a, env_b)
         return False
+
+    def _narrow(self, names: set, fr: Frame) -> None:
+        for v in G.resolve(names, self.cwes):
+            if v in fr.env:
+                fr.env[v] = SAFE
+
+    def _facts(self, cond: Node | None, fr: Frame) -> G.Facts:
+        """What a condition proves about local variables on each outcome (see guards.py)."""
+        if cond is None:
+            return G.EMPTY
+        t = cond.type
+        if t == "parenthesized_expression":
+            return self._facts(cond.named_children[0] if cond.named_children else None, fr)
+        if t == "unary_expression" and _t(cond.child_by_field_name("operator")) == "!":
+            return G.negate(self._facts(cond.child_by_field_name("operand"), fr))
+        if t == "binary_expression":
+            op = _t(cond.child_by_field_name("operator"))
+            a, b = self._facts(cond.child_by_field_name("left"), fr), self._facts(cond.child_by_field_name("right"), fr)
+            if op == "&&":
+                return G.both(a, b)
+            if op == "||":
+                return G.either(a, b)
+            return G.EMPTY
+        if t != "method_invocation":
+            return G.EMPTY
+        name = _t(cond.child_by_field_name("name"))
+        obj = cond.child_by_field_name("object")
+        args_n = cond.child_by_field_name("arguments")
+        args = list(args_n.named_children) if args_n is not None else []
+
+        def local(n: Node | None) -> str | None:
+            return _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None
+
+        def const_of(n: Node | None) -> Const | None:
+            if n is None:
+                return None
+            v = self.eval(n, fr)
+            return v if isinstance(v, Const) and isinstance(v.value, str) else None
+
+        if name in ("equals", "equalsIgnoreCase", "contentEquals") and len(args) == 1:
+            for var_n, other in ((obj, args[0]), (args[0], obj)):
+                v = local(var_n)
+                if v and other is not None and classify(self.eval(other, fr)) == "safe":
+                    return ({v}, set())
+            return G.EMPTY
+        if name == "matches" and len(args) == 1 and local(obj):
+            rx = const_of(args[0])
+            return ({local(obj)}, set()) if rx is not None and G.safe_regex(str(rx.value), self.cwes) else G.EMPTY
+        if name == "matches" and obj is not None and _t(obj) == "Pattern" and len(args) == 2 and local(args[1]):
+            rx = const_of(args[0])
+            return ({local(args[1])}, set()) if rx is not None and G.safe_regex(str(rx.value), self.cwes) else G.EMPTY
+        if name == "matches" and not args and obj is not None and obj.type == "method_invocation" and _t(obj.child_by_field_name("name")) in ("matcher",):
+            m_args = list(obj.child_by_field_name("arguments").named_children) if obj.child_by_field_name("arguments") is not None else []
+            target = local(m_args[0]) if len(m_args) == 1 else None
+            rx = self._pattern_source(obj.child_by_field_name("object"), fr)
+            return ({target}, set()) if target and rx is not None and G.safe_regex(rx, self.cwes) else G.EMPTY
+        if name == "contains" and len(args) == 1 and obj is not None:
+            tok = const_of(args[0])
+            v = local(obj)
+            if v and tok is not None and tok.value in G.PATH_TOKENS:
+                return (set(), {f"{v}#{tok.value}"})
+            v2 = local(args[0])
+            if v2:
+                coll = self.eval(obj, fr)
+                if isinstance(coll, ListV) and coll.items and not coll.dirty and not coll.opaque and all(classify(i) == "safe" for i in coll.items):
+                    return ({v2}, set())
+            return G.EMPTY
+        if name in ("isNumeric", "isDigits", "isCreatable", "isParsable", "isNumber") and len(args) == 1 and local(args[0]):
+            return ({local(args[0])}, set())
+        return G.EMPTY
+
+    def _pattern_source(self, node: Node | None, fr: Frame) -> str | None:
+        """The constant regex behind `PATTERN` (a static final Pattern.compile("...")) or an inline Pattern.compile("...")."""
+        if node is None:
+            return None
+        if node.type == "identifier":
+            cls = fr.cls
+            while cls is not None:
+                init = cls.field_inits.get(_t(node))
+                if init is not None:
+                    return self._pattern_source(init, fr)
+                cls = cls.outer
+            return None
+        if node.type == "method_invocation" and _t(node.child_by_field_name("name")) == "compile":
+            args_n = node.child_by_field_name("arguments")
+            first = args_n.named_children[0] if args_n is not None and args_n.named_children else None
+            v = self.eval(first, fr) if first is not None else None
+            return str(v.value) if isinstance(v, Const) and isinstance(v.value, str) else None
+        return None
 
     def _case_matches(self, label: Node, sel: Val, fr: Frame) -> bool | None:
         """True/False when decidable, None when the selector or label is not a constant."""

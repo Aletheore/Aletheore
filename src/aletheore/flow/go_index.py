@@ -32,6 +32,8 @@ class GoFile:
     functions: dict[str, Node] = field(default_factory=dict)
     methods: dict[tuple[str, str], Node] = field(default_factory=dict)  # (receiver type, name) -> node
     types: set[str] = field(default_factory=set)
+    assigned: set[str] = field(default_factory=set)               # names that are assigned after their declaration somewhere in this file
+    values: dict[str, Node] = field(default_factory=dict)       # package-level const/var name -> initializer expression
 
 
 def _recv_type(method: Node) -> str:
@@ -41,6 +43,13 @@ def _recv_type(method: Node) -> str:
     text = _t(recv).strip("()")
     parts = text.split()
     return parts[-1].lstrip("*").split("[")[0] if parts else ""
+
+
+def _top_level(spec: Node) -> bool:
+    p = spec.parent
+    while p is not None and p.type not in ("const_declaration", "var_declaration", "source_file"):
+        p = p.parent
+    return p is not None and p.type != "source_file" and p.parent is not None and p.parent.type == "source_file"
 
 
 def _scan(f: GoFile) -> None:
@@ -54,6 +63,29 @@ def _scan(f: GoFile) -> None:
             f.methods[(_recv_type(n), _t(n.child_by_field_name("name")))] = n
         elif t == "type_spec":
             f.types.add(_t(n.child_by_field_name("name")))
+        elif t in ("const_spec", "var_spec") and _top_level(n):
+            names = [c for c in n.named_children if c.type == "identifier"]
+            val_n = n.child_by_field_name("value")
+            vals = list(val_n.named_children) if val_n is not None else []
+            if len(vals) == len(names):
+                for nm, v in zip(names, vals):
+                    f.values[_t(nm)] = v
+        elif t == "assignment_statement":
+            left = n.child_by_field_name("left")
+            for c in (left.named_children if left is not None else []):
+                if c.type == "identifier":
+                    f.assigned.add(_t(c))
+                else:
+                    stack_ = [c]
+                    while stack_:
+                        x = stack_.pop()
+                        if x.type == "identifier":
+                            f.assigned.add(_t(x))
+                        stack_.extend(x.children)
+        elif t == "inc_dec_statement":
+            for c in n.named_children:
+                if c.type == "identifier":
+                    f.assigned.add(_t(c))
         elif t == "import_spec":
             path = _t(n.child_by_field_name("path")).strip('"`')
             name = n.child_by_field_name("name")
@@ -99,6 +131,14 @@ class GoIndex:
 
     def package_files(self, directory: Path) -> list[GoFile]:
         return [f for f in (self.file(p) for p in self._dirs().get(directory.resolve(), [])) if f is not None]
+
+    def package_value(self, name: str, from_file: GoFile):
+        """A package-level const or var of the same package: (file, initializer node) or None when absent or ambiguous."""
+        hits = [(f, f.values[name]) for f in self.package_files(from_file.path.parent) if name in f.values]
+        return hits[0] if len(hits) == 1 else None
+
+    def package_assigned(self, name: str, from_file: GoFile) -> bool:
+        return any(name in f.assigned for f in self.package_files(from_file.path.parent))
 
     def function(self, name: str, from_file: GoFile):
         """A function of the same package: (file, node) or None when absent or ambiguous."""

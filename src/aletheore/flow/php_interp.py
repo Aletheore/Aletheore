@@ -17,7 +17,7 @@ from aletheore.flow.php_index import PhpClass, PhpFile, PhpIndex
 from aletheore.flow.php_sinks import (
     CAST_SAFE, INCLUDE_KINDS, NAME_SANITIZERS, SAFE_FUNCS, SANITIZERS, SERVER_TAINTED_PREFIXES, SUPERGLOBALS,
 )
-from aletheore.flow.values import SAFE, UNKNOWN, Choice, Const, MapV, Obj, Tainted, Val, classify, join, join_all
+from aletheore.flow.values import add_prefix, SAFE, UNKNOWN, Choice, Const, MapV, Obj, Tainted, Val, classify, join, join_all
 
 PROPAGATING = {
     "str_replace", "str_ireplace", "preg_replace", "substr", "mb_substr", "trim", "rtrim", "ltrim", "chop", "strtolower", "strtoupper",
@@ -88,6 +88,7 @@ class PhpInterp:
         self.sink_hook = sink_hook    # hook(node, name, recv_text, args, recv, frame)
         self.store_hook = store_hook  # hook(node, base_text, key, value, frame)
         self.steps = 0
+        self.static_props: dict[str, Val] = {}
         self.probes: dict[tuple, list] = {}
         self.probe_keys: set[tuple] = set()
         self.dead: list[tuple] = []
@@ -167,7 +168,7 @@ class PhpInterp:
                 parents.add(-1)  # an untracked tainted input: never claim this derived value safe
             else:
                 parents |= ids
-        return self._fresh("derived", parents)
+        return add_prefix(self._fresh("derived", parents), vals)
 
     def _mutating(self, fr: PFrame, c) -> None:
         if fr.branch > c.birth_depth:
@@ -244,6 +245,8 @@ class PhpInterp:
             return self._array(n, fr)
         if t == "subscript_expression":
             return self._subscript(n, fr)
+        if t == "scoped_property_access_expression":
+            return self.static_props.get(self._static_key(n, fr), UNKNOWN)
         if t == "member_access_expression":
             return self._member(n, fr)
         if t == "function_call_expression":
@@ -353,6 +356,12 @@ class PhpInterp:
             return self._fresh(base.why if isinstance(base, Tainted) and base.why.startswith("request._") else "derived",
                                [base.tid] if isinstance(base, Tainted) and base.tid else [-1])
         return UNKNOWN
+
+    def _static_key(self, n: Node, fr: PFrame) -> str:
+        scope = _t(n.child_by_field_name("scope"))
+        if scope in ("self", "static") and fr.cls is not None:
+            scope = fr.cls.name
+        return f"{scope.split(chr(92))[-1]}::{_t(n.child_by_field_name('name'))}"
 
     def _member(self, n: Node, fr: PFrame) -> Val:
         obj_n, name_n = n.child_by_field_name("object"), n.child_by_field_name("name")
@@ -493,6 +502,10 @@ class PhpInterp:
                 tgt = el.named_children[-1] if el.named_children else None
                 src = val.entries.get(i) if isinstance(val, MapV) and not val.dirty else (Tainted("derived") if classify(val) == "tainted" else UNKNOWN)
                 self._bind(tgt, src if src is not None else UNKNOWN, fr)
+        elif t == "scoped_property_access_expression":
+            key = self._static_key(target, fr)
+            old = self.static_props.get(key)
+            self.static_props[key] = join(old, val) if (fr.branch > 0 and old is not None) else val
         elif t == "member_access_expression":
             base = self.eval(target.child_by_field_name("object"), fr)
             name_n = target.child_by_field_name("name")
@@ -696,6 +709,16 @@ class PhpInterp:
                 self._run_function(ctor[0].file, ctor[1], ctor[0], obj, args, fr)
             return obj
         return Obj(type_name=cname, fields={"v": self._combine(*args)} if args else {})
+
+    def make_this(self, cls: PhpClass, pf: PhpFile) -> Obj:
+        obj = Obj(cls=cls, type_name=cls.name)
+        ctor = self._find_method(cls, "__construct")
+        if ctor is not None:
+            try:
+                self._run_function(ctor[0].file, ctor[1], ctor[0], obj, [], PFrame(pf, cls, obj, 0))
+            except (BudgetExceeded, RecursionError):
+                pass
+        return obj
 
     def _run_function(self, file: PhpFile, fn: Node, cls: PhpClass | None, this_obj: Obj | None, args: list[Val], fr: PFrame) -> Val:
         if fr.depth + 1 > self.MAX_DEPTH or id(fn) in self._active:
@@ -1005,7 +1028,14 @@ class PhpInterp:
             fr.env, fr.safe_exprs, fr.validated = base, base_safe, base_valid
             i += 1
         if not has_else:
-            results.append(fr.env)
+            env = fr.env
+            if len(clauses) == 1 and not early_guard:
+                # the implicit else: the condition was false (`if (!in_array($p, [...])) { $p = 'x'; }` leaves $p validated on this path)
+                env = dict(env)
+                for k in self._guard_keys(clauses[0][0], fr, negated=True):
+                    if "[" not in k and k in env:
+                        env[k] = SAFE
+            results.append(env)
             all_term = False
         if not results:
             return True

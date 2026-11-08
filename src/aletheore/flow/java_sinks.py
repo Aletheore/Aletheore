@@ -89,6 +89,43 @@ def sink_args(cwe: int, name: str, cname: str | None, recv_type: str | None, rec
         if name in ("selectNodes", "selectSingleNode", "valueOf") and argc >= 1 and "xpath" not in recv_text.lower() and recv_type in ("Document", "Node", "Element"):
             return [0]
         return None
+    if cwe == 601:
+        if name == "sendRedirect" and argc >= 1:
+            return [0]
+        if name in ("setHeader", "addHeader") and argc == 2 and recv_type in (None, "HttpServletResponse"):
+            return [1]  # the caller checks that the header is Location
+        if name == "<init>" and cname == "RedirectView" and argc >= 1:
+            return [0]
+        return None
+    if cwe == 918:
+        if name == "<init>" and cname in ("URL", "URI") and argc >= 1:
+            return [0]
+        if name == "create" and cname == "URI" and argc >= 1:
+            return [0]
+        if name in ("getForObject", "getForEntity", "postForObject", "postForEntity", "exchange", "execute", "headForHeaders", "postForLocation", "put") \
+                and recv_type in ("RestTemplate", "TestRestTemplate") and argc >= 1:
+            return [0]
+        if name == "<init>" and cname in ("HttpGet", "HttpPost", "HttpPut", "HttpDelete", "HttpHead", "HttpPatch") and argc >= 1:
+            return [0]
+        if name == "uri" and argc >= 1 and recv_type in ("WebClient", "RequestHeadersUriSpec", "RequestBodyUriSpec"):
+            return [0]
+        return None
+    if cwe == 94:
+        if name in ("eval", "evaluate") and argc >= 1 and recv_type in ("ScriptEngine", "GroovyShell", "Interpreter", "Context", "NashornScriptEngine"):
+            return [0]
+        if name == "forName" and cname == "Class" and argc >= 1:
+            return [0]
+        if name == "parseExpression" and argc >= 1 and recv_type in ("SpelExpressionParser", "ExpressionParser"):
+            return [0]
+        return None
+    if cwe == 502:
+        if name == "<init>" and cname == "ObjectInputStream" and argc >= 1:
+            return [0]
+        if name == "fromXML" and argc >= 1:
+            return [0]
+        if name in ("load", "loadAs") and argc >= 1 and recv_type == "Yaml":
+            return [0]
+        return None
     if cwe == 501:
         if name in ("setAttribute", "putValue") and argc >= 1 and recv_type == "HttpSession":
             return _all(argc)
@@ -96,7 +133,7 @@ def sink_args(cwe: int, name: str, cname: str | None, recv_type: str | None, rec
     return None
 
 
-DISCOVER_CWES = (89, 78, 22, 79, 90, 643, 501)
+DISCOVER_CWES = (89, 78, 22, 79, 90, 643, 501, 601, 918, 94, 502)
 CWE_NAMES = {
     89: ("sql-injection", "SQL injection"),
     78: ("command-injection", "OS command injection"),
@@ -105,6 +142,10 @@ CWE_NAMES = {
     90: ("ldap-injection", "LDAP injection"),
     643: ("xpath-injection", "XPath injection"),
     501: ("trust-boundary", "trust boundary violation"),
+    601: ("open-redirect", "open redirect"),
+    918: ("ssrf", "server-side request forgery"),
+    94: ("code-injection", "code injection"),
+    502: ("insecure-deserialization", "insecure deserialization"),
 }
 
 

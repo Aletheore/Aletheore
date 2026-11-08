@@ -15,7 +15,7 @@ from aletheore.flow.prefilter import classes_present
 from aletheore.flow.py_index import PyFile, PyIndex
 from aletheore.flow.py_interp import BudgetExceeded, PFrame, PyInterp
 from aletheore.flow.py_sinks import CWE_NAMES_PY, DISCOVER_CWES_PY, ROUTE_MARKERS, SEVERITY_PY, sink_args
-from aletheore.flow.values import Choice, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, Choice, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -26,7 +26,7 @@ _SINK_WORDS = {
     90: (b"search",),
     643: (b"xpath", b"XPath"),
     501: (b"session",),
-    94: (b"eval(", b"exec(", b"compile("),
+    94: (b"eval(", b"exec(", b"compile(", b"import_module", b"__import__"),
     502: (b"pickle", b"yaml", b"marshal", b"dill", b"shelve", b"jsonpickle"),
     918: (b"requests", b"urlopen", b"httpx", b"urllib", b"aiohttp", b"session"),
     601: (b"redirect", b"HttpResponseRedirect", b"RedirectResponse"),
@@ -66,7 +66,7 @@ def _tainted_string(v) -> bool:
     return one(v) or (isinstance(v, Choice) and any(one(a) for a in v.alts))
 
 
-def _entries(pf: PyFile):
+def _entries(pf: PyFile, index: PyIndex | None = None):
     """(class or None, function node, is_route) for every function and method."""
     def is_route(fn_node) -> bool:
         parent = fn_node.parent
@@ -80,6 +80,19 @@ def _entries(pf: PyFile):
     for cls in pf.classes.values():
         for fn in cls.methods.values():
             yield cls, fn, is_route(fn)
+        # A method a subclass inherits runs on the subclass: that is where its constructor set the fields the method reads.
+        seen, own = {id(cls)}, set(cls.methods)
+        todo = list(cls.bases)
+        while todo:
+            hit = index.lookup(todo.pop(), cls.file) if index is not None else None
+            if hit is None or hit[0] != "class" or id(hit[1]) in seen:
+                continue
+            seen.add(id(hit[1]))
+            for name, fn in hit[1].methods.items():
+                if name not in own:
+                    own.add(name)
+                    yield cls, fn, is_route(fn)
+            todo.extend(hit[1].bases)
 
 
 def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
@@ -124,6 +137,8 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                 if not positions and recv_tainted:
                     positions = [-1]
                 for i in positions:
+                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     value = recv if i == -1 else args[i] if i < len(args) else None
                     if value is None:
                         continue
@@ -147,13 +162,13 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                     record(node, fr, "value returned as the response body")
 
             interp_args = dict(sink_hook=sink, store_hook=store, return_hook=returned)
-            runs = [(None, None, False)] + [(c, f, r) for c, f, r in _entries(pf)]
+            runs = [(None, None, False)] + [(c, f, r) for c, f, r in _entries(pf, index)]
             for cls, fnode, route in runs:
                 if time.monotonic() - started > budget_seconds:
                     break
                 interp = PyInterp(index, {cwe}, **interp_args)
                 interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                self_obj = Obj(cls=cls, type_name=cls.name) if cls is not None else None
+                self_obj = interp.make_this(cls, pf) if cls is not None else None
                 fr = PFrame(pf, cls, self_obj, 0, route=route)
                 try:
                     if fnode is None:

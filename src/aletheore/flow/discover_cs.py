@@ -12,7 +12,7 @@ from aletheore.flow.cs_interp import BudgetExceeded, CFrame, CsInterp
 from aletheore.flow.cs_sinks import CONTROLLER_BASES, CWE_NAMES_CS, DISCOVER_CWES_CS, SEVERITY_CS, sink_args
 from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
-from aletheore.flow.values import Choice, Const, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, Choice, Const, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -114,6 +114,8 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
                 if not positions:
                     return
                 for i in positions:
+                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     if i >= len(args):
                         continue
                     hit = _tainted_string(args[i]) if _cwe in (79, 601) else classify(args[i]) == "tainted"
@@ -124,6 +126,8 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
             def store(node, base_text, key, value, fr, _cwe=cwe):
                 if _cwe == 89 and isinstance(key, Const) and key.value == "CommandText" and classify(value) == "tainted":
                     record(node, fr, "assigned to CommandText")
+                elif _cwe == 90 and isinstance(key, Const) and key.value == "Filter" and classify(value) == "tainted" and "Searcher" in base_text.title():
+                    record(node, fr, "assigned to the search filter")
                 elif _cwe == 501 and base_text.endswith("Session") and (_tainted_string(key) or _tainted_string(value)):
                     record(node, fr, "write to the session")
 
@@ -134,7 +138,7 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
                 for m, _ in _entry_methods(cls):
                     interp = CsInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                    fr = CFrame(cf, cls, Obj(cls=cls, type_name=cls.name), 0)
+                    fr = CFrame(cf, cls, interp.make_this(cls, cf), 0)
                     try:
                         interp.bind_entry(m, fr, action_cls and _is_public(m))
                         body = m.child_by_field_name("body") or next((c for c in m.children if c.type in ("block", "arrow_expression_clause")), None)

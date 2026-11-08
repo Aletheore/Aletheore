@@ -19,7 +19,7 @@ from aletheore.flow.php_interp import BudgetExceeded, PFrame, PhpInterp
 from aletheore.flow.php_sinks import (
     CWE_NAMES_PHP, DISCOVER_CWES_PHP, INCLUDE_KINDS, SEVERITY_PHP, sink_args,
 )
-from aletheore.flow.values import Choice, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, Choice, MapV, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -128,11 +128,15 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                 positions = sink_args(_cwe, name, recv_text, len(args), rtype, first_const)
                 if not positions:
                     return
+                if _cwe == 89 and name.lower() == "execute" and args and isinstance(args[0], MapV):
+                    return  # PDOStatement::execute([...]) binds parameters; the SQL text was given to prepare()
                 if _cwe == 601 and "location" not in text.lower():
                     return
                 if _cwe == 918 and _local_path_prefix(node):
                     return  # "./x/" . $id is a local file read (path traversal at worst), not a request to another host
                 for i in positions:
+                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     if i >= len(args):
                         continue
                     hit = tainted_string(args[i]) if _cwe == 601 else classify(args[i]) == "tainted"
@@ -150,7 +154,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                     break
                 interp = PhpInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                 interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                this = Obj(cls=cls, type_name=cls.name) if cls is not None else None
+                this = interp.make_this(cls, pf) if cls is not None else None
                 fr = PFrame(pf, cls, this, 0)
                 try:
                     if fn is None:

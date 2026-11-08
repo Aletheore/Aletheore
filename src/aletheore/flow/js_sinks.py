@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 SANITIZERS: dict[int, set[str]] = {
     79: {"escape", "escapeHtml", "encode", "sanitize", "sanitizeHtml", "xss", "encodeURIComponent", "encodeURI",
          "escapeHTML", "htmlEscape", "clean", "stripTags", "stripHtml"},
@@ -53,6 +55,7 @@ SEVERITY_JS = {89: "critical", 78: "critical", 94: "critical", 502: "critical", 
 
 def sink_args(cwe: int, name: str, recv: str, argc: int, kw_keys: set[str] | None = None) -> list[int] | None:
     base = recv.split(".")[-1] if recv else ""
+    root = re.split(r"[.(\[]", recv)[0] if recv else ""
     if cwe == 89:
         if name in ("query", "execute", "raw", "run", "all", "get", "each", "exec", "prepare") and argc >= 1:
             if name in ("get", "all", "run", "each", "exec", "prepare") and not any(k in recv.lower() for k in ("db", "conn", "pool", "client", "sqlite", "knex", "sequelize", "cursor", "pg", "mysql", "database")):
@@ -74,7 +77,9 @@ def sink_args(cwe: int, name: str, recv: str, argc: int, kw_keys: set[str] | Non
             return [0]
         return None
     if cwe == 79:
-        if name in ("send", "write", "end") and argc >= 1 and (base in ("res", "response", "reply", "ctx") or recv.endswith(".res")):
+        if name in ("send", "write", "end") and argc >= 1 and (base in ("res", "response", "reply", "ctx") or root in ("res", "response", "reply", "ctx") or recv.endswith(".res")):
+            if re.search(r"\.(json|jsonp)\(|type\(\s*['\"](json|text/plain|plain|application/json)|contentType\(\s*['\"](json|text/plain)", recv):
+                return None  # the response is declared JSON or plain text
             return [0]
         if name == "write" and base == "document" and argc >= 1:
             return [0]
@@ -86,7 +91,7 @@ def sink_args(cwe: int, name: str, recv: str, argc: int, kw_keys: set[str] | Non
             return [0]
         return None
     if cwe == 601:
-        if name == "redirect" and argc >= 1 and base in ("res", "response", "reply", "ctx"):
+        if name == "redirect" and argc >= 1 and (base in ("res", "response", "reply", "ctx") or root in ("res", "response", "reply", "ctx")):
             return [argc - 1] if argc <= 2 and argc == 2 else [0]
         return None
     if cwe == 918:

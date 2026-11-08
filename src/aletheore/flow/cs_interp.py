@@ -9,10 +9,11 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import guards as G
 from aletheore.flow.cs_index import CsClass, CsFile, CsIndex
 from aletheore.flow.cs_sinks import PURE_TYPES, REQUEST_PROPS, SAFE_METHODS, SANITIZERS
 from aletheore.flow.values import (
-    SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 
 STRING_PURE = {"ToLower", "ToUpper", "ToLowerInvariant", "ToUpperInvariant", "Trim", "TrimStart", "TrimEnd", "Replace", "Substring", "PadLeft", "PadRight",
@@ -79,6 +80,7 @@ class CsInterp:
         self.sink_hook = sink_hook    # hook(node, name, recv_text, args, recv, frame)
         self.store_hook = store_hook  # hook(node, base_text, key, value, frame)
         self.steps = 0
+        self._outs: list | None = None
         self.probes: dict[tuple, list] = {}
         self.probe_keys: set[tuple] = set()
         self.dead: list[tuple] = []
@@ -108,7 +110,7 @@ class CsInterp:
             c = classify(v)
             if rank[c] > rank[worst]:
                 worst = c
-        return {"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst]
+        return add_prefix({"safe": SAFE, "unknown": UNKNOWN, "tainted": Tainted("derived")}[worst], vals)
 
     def _mutating(self, fr: CFrame, c) -> None:
         if fr.branch > c.birth_depth:
@@ -229,6 +231,8 @@ class CsInterp:
             if name in c.consts and c.consts[name] is not None:
                 return self._const_value(c, name, fr)
             c = self.index.cls(c.bases[0], c.file) if c.bases else None
+        if name in ("RouteData", "RouteValues"):
+            return Obj(kind="request", type_name="Request")
         if name == "Request" or name == "request":
             return Obj(kind="request", type_name="Request")
         if name in ("HttpContext", "Context"):
@@ -414,11 +418,17 @@ class CsInterp:
         args_n = n.child_by_field_name("arguments")
         if func is None:
             return UNKNOWN
+        outs = [(i, a.named_children[-1]) for i, a in enumerate(args_n.named_children if args_n is not None else [])
+                if a.type == "argument" and a.named_children and any(c.type in ("out", "ref") for c in a.children)]
         if func.type == "identifier":
             name = _t(func)
             args = self._args(args_n, fr)
             self._hook(n, name, "", args, None, fr)
-            return self._call_unqualified(name, args, fr)
+            self._outs = outs or None
+            try:
+                return self._call_unqualified(name, args, fr)
+            finally:
+                self._outs = None
         if func.type == "member_access_expression":
             expr, name = func.child_by_field_name("expression"), _t(func.child_by_field_name("name"))
             recv_text = _t(expr)
@@ -431,10 +441,18 @@ class CsInterp:
                 cname = _t(expr)
             if cname is not None:
                 self._hook(n, name, recv_text, args, None, fr)
-                return self._static_call(cname, name, args, fr)
+                self._outs = outs or None
+                try:
+                    return self._static_call(cname, name, args, fr)
+                finally:
+                    self._outs = None
             recv = self.eval(expr, fr)
             self._hook(n, name, recv_text, args, recv, fr)
-            return self._method(recv, name, args, fr, recv_text)
+            self._outs = outs or None
+            try:
+                return self._method(recv, name, args, fr, recv_text)
+            finally:
+                self._outs = None
         if func.type == "generic_name":
             name = _t(func.named_children[0]) if func.named_children else ""
             args = self._args(args_n, fr)
@@ -638,6 +656,20 @@ class CsInterp:
         self._apply_initializer(obj, init, fr)
         return obj
 
+    def make_this(self, cls: CsClass, cf: CsFile) -> Obj:
+        """`this` for an entry point: field initializers run and the constructor has left its fields set."""
+        obj = Obj(cls=cls, type_name=cls.name)
+        fr = CFrame(cf, cls, obj, 0)
+        try:
+            for fname, initn in cls.fields.items():
+                if initn is not None:
+                    obj.fields[fname] = self.eval(initn, CFrame(cls.file, cls, obj, 1))
+            if cls.ctors:
+                self._run_method(cls, cls.ctors[0], obj, [], fr, ctor=True)
+        except (BudgetExceeded, RecursionError):
+            pass
+        return obj
+
     def _apply_initializer(self, obj: Obj, init: Node | None, fr: CFrame) -> None:
         for c in (init.named_children if init is not None else []):
             if c.type == "assignment_expression":
@@ -646,6 +678,7 @@ class CsInterp:
                     obj.fields[_t(left)] = self.eval(c.child_by_field_name("right"), fr)
 
     def _run_method(self, cls: CsClass, m: Node, recv: Obj | None, args: list[Val], fr: CFrame, ctor: bool = False) -> Val:
+        outs, self._outs = self._outs, None
         if fr.depth + 1 > self.MAX_DEPTH or id(m) in self._active:
             return self._opaque(recv, args)
         body = m.child_by_field_name("body") or next((c for c in m.children if c.type in ("block", "arrow_expression_clause")), None)
@@ -661,9 +694,23 @@ class CsInterp:
                 self.exec(body, inner)
         finally:
             self._active.discard(id(m))
+        if outs:
+            params = m.child_by_field_name("parameters") or next((c for c in m.children if c.type == "parameter_list"), None)
+            names = [_t(([c for c in p.named_children if c.type == "identifier"] or [None])[-1]) for p in (params.named_children if params is not None else [])]
+            for i, target in outs:  # `out`/`ref` arguments: the callee's final value flows back into the caller's variable
+                if i < len(names) and names[i] in inner.env:
+                    self._store_out(target, inner.env[names[i]], fr)
         if ctor:
             return UNKNOWN
         return join_all(inner.rets) if inner.rets else Const(None)
+
+    def _store_out(self, target: Node, val: Val, fr: CFrame) -> None:
+        if target.type == "declaration_expression":
+            ident = next((c for c in reversed(target.children) if c.type == "identifier"), None)
+            if ident is not None:
+                fr.env[_t(ident)] = val
+        elif target.type == "identifier":
+            self._store(target, val, fr)
 
     def _bind_params(self, m: Node, args: list[Val], inner: CFrame) -> None:
         params = m.child_by_field_name("parameters") or next((c for c in m.children if c.type == "parameter_list"), None)
@@ -752,6 +799,68 @@ class CsInterp:
                 self.eval(c, fr)
         return False
 
+    # ------------------------------------------------------------------ guards
+    def _engine(self, fr: CFrame) -> G.GuardEngine:
+        def norm(n):
+            t = n.type
+            if t == "parenthesized_expression":
+                return ("paren", n.named_children[0] if n.named_children else None)
+            if t == "prefix_unary_expression" and n.children and _t(n.children[0]) == "!":
+                return ("not", n.named_children[-1] if n.named_children else None)
+            if t == "binary_expression":
+                op = _t(n.child_by_field_name("operator"))
+                l, r = n.child_by_field_name("left"), n.child_by_field_name("right")
+                return {"&&": ("and", l, r), "||": ("or", l, r), "==": ("eq", l, r), "!=": ("ne", l, r)}.get(op, ("other",))
+            if t == "invocation_expression":
+                fn = n.child_by_field_name("function")
+                args_n = n.child_by_field_name("arguments")
+                args = [(a.named_children[-1] if a.type == "argument" and a.named_children else a) for a in (args_n.named_children if args_n is not None else [])]
+                if fn is not None and fn.type == "member_access_expression":
+                    return ("call", _t(fn.child_by_field_name("name")), fn.child_by_field_name("expression"), args, _t(fn.child_by_field_name("expression")))
+                return ("call", _t(fn), None, args, "")
+            return ("other",)
+
+        def local(n):
+            return _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None
+
+        def const(n):
+            if n is None:
+                return None
+            v = self.eval(n, fr)
+            return v.value if isinstance(v, Const) and isinstance(v.value, str) else None
+
+        def safe(n):
+            return classify(self.eval(n, fr)) == "safe"
+
+        def coll(n):
+            v = self.eval(n, fr)
+            return isinstance(v, ListV) and bool(v.items) and not v.dirty and not v.opaque and all(classify(i) == "safe" for i in v.items)
+
+        def pattern_source(n):
+            if n is None:
+                return None
+            if n.type == "object_creation_expression" and _t(n.child_by_field_name("type")).split(".")[-1] == "Regex":
+                args_n = n.child_by_field_name("arguments")
+                first = args_n.named_children[0] if args_n is not None and args_n.named_children else None
+                inner = first.named_children[-1] if first is not None and first.named_children else None
+                return const(inner)
+            if n.type == "identifier":
+                c = fr.cls
+                while c is not None:
+                    init = c.fields.get(_t(n))
+                    if init is not None:
+                        return pattern_source(init)
+                    c = self.index.cls(c.bases[0], c.file) if c.bases else None
+            return None
+
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes)
+
+    def _guard_facts(self, cond: Node | None, fr: CFrame):
+        return self._engine(fr).facts(cond)
+
+    def _narrow(self, names: set, fr: CFrame) -> None:
+        G.apply(names, self.cwes, fr.env, SAFE)
+
     def _join_envs(self, fr: CFrame, a: dict, b: dict) -> None:
         out = {}
         for k in set(a) | set(b):
@@ -765,11 +874,14 @@ class CsInterp:
             self._dead(fr, alt if cond.value else cons)
             return self.exec(cons, fr) if cond.value else (self.exec(alt, fr) if alt is not None else False)
         base = dict(fr.env)
+        facts = self._guard_facts(n.child_by_field_name("condition"), fr)
         fr.branch += 1
         try:
+            self._narrow(facts[0], fr)
             ta = self.exec(cons, fr)
             ea = fr.env
             fr.env = dict(base)
+            self._narrow(facts[1], fr)
             tb = self.exec(alt, fr) if alt is not None else False
             eb = fr.env
         finally:

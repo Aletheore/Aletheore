@@ -16,7 +16,7 @@ from aletheore.flow.java_index import JavaIndex, JavaFile
 from aletheore.flow import coverage
 from aletheore.flow.java_interp import BudgetExceeded, Frame, Interp
 from aletheore.flow.java_sinks import CWE_NAMES, DISCOVER_CWES, sink_args
-from aletheore.flow.values import Choice, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, Choice, Const, ListV, Obj, Tainted, classify
 from aletheore.flow.prefilter import classes_present
 from aletheore.scanner.detect import IGNORED_DIRS
 
@@ -30,11 +30,15 @@ _SINK_WORDS = {
     90: (b"search(",),
     643: (b"XPath", b"xpath", b"selectNodes", b"selectSingleNode"),
     501: (b"setAttribute", b"putValue"),
+    601: (b"sendRedirect", b"RedirectView", b"Location"),
+    918: (b"URL(", b"URI(", b"URI.create", b"RestTemplate", b"HttpGet", b"HttpPost", b"WebClient"),
+    94: (b"ScriptEngine", b"GroovyShell", b"forName", b"parseExpression", b"Interpreter"),
+    502: (b"ObjectInputStream", b"fromXML", b"Yaml"),
 }
 _ENTRY_WORDS = (b"HttpServletRequest", b"ServletRequest", b"@RequestParam", b"@PathVariable", b"@RequestBody",
                 b"@RequestHeader", b"@CookieValue", b"@QueryParam", b"@PathParam", b"@FormParam", b"@HeaderParam",
                 b"@ModelAttribute", b"@CookieParam")
-_SEVERITY = {89: "critical", 78: "critical", 22: "major", 79: "major", 90: "major", 643: "major", 501: "minor"}
+_SEVERITY = {89: "critical", 78: "critical", 22: "major", 79: "major", 90: "major", 643: "major", 501: "minor", 601: "minor", 918: "major", 94: "critical", 502: "critical"}
 MAX_SECONDS = 150.0
 MAX_FILES = 6000
 _EXTRA_SKIP = {"target", ".worktrees", ".repowise"}
@@ -42,6 +46,13 @@ _EXTRA_SKIP = {"target", ".worktrees", ".repowise"}
 
 def _direct_taint(v) -> bool:
     return isinstance(v, Tainted) or (isinstance(v, Choice) and any(isinstance(a, Tainted) for a in v.alts))
+
+
+def _string_taint(v) -> bool:
+    """Output and redirect targets: tainted text, not whatever an unmodelled call (a file read, a DB lookup) returned."""
+    def one(t) -> bool:
+        return isinstance(t, Tainted) and t.why != "through-call"
+    return one(v) or (isinstance(v, Choice) and any(one(a) for a in v.alts)) or (classify(v) == "tainted" and not isinstance(v, (Tainted, Choice)))
 
 
 def _java_files(repo: Path) -> list[Path]:
@@ -108,13 +119,26 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                         return
                     if not positions and recv_tainted:
                         positions = [-1]  # the receiver is the tainted value (a tainted File being used)
+                    if _cwe == 601 and name in ("setHeader", "addHeader") and not (args and isinstance(args[0], Const) and str(args[0].value).lower() == "location"):
+                        return
+                    if _cwe == 78 and args and name in ("<init>", "exec"):
+                        first = args[0]
+                        if len(args) == 1 and isinstance(first, ListV) and len(first.items) >= 2 and not first.dirty and not first.opaque:
+                            first = first.items[0]
+                            multi = True
+                        else:
+                            multi = len(args) >= 2
+                        if multi and isinstance(first, Const) and str(first.value).lower().rsplit("/", 1)[-1] not in ("sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "pwsh", "dash", "ksh", "csh"):
+                            return  # constant program with separate arguments: no shell, no injection of a second command
                     for i in positions:
+                        if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                            continue  # a fixed scheme://host/ prefix: only the path is attacker data
                         value = recv if i == -1 else args[i] if i < len(args) else None
                         if value is None:
                             continue
                         # A trust-boundary finding needs a tainted STRING; an object bound from a form and
                         # stored in the session (the usual Spring pattern) is not reported.
-                        hit = _direct_taint(value) if _cwe == 501 else classify(value) == "tainted"
+                        hit = _direct_taint(value) if _cwe == 501 else _string_taint(value) if _cwe in (79, 601) else classify(value) == "tainted"
                         if hit:
                             rel = str(fr.file.path.relative_to(repo.resolve())) if fr.file.path.is_relative_to(repo.resolve()) else str(fr.file.path)
                             line = node.start_point[0] + 1
@@ -137,7 +161,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                             return
 
                 interp = Interp(index, {cwe}, sink_hook=hook, annotated_sources=True)
-                fr = Frame(file=jf, cls=cls, this_obj=Obj(cls=cls, type_name=cls.name), depth=0)
+                fr = Frame(file=jf, cls=cls, this_obj=interp.make_this(cls, jf), depth=0)
                 interp.bind_entry_params(method, fr)
                 try:
                     interp.exec(body, fr)

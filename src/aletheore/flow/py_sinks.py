@@ -99,6 +99,10 @@ def sink_args(cwe: int, name: str, recv: str, argc: int, kw: dict, recv_tainted:
     if cwe == 79:
         if name in ("Markup", "mark_safe", "HttpResponse", "make_response", "render_template_string", "HTMLResponse") and argc >= 1:
             return [0]
+        if name == "Response" and argc >= 1:
+            ct = kw.get("mimetype") or kw.get("content_type")
+            if ct is None or "html" in str(getattr(ct, "value", "html")).lower():
+                return [0]  # a Flask/Starlette Response is HTML unless it says otherwise
         return None
     if cwe == 90:
         if name == "search_s" and argc >= 3:
@@ -116,6 +120,8 @@ def sink_args(cwe: int, name: str, recv: str, argc: int, kw: dict, recv_tainted:
         return None
     if cwe == 94:
         if not recv and name in ("eval", "exec", "compile") and argc >= 1:
+            return [0]
+        if name in ("import_module", "__import__") and argc >= 1 and base in ("", "importlib"):
             return [0]
         return None
     if cwe == 502:
