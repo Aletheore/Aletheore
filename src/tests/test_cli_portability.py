@@ -172,7 +172,7 @@ def test_generated_hooks_use_utf8_exec_arguments(monkeypatch):
     monkeypatch.setattr(sys, "executable", executable)
     hook = python_hook("aletheore.read_guard", "pre")
     assert hook == {"type": "command", "command": executable,
-                    "args": ["-X", "utf8", "-m", "aletheore.read_guard", "pre"]}
+                    "args": ["-X", "utf8", "-P", "-m", "aletheore.read_guard", "pre"]}
 
 
 def test_windows_system_python_finds_scripts_console_entrypoint(monkeypatch, tmp_path):

@@ -3936,7 +3936,7 @@ def test_hallbook_hook_prints_valid_settings_json_with_the_hook_module():
     hook = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]
     assert hook["type"] == "command"
     assert sys.executable in hook["command"]
-    assert hook["args"] == ["-X", "utf8", "-m", "aletheore.hallbook_hook", "--mode", "hint"]
+    assert hook["args"] == ["-X", "utf8", "-P", "-m", "aletheore.hallbook_hook", "--mode", "hint"]
     assert hook["command"] == sys.executable
 
 

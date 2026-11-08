@@ -5,6 +5,12 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: the read guard, evidence and Hallbook hooks, and the evidence hook's background index build, no longer
+  import modules from the repository they run in. Hooks run with the repository as the current folder, so a
+  repository holding its own `aletheore/` package (or `json.py`, `tree_sitter.py`, ...) could run its code inside them.
+  They now start Python with `-P`, as Shield's hooks already did. `aletheore tokens meter --enable-read-guard` rewrites
+  an existing read-guard entry in place; hooks pasted from `hook evidence-snippet` or `hallbook hook` need the new
+  snippet pasted again. `--disable-read-guard` removes both the old and the new form.
 - Added `aletheore shield`, a local safety net for AI-written changes in a Git repository.
   After one confirmation it registers Claude Code hooks and a Git pre-commit hook that report
   new or suspicious dependencies, affected files and candidate tests, signature changes and new
