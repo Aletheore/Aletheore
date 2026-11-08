@@ -84,6 +84,10 @@ def sink_args(cwe: int, name: str, recv: str, argc: int, recv_type: str | None =
     n = name.lower()
     low = recv.lower()
     if cwe == 89:
+        if n in ("whereraw", "selectraw", "orderbyraw", "havingraw", "groupbyraw", "fromraw", "joinraw", "orwhereraw") and argc >= 1:
+            return [0]  # Laravel query-builder raw fragments
+        if low.split("\\")[-1] == "db" and n in ("select", "statement", "unprepared", "raw", "insert", "update", "delete", "selectone", "cursor") and argc >= 1:
+            return [0]
         if n in SQL_FUNCS_ARG1 and argc >= 2:
             return [1]
         if n in SQL_FUNCS_ARG0 and argc >= 1:

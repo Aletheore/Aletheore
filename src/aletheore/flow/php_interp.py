@@ -642,6 +642,9 @@ class PhpInterp:
         self._hook(n, name, recv_text, args, recv, fr)
         if self._sanitizer(name):
             return SAFE
+        if isinstance(recv, Obj) and recv.kind == "request":
+            # Laravel / Symfony / PSR-7 request object: $request->input('x'), ->get(), ->header(), ->getContent()
+            return SAFE if name in ("hasHeader", "has", "filled", "isMethod", "expectsJson", "wantsJson", "ip", "method", "ajax", "secure") else Tainted("request." + name)
         if isinstance(recv, Obj) and recv.cls is not None:
             m = self._find_method(recv.cls, name)
             if m is not None:
@@ -762,7 +765,11 @@ class PhpInterp:
         for p in (params.named_children if params is not None else []):
             nm = next((c for c in p.named_children if c.type == "variable_name"), None)
             if nm is not None:
-                fr.env[_vname(nm)] = UNKNOWN
+                ptype = _t(next((c for c in p.named_children if c.type in ("named_type", "qualified_name", "union_type", "optional_type")), None)).lstrip("?")
+                if ptype.split("\\")[-1] in ("Request", "ServerRequestInterface", "FormRequest", "HttpRequest", "ServerRequest"):
+                    fr.env[_vname(nm)] = Obj(kind="request", type_name="Request")
+                else:
+                    fr.env[_vname(nm)] = UNKNOWN
 
     def _include(self, n: Node, fr: PFrame) -> Val:
         kids = n.named_children

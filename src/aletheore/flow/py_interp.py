@@ -8,6 +8,8 @@ files through the import index.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 
 from tree_sitter import Node
@@ -708,6 +710,8 @@ class PyInterp:
                 fr.env[name] = fr.self_obj or UNKNOWN
             elif name == "request":
                 fr.env[name] = Obj(kind="request", type_name="Request")
+            elif route and t in ("default_parameter", "typed_default_parameter") and re.match(r"\s*(?:fastapi\.)?(Depends|Security)\(", _t(p.child_by_field_name("value"))):
+                fr.env[name] = UNKNOWN  # a FastAPI dependency (database session, current user), not request data
             elif route and t != "list_splat_pattern":
                 fr.env[name] = Tainted("route-param")
             else:

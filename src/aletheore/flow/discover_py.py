@@ -157,7 +157,11 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                 if _cwe == 501 and base_text.split(".")[-1] == "session" and (_tainted_string(key) or _tainted_string(value)):
                     record(node, fr, "write to the session")
 
-            def returned(node, value, fr, _cwe=cwe):
+            fastapi = b"fastapi" in data.lower()
+
+            def returned(node, value, fr, _cwe=cwe, _fastapi=fastapi):
+                if _fastapi and b"HTMLResponse" not in data and b"response_class" not in data:
+                    return  # FastAPI serialises a returned value as JSON, not as an HTML page
                 if _cwe == 79 and fr.route and fr.depth == 0 and _tainted_string(value):
                     record(node, fr, "value returned as the response body")
 

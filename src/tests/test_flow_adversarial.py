@@ -118,3 +118,17 @@ def test_fixed_host_prefix_is_not_ssrf_but_variable_host_is(tmp_path):
     d = tmp_path / "v"
     d.mkdir()
     assert "ssrf" in run(d, "a.py", 'import requests\nfrom flask import request\ndef f():\n    requests.get("https://" + request.args.get("h") + "/x")\n')
+
+
+def test_fastapi_dependency_and_json_return_are_not_xss(tmp_path):
+    src = ('from fastapi import APIRouter, Depends\nrouter = APIRouter()\n\n@router.get("/menu")\ndef get_menu(db=Depends(get_db), q: str = ""):\n'
+           '    return db.query(1).all()\n\n@router.get("/echo")\ndef echo(msg: str):\n    return {"m": msg}\n')
+    assert run(tmp_path, "a.py", src) == []
+
+
+def test_laravel_request_and_raw_query(tmp_path):
+    src = ("<?php\nclass U { public function login(Request $request) {\n  return DB::table('u')->whereRaw(\"n='\" . $request->input('n') . \"'\")->first();\n } }\n")
+    assert "sql-injection" in run(tmp_path, "U.php", src)
+    d = tmp_path / "ok"
+    d.mkdir()
+    assert run(d, "U.php", "<?php\nclass U { public function login(Request $request) {\n  return DB::table('u')->where('n', $request->input('n'))->first();\n } }\n") == []

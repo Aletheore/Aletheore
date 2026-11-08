@@ -23,7 +23,7 @@ from aletheore.flow.values import host_is_fixed, Choice, MapV, Obj, Tainted, cla
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
-    89: (b"query", b"mysql", b"pg_", b"sqlite", b"prepare", b"exec", b"->get_", b"odbc", b"oci_"),
+    89: (b"query", b"mysql", b"pg_", b"sqlite", b"prepare", b"exec", b"->get_", b"odbc", b"oci_", b"Raw(", b"DB::"),
     78: (b"exec", b"system", b"passthru", b"popen", b"proc_open", b"shell_exec", b"`"),
     22: (b"fopen", b"file_get_contents", b"file_put_contents", b"readfile", b"unlink", b"move_uploaded_file", b"copy(", b"rename(", b"mkdir", b"scandir", b"opendir", b"glob(", b"file(", b"touch(", b"highlight_file"),
     79: (b"echo", b"print", b"die(", b"exit(", b"<?=", b"response", b"Response"),
