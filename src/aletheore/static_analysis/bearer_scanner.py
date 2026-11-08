@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from aletheore.subprocess_utils import command_argv
+from aletheore.static_analysis._cwe import add_cwe
 from aletheore.static_analysis._exclusions import count_real_files, excluded_dir_names, filter_findings
 
 # Real data points found live tonight, not assumed: 241 real (non-excluded)
@@ -148,18 +149,21 @@ def check_bearer(repo_path: Path, timeout: int | None = None) -> dict:
             continue
         for item in entries:
             findings.append(
-                {
-                    "tool": "bearer",
-                    "rule_id": item.get("id", ""),
-                    "severity": _SEVERITY_MAP.get(severity, "minor"),
-                    # Bearer is exclusively a sensitive-data-flow/privacy
-                    # scanner - every real finding it produces belongs to
-                    # the "privacy" type by construction, not derived
-                    # per-finding the way Semgrep's category is.
-                    "type": "privacy",
-                    "path": item.get("filename", ""),
-                    "line": item.get("line_number", 0),
-                    "message": (item.get("title") or "").strip(),
-                }
+                add_cwe(
+                    {
+                        "tool": "bearer",
+                        "rule_id": item.get("id", ""),
+                        "severity": _SEVERITY_MAP.get(severity, "minor"),
+                        # Bearer is exclusively a sensitive-data-flow/privacy
+                        # scanner - every real finding it produces belongs to
+                        # the "privacy" type by construction, not derived
+                        # per-finding the way Semgrep's category is.
+                        "type": "privacy",
+                        "path": item.get("filename", ""),
+                        "line": item.get("line_number", 0),
+                        "message": (item.get("title") or "").strip(),
+                    },
+                    item.get("cwe_ids"),
+                )
             )
     return {"checked": True, "reason": None, "findings": filter_findings(findings, repo_path)}

@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from aletheore.subprocess_utils import command_argv
+from aletheore.static_analysis._cwe import add_cwe
 from aletheore.static_analysis._exclusions import excluded_dir_names, file_census, filter_findings
 
 # Real bug found by an independent benchmark run the same night: a flat
@@ -124,14 +125,17 @@ def check_gosec(repo_path: Path, timeout: int | None = None) -> dict:
         except ValueError:
             rel_path = raw_file
         findings.append(
-            {
-                "tool": "gosec",
-                "rule_id": item.get("rule_id", ""),
-                "severity": _SEVERITY_MAP.get(item.get("severity", ""), "minor"),
-                "type": "vulnerability",
-                "path": rel_path,
-                "line": _first_line_number(item.get("line", "")),
-                "message": (item.get("details") or "").strip(),
-            }
+            add_cwe(
+                {
+                    "tool": "gosec",
+                    "rule_id": item.get("rule_id", ""),
+                    "severity": _SEVERITY_MAP.get(item.get("severity", ""), "minor"),
+                    "type": "vulnerability",
+                    "path": rel_path,
+                    "line": _first_line_number(item.get("line", "")),
+                    "message": (item.get("details") or "").strip(),
+                },
+                item.get("cwe"),
+            )
         )
     return {"checked": True, "reason": None, "findings": filter_findings(findings, repo_path)}

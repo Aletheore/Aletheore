@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from aletheore.subprocess_utils import command_argv
+from aletheore.static_analysis._cwe import add_cwe
 from aletheore.static_analysis._exclusions import count_real_files, excluded_dir_names, filter_findings
 
 # Matches the real, live-verified invocation from tonight's evaluation
@@ -222,14 +223,17 @@ def check_semgrep(repo_path: Path, timeout: int | None = None) -> dict:
         severity = extra.get("severity", "INFO")
         category = (extra.get("metadata") or {}).get("category", "")
         findings.append(
-            {
-                "tool": "semgrep",
-                "rule_id": _clean_rule_id(item.get("check_id", ""), custom_rule_ids),
-                "severity": _SEVERITY_MAP.get(severity, "minor"),
-                "type": _CATEGORY_TYPE_MAP.get(category, "bug"),
-                "path": _relative_path(item.get("path", ""), repo_path),
-                "line": (item.get("start") or {}).get("line", 0),
-                "message": (extra.get("message") or "").strip(),
-            }
+            add_cwe(
+                {
+                    "tool": "semgrep",
+                    "rule_id": _clean_rule_id(item.get("check_id", ""), custom_rule_ids),
+                    "severity": _SEVERITY_MAP.get(severity, "minor"),
+                    "type": _CATEGORY_TYPE_MAP.get(category, "bug"),
+                    "path": _relative_path(item.get("path", ""), repo_path),
+                    "line": (item.get("start") or {}).get("line", 0),
+                    "message": (extra.get("message") or "").strip(),
+                },
+                (extra.get("metadata") or {}).get("cwe"),
+            )
         )
     return {"checked": True, "reason": None, "findings": filter_findings(findings, repo_path)}

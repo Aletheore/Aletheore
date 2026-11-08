@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from aletheore.subprocess_utils import command_argv
+from aletheore.static_analysis._cwe import add_cwe
 from aletheore.static_analysis._exclusions import excluded_dir_names, filter_findings, has_real_file
 
 DEFAULT_BANDIT_TIMEOUT_SECONDS = 180
@@ -293,14 +294,17 @@ def check_bandit(repo_path: Path, timeout: int = DEFAULT_BANDIT_TIMEOUT_SECONDS)
             if source is not None and not _sql_injection_is_plausible(source, line):
                 continue
         findings.append(
-            {
-                "tool": "bandit",
-                "rule_id": test_id,
-                "severity": _SEVERITY_MAP.get(item.get("issue_severity", ""), "minor"),
-                "type": "vulnerability",
-                "path": rel_path,
-                "line": line,
-                "message": (item.get("issue_text") or "").strip(),
-            }
+            add_cwe(
+                {
+                    "tool": "bandit",
+                    "rule_id": test_id,
+                    "severity": _SEVERITY_MAP.get(item.get("issue_severity", ""), "minor"),
+                    "type": "vulnerability",
+                    "path": rel_path,
+                    "line": line,
+                    "message": (item.get("issue_text") or "").strip(),
+                },
+                item.get("issue_cwe"),
+            )
         )
     return {"checked": True, "reason": None, "findings": filter_findings(findings, repo_path)}
