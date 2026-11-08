@@ -12,7 +12,7 @@ from aletheore.flow.cs_interp import BudgetExceeded, CFrame, CsInterp
 from aletheore.flow.cs_sinks import CONTROLLER_BASES, CWE_NAMES_CS, DISCOVER_CWES_CS, SEVERITY_CS, sink_args
 from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
-from aletheore.flow.values import host_is_fixed, Choice, Const, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -114,7 +114,7 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
                 if not positions:
                     return
                 for i in positions:
-                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
                         continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     if i >= len(args):
                         continue

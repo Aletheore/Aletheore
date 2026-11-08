@@ -15,7 +15,7 @@ from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.js_interp import BudgetExceeded, JFrame, JsInterp, request_like
 from aletheore.flow.js_sinks import CWE_NAMES_JS, DISCOVER_CWES_JS, ROUTE_METHODS, SEVERITY_JS, sink_args
-from aletheore.flow.values import ListV, host_is_fixed, Choice, Const, MapV, Obj, Tainted, classify
+from aletheore.flow.values import ListV, host_is_fixed, path_prefix_safe, Choice, Const, MapV, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -182,7 +182,7 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                     if args[1].opaque or args[1].dirty:
                         positions = [1]
                 for i in positions:
-                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
                         continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     if i >= len(args):
                         continue

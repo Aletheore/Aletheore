@@ -12,7 +12,7 @@ from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.go_interp import BudgetExceeded, GFrame, GoInterp
 from aletheore.flow.go_sinks import CWE_NAMES_GO, DISCOVER_CWES_GO, SEVERITY_GO, sink_args
-from aletheore.flow.values import host_is_fixed, Choice, Const, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -109,7 +109,7 @@ def discover_go(repo: Path, index: GoIndex | None = None, budget_seconds: float 
                     if isinstance(ct, Const) and "html" not in str(ct.value):
                         return
                 for i in positions:
-                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
                         continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     if i >= len(args):
                         continue

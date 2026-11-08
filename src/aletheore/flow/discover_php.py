@@ -19,7 +19,7 @@ from aletheore.flow.php_interp import BudgetExceeded, PFrame, PhpInterp
 from aletheore.flow.php_sinks import (
     CWE_NAMES_PHP, DISCOVER_CWES_PHP, INCLUDE_KINDS, SEVERITY_PHP, sink_args,
 )
-from aletheore.flow.values import host_is_fixed, Choice, MapV, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, MapV, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -135,7 +135,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                 if _cwe == 918 and _local_path_prefix(node):
                     return  # "./x/" . $id is a local file read (path traversal at worst), not a request to another host
                 for i in positions:
-                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
                         continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     if i >= len(args):
                         continue

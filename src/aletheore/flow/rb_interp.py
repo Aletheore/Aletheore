@@ -10,12 +10,13 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import guards as G
 from aletheore.flow.rb_index import RbClass, RbFile, RbIndex, const_name
 from aletheore.flow.rb_sinks import (
     DB_FINDERS, PURE_RECEIVERS, REQUEST_NAMES, REQUEST_OBJ_NAMES, SAFE_METHODS, SANITIZERS, SINATRA_VERBS,
 )
 from aletheore.flow.values import (
-    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    ClosureV, add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 
 BENIGN_REQ = {"host", "host_with_port", "base_url", "protocol", "scheme", "port", "remote_ip", "ip", "ssl?", "get?", "post?", "put?", "delete?", "xhr?", "xml_http_request?", "local?", "request_method", "method", "request_id", "format_x"}
@@ -94,6 +95,7 @@ class RbInterp:
         self.sink_hook = sink_hook    # hook(node, name, recv_text, args, recv, fr)
         self.store_hook = store_hook  # hook(node, base_text, key, value, fr)
         self.steps = 0
+        self.globals: dict[str, Val] = {}
         self.probes: dict[tuple, list] = {}
         self.probe_keys: set[tuple] = set()
         self.dead: list[tuple] = []
@@ -197,7 +199,9 @@ class RbInterp:
             return self._scope(n, fr)
         if t == "instance_variable":
             return fr.this_obj.fields.get(_t(n), UNKNOWN) if fr.this_obj is not None else UNKNOWN
-        if t in ("global_variable", "class_variable"):
+        if t == "global_variable":
+            return self.globals.get(_t(n), UNKNOWN)
+        if t == "class_variable":
             return UNKNOWN
         if t == "parenthesized_statements":
             v: Val = Const(None)
@@ -241,7 +245,7 @@ class RbInterp:
         if t == "interpolation":
             return self.eval(n.named_children[0], fr) if n.named_children else Const("")
         if t == "lambda":
-            return UNKNOWN
+            return ClosureV(n, fr.file, dict(fr.env))
         return UNKNOWN
 
     # --- literals
@@ -351,6 +355,8 @@ class RbInterp:
         base = self.eval(obj, fr)
         idx_n = next((c for c in n.named_children if c is not obj and c.start_byte > (obj.end_byte if obj is not None else -1)), None)
         idx = self.eval(idx_n, fr) if idx_n is not None else UNKNOWN
+        if isinstance(base, ClosureV):
+            return self._call_closure(base, [idx], fr)
         if isinstance(base, Obj):
             if base.kind == "request":
                 return Tainted("request[...]")
@@ -513,6 +519,9 @@ class RbInterp:
         t = target.type
         if t == "identifier":
             fr.env[_t(target)] = val
+        elif t == "global_variable":
+            old = self.globals.get(_t(target))
+            self.globals[_t(target)] = join(old, val) if (fr.branch > 0 and old is not None) else val
         elif t == "instance_variable":
             if fr.this_obj is not None:
                 name = _t(target)
@@ -593,6 +602,10 @@ class RbInterp:
         block = n.child_by_field_name("block")
         name = _t(meth_n)
         if meth_n is None:
+            if recv_n is not None:  # `callable.(args)`
+                recv = self.eval(recv_n, fr)
+                if isinstance(recv, ClosureV):
+                    return self._call_closure(recv, self._args(args_n, fr), fr)
             return UNKNOWN
         if recv_n is None:
             args = self._args(args_n, fr)
@@ -725,7 +738,28 @@ class RbInterp:
             return Obj(cls=cls, type_name=cls.name)
         return obj if isinstance(obj, Obj) else Obj(cls=cls, type_name=cls.name)
 
+    def _call_closure(self, c: ClosureV, args: list[Val], fr: RFrame) -> Val:
+        if fr.depth + 1 > self.MAX_DEPTH or id(c.node) in self._active:
+            return self._opaque(None, args)
+        inner = RFrame(c.file, fr.cls, fr.this_obj, fr.depth + 1)
+        inner.env.update(c.env)
+        params = c.node.child_by_field_name("parameters")
+        pos = list(args)
+        for p in (params.named_children if params is not None else []):
+            nm = p if p.type == "identifier" else next((x for x in p.named_children if x.type == "identifier"), None)
+            if nm is not None:
+                inner.env[_t(nm)] = pos.pop(0) if pos else UNKNOWN
+        body = c.node.child_by_field_name("body")
+        self._active.add(id(c.node))
+        try:
+            self.exec(body, inner)
+            return join_all(inner.rets + [inner.last]) if inner.rets else inner.last
+        finally:
+            self._active.discard(id(c.node))
+
     def _method(self, recv: Val, name: str, args: list[Val], fr: RFrame, recv_n: Node | None, block: Node | None) -> Val:
+        if isinstance(recv, ClosureV) and name in ("call", "()", "yield", "[]", "curry", "==="):
+            return self._call_closure(recv, args, fr)
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, fr, recv_n, block) for a in recv.alts)
         if isinstance(recv, Obj):
@@ -871,6 +905,16 @@ class RbInterp:
                 m.entries[("*", id(args[0]))] = args[1]
                 m.dirty = True
             return args[1]
+        if name == "dig" and len(args) >= 2 and not m.dirty and not m.opaque:
+            cur: Val = m
+            for a in args:
+                if isinstance(cur, MapV) and isinstance(a, Const) and not cur.dirty and not cur.opaque and a.value in cur.entries:
+                    cur = cur.entries[a.value]
+                elif isinstance(cur, MapV) and isinstance(a, Const) and not cur.dirty and not cur.opaque:
+                    return Const(None)
+                else:
+                    return join_all([cur, UNKNOWN]) if not isinstance(cur, MapV) else join_all(list(cur.entries.values()) + [UNKNOWN])
+            return cur
         if name in ("fetch", "dig", "[]", "key?", "has_key?", "include?", "member?"):
             if name in ("key?", "has_key?", "include?", "member?"):
                 return SAFE
@@ -1056,7 +1100,7 @@ class RbInterp:
             fr.last = Const(None) if t != "comment" else fr.last
             return False
         fr.last = self.eval(n, fr)
-        if t == "call" and n.child_by_field_name("receiver") is None and _t(n.child_by_field_name("method")) in ("raise", "fail", "exit", "abort") and not self._raise_is_conditional(n):
+        if t == "call" and n.child_by_field_name("receiver") is None and _t(n.child_by_field_name("method")) in ("raise", "fail", "exit", "abort", "halt", "pass") and not self._raise_is_conditional(n):
             return True
         return False
 
@@ -1125,6 +1169,62 @@ class RbInterp:
             out[k] = join(a[k], b[k]) if (k in a and k in b) else (a[k] if k in a else b[k])
         fr.env = out
 
+    # ------------------------------------------------------------------ guards
+    def _engine(self, fr: RFrame) -> G.GuardEngine:
+        def norm(n):
+            t = n.type
+            if t == "parenthesized_statements":
+                return ("paren", n.named_children[0] if n.named_children else None)
+            if t == "unary" and _t(n.child_by_field_name("operator")) in ("!", "not"):
+                return ("not", n.child_by_field_name("operand"))
+            if t == "binary":
+                op = _t(n.child_by_field_name("operator"))
+                l, r = n.child_by_field_name("left"), n.child_by_field_name("right")
+                if op == "=~":
+                    return ("call", "match?", r, [l], _t(r)) if r is not None and r.type == "regex" else (("call", "match?", l, [r], _t(l)) if l is not None and l.type == "regex" else ("other",))
+                return {"&&": ("and", l, r), "and": ("and", l, r), "||": ("or", l, r), "or": ("or", l, r), "==": ("eq", l, r), "!=": ("ne", l, r), "===": ("eq", l, r)}.get(op, ("other",))
+            if t == "call":
+                recv_n, name = n.child_by_field_name("receiver"), _t(n.child_by_field_name("method"))
+                a = n.child_by_field_name("arguments")
+                args = [c for c in (a.named_children if a is not None else []) if c.type not in ("pair", "comment")]
+                return ("call", name, recv_n, args, _t(recv_n))
+            return ("other",)
+
+        def local(n):
+            return _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None
+
+        def const(n):
+            if n is None:
+                return None
+            if n.type == "regex":
+                return _t(n)
+            v = self.eval(n, fr)
+            return v.value if isinstance(v, Const) and isinstance(v.value, str) else None
+
+        def safe(n):
+            return classify(self.eval(n, fr)) == "safe"
+
+        def coll(n):
+            v = self.eval(n, fr)
+            return isinstance(v, ListV) and bool(v.items) and not v.dirty and not v.opaque and all(classify(i) == "safe" for i in v.items)
+
+        def pattern_source(n):
+            if n is not None and n.type == "regex":
+                return _t(n)
+            if n is not None and n.type == "constant" and fr.cls is not None:
+                c = fr.cls
+                while c is not None:
+                    init = c.consts.get(_t(n))
+                    if init is not None and init.type == "regex":
+                        return _t(init)
+                    c = self._base(c)
+            return None
+
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes)
+
+    def _narrow(self, names: set, fr: RFrame) -> None:
+        G.apply(names, self.cwes, fr.env, SAFE)
+
     def _if(self, n: Node, fr: RFrame, invert: bool = False, modifier: bool = False) -> bool:
         cond = self.eval(n.child_by_field_name("condition"), fr)
         if modifier:
@@ -1142,13 +1242,16 @@ class RbInterp:
                 return False
             return self.exec(branch, fr)
         base = dict(fr.env)
+        facts = self._engine(fr).facts(n.child_by_field_name("condition"))
         fr.branch += 1
         try:
             fr.last = UNKNOWN
+            self._narrow(facts[0], fr)
             ta = self.exec(cons, fr) if cons is not None else False
             ea, la = fr.env, fr.last if cons is not None else Const(None)
             fr.env = dict(base)
             fr.last = UNKNOWN
+            self._narrow(facts[1], fr)
             tb = self.exec(alt, fr) if alt is not None else False
             eb, lb = fr.env, fr.last if alt is not None else Const(None)
         finally:

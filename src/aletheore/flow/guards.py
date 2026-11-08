@@ -92,15 +92,20 @@ class GuardEngine:
     pattern_source(node)  -> constant regex text the node stands for (a compiled pattern constant), else None
     """
 
-    def __init__(self, norm, local, const, safe, safe_collection, pattern_source, cwes):
+    def __init__(self, norm, local, const, safe, safe_collection, pattern_source, cwes, anchored=()):
+        self.anchored = set(anchored)  # method names that match the whole string (Kotlin matches, Java matches)
         self.norm, self.local, self.const, self.safe = norm, local, const, safe
         self.safe_collection, self.pattern_source, self.cwes = safe_collection, pattern_source, cwes
 
     def facts(self, cond) -> Facts:
         if cond is None:
             return EMPTY
-        n = self.norm(cond)
+        return self._facts_norm(self.norm(cond))
+
+    def _facts_norm(self, n) -> Facts:
         k = n[0]
+        if k == "neg_call":  # `!x.matches(..)` that a grammar parsed as `(!x).matches(..)`
+            return negate(self._facts_norm(("call",) + tuple(n[1:])))
         if k == "paren" or k == "not":
             inner = self.facts(n[1])
             return inner if k == "paren" else negate(inner)
@@ -135,7 +140,7 @@ class GuardEngine:
                 target, rx = self.local(args[1]), self.const(args[0]) or self.pattern_source(args[0])  # Pattern.matches(re, x), Regex.IsMatch(x, re) swapped below
                 if target is None:
                     target, rx = self.local(args[0]), self.const(args[1])
-            if target and rx is not None and safe_regex(rx, self.cwes):
+            if target and rx is not None and safe_regex(rx, self.cwes, implicit_anchor=name in self.anchored):
                 return ({target}, set())
             return EMPTY
         if name in ("Contains", "ContainsAny", "ContainsRune", "contains") and recv_text in ("strings", "bytes", "slices", "Strings") and len(args) == 2:
@@ -149,6 +154,8 @@ class GuardEngine:
             return EMPTY
         if name in ("contains", "Contains", "includes", "include?", "Include", "has", "in", "includes?", "contains_key") and len(args) == 1:
             tok = self.const(args[0])
+            if tok == "\\\\":
+                tok = "\\"  # a raw '\\\\' in source text is one backslash
             v = self.local(recv) if recv is not None else None
             if v and tok is not None and tok in PATH_TOKENS:
                 return (set(), {f"{v}#{tok}"})

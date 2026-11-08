@@ -12,7 +12,7 @@ from aletheore.flow.prefilter import classes_present
 from aletheore.flow.rb_index import RbClass, RbFile, RbIndex
 from aletheore.flow.rb_interp import BudgetExceeded, RbInterp, RFrame
 from aletheore.flow.rb_sinks import CWE_NAMES_RB, DISCOVER_CWES_RB, SEVERITY_RB, SINATRA_VERBS, sink_args
-from aletheore.flow.values import host_is_fixed, Choice, Const, MapV, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, MapV, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -132,7 +132,7 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
                 if _cwe == 601 and args and isinstance(args[-1], MapV) and isinstance(args[-1].entries.get("allow_other_host"), Const) and args[-1].entries["allow_other_host"].value is False:
                     return
                 for i in positions:
-                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
                         continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     val = recv if i == -1 else (args[i] if i < len(args) else None)
                     if val is None or isinstance(val, MapV):

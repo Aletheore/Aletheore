@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import guards as G
 from aletheore.flow.kt_index import KtClass, KtFile, KtIndex, annotations
 from aletheore.flow.kt_sinks import (
     PARAM_ANNOTATIONS, PURE_TYPES, REQUEST_TYPES, SAFE_METHODS, SAFE_PARAM_TYPES, SANITIZERS, SERVLET_BENIGN,
@@ -869,6 +870,104 @@ class KtInterp:
             out[k] = join(a[k], b[k]) if (k in a and k in b) else (a[k] if k in a else b[k])
         fr.env = out
 
+    # ------------------------------------------------------------------ guards
+    def _engine(self, fr: KFrame) -> G.GuardEngine:
+        def norm(n):
+            t = n.type
+            if t == "parenthesized_expression":
+                return ("paren", n.named_children[0] if n.named_children else None)
+            if t in ("prefix_expression", "unary_expression") and n.children and _t(n.children[0]) == "!":
+                return ("not", n.named_children[-1] if n.named_children else None)
+            if t == "in_expression":
+                op = next((_t(c) for c in n.children if _t(c) in ("in", "!in")), "in")
+                r = n.child_by_field_name("right")
+                return ("call" if op == "in" else "neg_call", "contains", r, [n.child_by_field_name("left")], _t(r))
+            if t == "binary_expression":
+                op = _t(n.child_by_field_name("operator"))
+                l, r = n.child_by_field_name("left"), n.child_by_field_name("right")
+                if op in ("in", "!in"):
+                    return ("call" if op == "in" else "neg_call", "contains", r, [l], _t(r))
+                return {"&&": ("and", l, r), "||": ("or", l, r), "==": ("eq", l, r), "===": ("eq", l, r), "!=": ("ne", l, r), "!==": ("ne", l, r)}.get(op, ("other",))
+            if t == "call_expression":
+                callee = n.children[0] if n.children else None
+                va = next((c for c in n.children if c.type == "value_arguments"), None)
+                args = []
+                for a in (va.named_children if va is not None else []):
+                    kids = [c for c in a.named_children if c.type != "annotation"]
+                    if a.type == "value_argument" and kids:
+                        args.append(kids[-1])
+                lam_text = _t(next((c for c in n.children if c.type == "annotated_lambda"), None))
+                if callee is not None and callee.type == "navigation_expression" and lam_text and self._split_nav(callee)[1] == "all" \
+                        and re.search(r"\.(isDigit|isLetter|isLetterOrDigit|isUpperCase|isLowerCase)\(\)", lam_text):
+                    recv0 = self._split_nav(callee)[0]
+                    if recv0 is not None and recv0.type in ("prefix_expression", "unary_expression") and recv0.children and _t(recv0.children[0]) == "!":
+                        recv0 = recv0.named_children[-1]
+                    return ("neg_call" if _t(n).lstrip().startswith("!") else "call", "isNumeric", None, [recv0], "")  # name.all { it.isDigit() }
+                if callee is not None and callee.type == "navigation_expression":
+                    recv_n, nm, _ = self._split_nav(callee)
+                    neg = _t(n).lstrip().startswith("!")  # the grammar binds `!` tighter than `.` and a call: `!x.f(..)` parses as `(!x).f(..)`
+                    inner = recv_n
+                    if recv_n is not None and recv_n.type in ("prefix_expression", "unary_expression") and recv_n.children and _t(recv_n.children[0]) == "!":
+                        inner = recv_n.named_children[-1] if recv_n.named_children else None
+                    return ("neg_call" if neg else "call", nm, inner, args, _t(inner).lstrip("!"))
+                return ("call", _t(callee), None, args, "")
+            return ("other",)
+
+        def local(n):
+            return _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None
+
+        def const(n):
+            if n is None:
+                return None
+            v = self.eval(n, fr)
+            if isinstance(v, Const) and isinstance(v.value, str):
+                return v.value
+            if n.type == "call_expression" and n.children and _t(n.children[0]) == "Regex":
+                return self._regex_arg(n, fr)
+            return None
+
+        def safe(n):
+            return classify(self.eval(n, fr)) == "safe"
+
+        def coll(n):
+            v = self.eval(n, fr)
+            return isinstance(v, ListV) and bool(v.items) and not v.dirty and not v.opaque and all(classify(i) == "safe" for i in v.items)
+
+        def pattern_source(n):
+            if n is None:
+                return None
+            if n.type == "call_expression" and n.children and _t(n.children[0]).lstrip("!") == "Regex":
+                return self._regex_arg(n, fr)
+            if n.type == "navigation_expression":
+                recv_n, nm, _ = self._split_nav(n)
+                if nm == "toRegex" and recv_n is not None:
+                    v = self.eval(recv_n, fr)
+                    return v.value if isinstance(v, Const) and isinstance(v.value, str) else None
+            if n.type == "identifier":
+                c = fr.cls
+                while c is not None:
+                    init = c.consts.get(_t(n)) or c.props.get(_t(n))
+                    if init is not None:
+                        return pattern_source(init)
+                    c = self._base(c)
+                if fr.file.main is not None:
+                    init = fr.file.main.consts.get(_t(n))
+                    if init is not None:
+                        return pattern_source(init)
+            return None
+
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, anchored=("matches",))
+
+    def _regex_arg(self, call: Node, fr: KFrame) -> str | None:
+        va = next((c for c in call.children if c.type == "value_arguments"), None)
+        first = va.named_children[0] if va is not None and va.named_children else None
+        kids = [c for c in (first.named_children if first is not None else []) if c.type != "annotation"]
+        v = self.eval(kids[-1], fr) if kids else None
+        return v.value if isinstance(v, Const) and isinstance(v.value, str) else None
+
+    def _narrow(self, names: set, fr: KFrame) -> None:
+        G.apply(names, self.cwes, fr.env, SAFE)
+
     def _if(self, n: Node, fr: KFrame) -> bool:
         cond_n = n.child_by_field_name("condition")
         cond = self.eval(cond_n, fr)
@@ -884,13 +983,16 @@ class KtInterp:
                 return False
             return self.exec(branch, fr)
         base = dict(fr.env)
+        facts = self._engine(fr).facts(cond_n)
         fr.branch += 1
         try:
             fr.last = UNKNOWN
+            self._narrow(facts[0], fr)
             ta = self.exec(cons, fr) if cons is not None else False
             ea, la = fr.env, fr.last if cons is not None else Const(None)
             fr.env = dict(base)
             fr.last = UNKNOWN
+            self._narrow(facts[1], fr)
             tb = self.exec(alt, fr) if alt is not None else False
             eb, lb = fr.env, fr.last if alt is not None else Const(None)
         finally:

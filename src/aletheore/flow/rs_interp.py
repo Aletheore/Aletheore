@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node, Parser
 
+from aletheore.flow import guards as G
 from aletheore.flow.rs_index import RsFile, RsIndex, RsType, type_name
 from aletheore.flow.rs_sinks import (
     EXTRACTORS, PASS_METHODS, REQUEST_BENIGN, REQUEST_TYPES, SAFE_METHODS, SAFE_PARAM_TYPES, SANITIZERS,
@@ -578,6 +579,8 @@ class RsInterp:
             return ListV(list(args[0].items) if name == "from" and args and isinstance(args[0], ListV) else [], birth_depth=fr.branch, dirty=bool(name == "from" and args and not isinstance(args[0], ListV)))
         if tn in ("HashMap", "BTreeMap") and name in ("new", "with_capacity", "from"):
             return MapV({}, birth_depth=fr.branch, dirty=name == "from")
+        if tn == "Regex" and name in ("new", "from") and args and isinstance(args[0], Const) and isinstance(args[0].value, str):
+            return Obj(type_name="Regex", fields={"_re": args[0]})  # remembered so a later `re.is_match(&x)` guard can read the pattern
         if tn in ("PathBuf", "Path", "OsString", "Cow") and name in ("from", "new") and args:
             return args[0]
         if tn in ("Option", "Result") and name in ("Some", "Ok") and args:
@@ -599,6 +602,8 @@ class RsInterp:
         if isinstance(recv, Obj):
             if recv.kind == "request":
                 return SAFE if name in REQUEST_BENIGN else Tainted("request." + name)
+            if recv.type_name == "Regex" and name in PASS_METHODS:
+                return recv
             if recv.cls is not None:
                 hit = self._find_fn(self.index.ty(recv.cls.name, fr.file) or [recv.cls], name)
                 if hit is not None:
@@ -858,6 +863,94 @@ class RsInterp:
             return UNKNOWN
         return self.eval(cond_n, fr)
 
+    # ------------------------------------------------------------------ guards
+    def _engine(self, fr: SFrame) -> G.GuardEngine:
+        def strip_ref(n):
+            while n is not None:
+                if n.type in ("reference_expression", "parenthesized_expression") and n.named_children:
+                    n = n.named_children[-1]
+                elif n.type == "call_expression" and n.child_by_field_name("function") is not None and n.child_by_field_name("function").type == "field_expression" \
+                        and _t(n.child_by_field_name("function").child_by_field_name("field")) in ("as_str", "as_ref", "clone", "to_string", "to_owned", "as_bytes"):
+                    n = n.child_by_field_name("function").child_by_field_name("value")  # same text, same validity
+                else:
+                    break
+            return n
+
+        def norm(n):
+            t = n.type
+            if t == "parenthesized_expression":
+                return ("paren", n.named_children[0] if n.named_children else None)
+            if t == "unary_expression" and n.children and _t(n.children[0]) == "!":
+                return ("not", n.named_children[-1] if n.named_children else None)
+            if t == "binary_expression":
+                op = _t(n.child_by_field_name("operator"))
+                l, r = n.child_by_field_name("left"), n.child_by_field_name("right")
+                return {"&&": ("and", l, r), "||": ("or", l, r), "==": ("eq", strip_ref(l), strip_ref(r)), "!=": ("ne", strip_ref(l), strip_ref(r))}.get(op, ("other",))
+            if t == "call_expression":
+                fn = n.child_by_field_name("function")
+                a = n.child_by_field_name("arguments")
+                args = [strip_ref(c) for c in (a.named_children if a is not None else []) if c.type not in ("line_comment", "block_comment")]
+                if fn is not None and fn.type == "generic_function":
+                    fn = fn.child_by_field_name("function")
+                if fn is not None and fn.type == "field_expression":
+                    recv_n, name = fn.child_by_field_name("value"), _t(fn.child_by_field_name("field"))
+                    if name in ("is_ok", "is_some") and recv_n is not None and recv_n.type == "call_expression":
+                        inner = recv_n.child_by_field_name("function")
+                        if inner is not None and inner.type == "generic_function":
+                            inner = inner.child_by_field_name("function")
+                        if inner is not None and inner.type == "field_expression" and _t(inner.child_by_field_name("field")) == "parse":
+                            return ("call", "isNumeric", None, [strip_ref(inner.child_by_field_name("value"))], "")  # x.parse::<u32>().is_ok()
+                    if name == "all" and recv_n is not None and recv_n.type == "call_expression" and a is not None and a.named_children \
+                            and a.named_children[0].type == "closure_expression":
+                        body = _t(a.named_children[0].child_by_field_name("body"))
+                        src = recv_n.child_by_field_name("function")
+                        if re.search(r"\.(is_alphanumeric|is_ascii_alphanumeric|is_numeric|is_ascii_digit|is_alphabetic|is_ascii_alphabetic)\(\)", body) and src is not None \
+                                and src.type == "field_expression" and _t(src.child_by_field_name("field")) in ("chars", "bytes"):
+                            return ("call", "isNumeric", None, [strip_ref(src.child_by_field_name("value"))], "")  # x.chars().all(|c| c.is_alphanumeric())
+                    return ("call", name, recv_n, args, _t(recv_n))
+                if fn is not None and fn.type == "scoped_identifier":
+                    return ("call", _t(fn.child_by_field_name("name")), None, args, _t(fn.child_by_field_name("path")))
+                return ("call", _t(fn), None, args, "")
+            return ("other",)
+
+        def local(n):
+            n = strip_ref(n)
+            return _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None
+
+        def const(n):
+            if n is None:
+                return None
+            v = self.eval(strip_ref(n), fr)
+            return v.value if isinstance(v, Const) and isinstance(v.value, str) else None
+
+        def safe(n):
+            return classify(self.eval(strip_ref(n), fr)) == "safe"
+
+        def coll(n):
+            v = self.eval(strip_ref(n), fr)
+            return isinstance(v, ListV) and bool(v.items) and not v.dirty and not v.opaque and all(classify(i) == "safe" for i in v.items)
+
+        def pattern_source(n):
+            if n is not None and n.type == "identifier" and isinstance(fr.env.get(_t(n)), Obj) and fr.env[_t(n)].type_name == "Regex":
+                v = fr.env[_t(n)].fields.get("_re")
+                return v.value if isinstance(v, Const) else None
+            while n is not None and n.type == "call_expression":
+                fn = n.child_by_field_name("function")
+                if fn is not None and fn.type == "field_expression" and _t(fn.child_by_field_name("field")) in ("unwrap", "expect", "clone"):
+                    n = fn.child_by_field_name("value")
+                    continue
+                if fn is not None and fn.type == "scoped_identifier" and _t(fn.child_by_field_name("path")).endswith("Regex") and _t(fn.child_by_field_name("name")) in ("new", "from"):
+                    a = n.child_by_field_name("arguments")
+                    first = a.named_children[0] if a is not None and a.named_children else None
+                    return const(first)
+                return None
+            return None
+
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes)
+
+    def _narrow(self, names: set, fr: SFrame) -> None:
+        G.apply(names, self.cwes, fr.env, SAFE)
+
     def _if(self, n: Node, fr: SFrame) -> bool:
         cond = self._cond(n.child_by_field_name("condition"), fr)
         cons, alt_c = n.child_by_field_name("consequence"), n.child_by_field_name("alternative")
@@ -870,13 +963,16 @@ class RsInterp:
                 return False
             return self.exec(branch, fr)
         base = dict(fr.env)
+        facts = self._engine(fr).facts(n.child_by_field_name("condition"))
         fr.branch += 1
         try:
             fr.last = UNKNOWN
+            self._narrow(facts[0], fr)
             ta = self.exec(cons, fr) if cons is not None else False
             ea, la = fr.env, fr.last
             fr.env = dict(base)
             fr.last = UNKNOWN
+            self._narrow(facts[1], fr)
             tb = self.exec(alt, fr) if alt is not None else False
             eb, lb = fr.env, fr.last if alt is not None else Const(None)
         finally:

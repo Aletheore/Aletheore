@@ -67,7 +67,7 @@ def sink_args(cwe: int, name: str, recv: str, argc: int) -> list[int] | None:
             return [0]
         return None
     if cwe in (22, 23, 36, 73):
-        if not recv and name in ("File", "FileInputStream", "FileOutputStream", "FileReader", "FileWriter", "RandomAccessFile", "FileSystemResource", "FileInputStream") and argc >= 1:
+        if (not recv or recv.startswith(("java.io", "java.nio"))) and name in ("File", "FileInputStream", "FileOutputStream", "FileReader", "FileWriter", "RandomAccessFile", "FileSystemResource", "FileInputStream") and argc >= 1:
             return [0, 1] if argc >= 2 else [0]
         if base in ("Paths", "Path") and name in ("get", "of") and argc >= 1:
             return list(range(argc))

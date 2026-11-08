@@ -15,7 +15,7 @@ from aletheore.flow.prefilter import classes_present
 from aletheore.flow.py_index import PyFile, PyIndex
 from aletheore.flow.py_interp import BudgetExceeded, PFrame, PyInterp
 from aletheore.flow.py_sinks import CWE_NAMES_PY, DISCOVER_CWES_PY, ROUTE_MARKERS, SEVERITY_PY, sink_args
-from aletheore.flow.values import host_is_fixed, Choice, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -137,7 +137,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                 if not positions and recv_tainted:
                     positions = [-1]
                 for i in positions:
-                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
                         continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     value = recv if i == -1 else args[i] if i < len(args) else None
                     if value is None:

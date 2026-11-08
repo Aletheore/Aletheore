@@ -12,7 +12,7 @@ from aletheore.flow.kt_interp import BudgetExceeded, KFrame, KtInterp
 from aletheore.flow.kt_sinks import CONTROLLER_ANNOTATIONS, CWE_NAMES_KT, DISCOVER_CWES_KT, MAPPING_ANNOTATIONS, SEVERITY_KT, sink_args
 from aletheore.flow import coverage
 from aletheore.flow.prefilter import classes_present
-from aletheore.flow.values import host_is_fixed, Choice, Const, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -107,7 +107,7 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                 if not positions:
                     return
                 for i in positions:
-                    if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
                         continue  # a fixed scheme://host/ prefix: only the path is attacker data
                     if i >= len(args):
                         continue

@@ -207,3 +207,11 @@ class ClosureV(Val):
     node: object
     file: object
     env: dict
+
+
+_LOCAL_PATH = _re.compile(r"^/[^/\\]")
+
+
+def path_prefix_safe(v: Val) -> bool:
+    """A value that starts with `/segment`: a same-site path, so a redirect or fetch built on it cannot leave the site."""
+    return isinstance(v, Tainted) and bool(_LOCAL_PATH.match(v.prefix))

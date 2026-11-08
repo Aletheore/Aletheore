@@ -16,7 +16,7 @@ from aletheore.flow.java_index import JavaIndex, JavaFile
 from aletheore.flow import coverage
 from aletheore.flow.java_interp import BudgetExceeded, Frame, Interp
 from aletheore.flow.java_sinks import CWE_NAMES, DISCOVER_CWES, sink_args
-from aletheore.flow.values import host_is_fixed, Choice, Const, ListV, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, ListV, Obj, Tainted, classify
 from aletheore.flow.prefilter import classes_present
 from aletheore.scanner.detect import IGNORED_DIRS
 
@@ -131,7 +131,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                         if multi and isinstance(first, Const) and str(first.value).lower().rsplit("/", 1)[-1] not in ("sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "pwsh", "dash", "ksh", "csh"):
                             return  # constant program with separate arguments: no shell, no injection of a second command
                     for i in positions:
-                        if _cwe == 918 and 0 <= i < len(args) and host_is_fixed(args[i]):
+                        if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
                             continue  # a fixed scheme://host/ prefix: only the path is attacker data
                         value = recv if i == -1 else args[i] if i < len(args) else None
                         if value is None:
