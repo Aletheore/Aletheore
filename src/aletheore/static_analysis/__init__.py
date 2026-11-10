@@ -81,19 +81,32 @@ _OPTIONAL_SCANNERS = (
 
 
 def _drop_duplicate_flow_findings(findings: list[dict]) -> list[dict]:
-    """The flow scanner often finds what Semgrep already reported. Keep the other tool's finding."""
+    """The flow scanner often finds what another scanner already reported. Keep the other tool's finding, and mark it
+    `also_found_by: ["aletheore-flow"]` so it stays visible that the flow analysis reached the same sink."""
     others = [f for f in findings if f.get("tool") != "aletheore-flow"]
 
-    def duplicated(flow: dict) -> bool:
+    def duplicate_of(flow: dict) -> list[dict]:
         cwes = set(flow.get("cwe") or [])
-        return any(
-            o.get("path") == flow.get("path")
+        return [
+            o for o in others
+            if o.get("path") == flow.get("path")
             and abs(int(o.get("line") or 0) - int(flow.get("line") or 0)) <= 3
             and cwes & set(o.get("cwe") or [])
-            for o in others
-        )
+        ]
 
-    return [f for f in findings if f.get("tool") != "aletheore-flow" or not duplicated(f)]
+    kept = []
+    for f in findings:
+        if f.get("tool") != "aletheore-flow":
+            kept.append(f)
+            continue
+        twins = duplicate_of(f)
+        if not twins:
+            kept.append(f)
+        for o in twins:
+            tools = o.setdefault("also_found_by", [])
+            if "aletheore-flow" not in tools:
+                tools.append("aletheore-flow")
+    return kept
 
 
 def _run_scanner_safely(name: str, scanner, *args, **kwargs) -> dict:

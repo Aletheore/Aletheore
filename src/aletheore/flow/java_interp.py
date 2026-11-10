@@ -167,6 +167,11 @@ ARCHIVE_ENTRY_TYPES = {"ZipEntry", "JarEntry", "TarArchiveEntry", "ZipArchiveEnt
                        "ArjArchiveEntry", "CpioArchiveEntry", "TarEntry", "FileHeader", "ArArchiveEntry"}
 
 
+def _path_typed(n, fr) -> bool:
+    """java.nio Path.startsWith compares whole path components, so it needs no trailing separator."""
+    return n is not None and n.type == "identifier" and fr.types.get(_t(n)) == "Path"
+
+
 class Interp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
@@ -613,7 +618,16 @@ class Interp:
         if isinstance(recv, Obj) and recv.type_name:
             return recv.type_name
         if obj_n is not None and obj_n.type == "identifier":
-            return fr.types.get(_t(obj_n))
+            local = fr.types.get(_t(obj_n))
+            if local is not None:
+                return local
+            cls = fr.cls
+            while cls is not None:  # a field: `private UserMapper userMapper;`
+                if _t(obj_n) in cls.field_types:
+                    return cls.field_types[_t(obj_n)]
+                cls = cls.outer
+        if obj_n is not None and obj_n.type == "field_access" and _t(obj_n.child_by_field_name("object")) == "this" and fr.cls is not None:
+            return fr.cls.field_types.get(_t(obj_n.child_by_field_name("field")))
         return None
 
     def _class_ref(self, obj_n: Node, fr: Frame) -> str | None:
@@ -1189,18 +1203,21 @@ class Interp:
                 if isinstance(coll, ListV) and coll.items and not coll.dirty and not coll.opaque and all(classify(i) == "safe" for i in coll.items):
                     return ({v2} if v2 else {hv + "@918"}, set())
             return G.EMPTY
-        if name == "startsWith" and len(args) == 1 and local(obj) and classify(self.eval(args[0], fr)) == "safe" and G.canonical_assignment(jf_src(fr), local(obj)):
+        if name == "startsWith" and len(args) == 1 and local(obj) and classify(self.eval(args[0], fr)) == "safe" and G.canonical_assignment(jf_src(fr), local(obj)) \
+                and (G.prefix_has_separator(_t(args[0])) or _path_typed(obj, fr)):
             return ({local(obj) + "@canon"}, set())  # a canonical path that starts with the fixed root stays inside it
         if name == "startsWith" and len(args) == 1 and obj is not None and obj.type == "method_invocation":
             # out.getCanonicalPath().startsWith(root): the check is on the canonical form of `out`, against a root the
             # attacker does not choose (a root built from request data proves nothing)
             inner = obj
-            canon = False
+            canon = component = False
             while inner is not None and inner.type == "method_invocation":
-                canon = canon or _t(inner.child_by_field_name("name")) in ("getCanonicalPath", "getCanonicalFile", "toRealPath", "normalize", "getAbsoluteFile_x")
+                m = _t(inner.child_by_field_name("name"))
+                canon = canon or m in ("getCanonicalPath", "getCanonicalFile", "toRealPath", "normalize")
+                component = component or m in ("toRealPath", "normalize", "toPath")  # a java.nio Path: startsWith compares components
                 inner = inner.child_by_field_name("object")
             v = local(inner) if inner is not None else None
-            if canon and v and classify(self.eval(args[0], fr)) != "tainted":
+            if canon and v and classify(self.eval(args[0], fr)) != "tainted" and (component or G.prefix_has_separator(_t(args[0]))):
                 return ({v + "@canon"}, set())
         if name in ("isNumeric", "isDigits", "isCreatable", "isParsable", "isNumber") and len(args) == 1 and local(args[0]):
             return ({local(args[0])}, set())

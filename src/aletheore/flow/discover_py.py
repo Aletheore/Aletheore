@@ -200,7 +200,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                         break
                     interp = PyInterp(index, {cwe}, **interp_args)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                    self_obj = interp.make_this(cls, pf) if cls is not None else None
+                    self_obj = coverage.safe_this(interp, cls, pf) if cls is not None else None
                     fr = PFrame(pf, cls, self_obj, 0, route=route)
                     try:
                         if fnode is None:

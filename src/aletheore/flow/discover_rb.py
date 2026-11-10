@@ -184,7 +184,7 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
                     for m, is_action, singleton in entries:
                         interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                         interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                        fr = RFrame(rf, cls, interp.make_this(cls, rf) if not singleton else Obj(cls=cls, type_name=cls.name), 0, singleton=singleton)
+                        fr = RFrame(rf, cls, coverage.safe_this(interp, cls, rf) if not singleton else Obj(cls=cls, type_name=cls.name), 0, singleton=singleton)
                         try:
                             interp.bind_entry(m, fr, is_action)
                             body = m.child_by_field_name("body")

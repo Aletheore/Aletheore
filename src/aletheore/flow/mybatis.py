@@ -112,15 +112,23 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
             if mid and names:
                 meth = ifaces.get(iface, {}).get(mid.group(1))
                 out.setdefault(iface, {})[mid.group(1)] = _positions(names, _params(meth) if meth is not None else None)
+    if out:
+        # every mapper method, safe ones too, so a name shared with a safe mapper is never matched by name alone
+        out["*methods*"] = {}
+        for iface, methods in ifaces.items():
+            for m in methods:
+                out["*methods*"].setdefault(m, set()).add(iface)
     return out
 
 
 def positions(table: dict[str, dict[str, list[int]]], name: str, recv_type: str | None, recv_text: str) -> list[int] | None:
     """Sink positions for a call `recv.name(...)` on a mapper, or None."""
-    if recv_type and recv_type in table:
-        return table[recv_type].get(name)
-    owners = [m[name] for m in table.values() if name in m]
+    every = table.get("*methods*", {})
+    if recv_type:
+        return table[recv_type].get(name) if recv_type in table and recv_type != "*methods*" else None
+    owners = [(i, m[name]) for i, m in table.items() if i != "*methods*" and name in m]
     low = recv_text.lower()
-    if len(owners) == 1 and any(h in low for h in ("mapper", "dao", "repository", "repo")):
-        return owners[0]
+    # the receiver's type is unknown: only a method name that no other mapper declares, on a mapper-looking receiver
+    if len(owners) == 1 and len(every.get(name, {owners[0][0]})) == 1 and any(h in low for h in ("mapper", "dao", "repository", "repo")):
+        return owners[0][1]
     return None

@@ -155,7 +155,7 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
                     for m, _ in _entry_methods(cls):
                         interp = CsInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                         interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                        fr = CFrame(cf, cls, interp.make_this(cls, cf), 0)
+                        fr = CFrame(cf, cls, coverage.safe_this(interp, cls, cf), 0)
                         try:
                             interp.bind_entry(m, fr, action_cls and _is_public(m))
                             body = m.child_by_field_name("body") or next((c for c in m.children if c.type in ("block", "arrow_expression_clause")), None)

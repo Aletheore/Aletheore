@@ -184,7 +184,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                                 return
 
                     interp = Interp(index, {cwe}, sink_hook=hook, annotated_sources=True)
-                    fr = Frame(file=jf, cls=cls, this_obj=interp.make_this(cls, jf), depth=0)
+                    fr = Frame(file=jf, cls=cls, this_obj=coverage.safe_this(interp, cls, jf), depth=0)
                     interp.bind_entry_params(method, fr)
                     try:
                         interp.exec(body, fr)
@@ -206,23 +206,22 @@ def discover_repo(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
     from aletheore.flow.discover_php import discover_php, has_php
     from aletheore.flow.discover_py import discover_python, has_python
 
-    out = discover_java(repo, index, budget_seconds) if has_java(repo) else []
-    if has_python(repo):
-        out += discover_python(repo, None, budget_seconds)
-    if has_javascript(repo):
-        out += discover_javascript(repo, None, budget_seconds)
-    if has_php(repo):
-        out += discover_php(repo, None, budget_seconds)
-    if has_go(repo):
-        out += discover_go(repo, None, budget_seconds)
-    if has_cs(repo):
-        out += discover_cs(repo, None, budget_seconds)
-    if has_rb(repo):
-        out += discover_rb(repo, None, budget_seconds)
-    if has_kt(repo):
-        out += discover_kt(repo, None, budget_seconds)
-    if has_rs(repo):
-        out += discover_rs(repo, None, budget_seconds)
+    out: list[dict] = []
+    steps = [("Java", has_java, lambda: discover_java(repo, index, budget_seconds)),
+             ("Python", has_python, lambda: discover_python(repo, None, budget_seconds)),
+             ("JavaScript/TypeScript", has_javascript, lambda: discover_javascript(repo, None, budget_seconds)),
+             ("PHP", has_php, lambda: discover_php(repo, None, budget_seconds)),
+             ("Go", has_go, lambda: discover_go(repo, None, budget_seconds)),
+             ("C#", has_cs, lambda: discover_cs(repo, None, budget_seconds)),
+             ("Ruby", has_rb, lambda: discover_rb(repo, None, budget_seconds)),
+             ("Kotlin", has_kt, lambda: discover_kt(repo, None, budget_seconds)),
+             ("Rust", has_rs, lambda: discover_rs(repo, None, budget_seconds))]
+    for lang, has, run in steps:
+        try:
+            if has(repo):
+                out += run()
+        except Exception as e:  # one language's failure must not cost the others; it is reported, not silent
+            coverage.note(f"[{lang} files: flow analysis stopped ({type(e).__name__}: {str(e)[:120]})]")
     return sorted(out, key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
 

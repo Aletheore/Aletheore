@@ -175,7 +175,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                         break
                     interp = PhpInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                    this = interp.make_this(cls, pf) if cls is not None else None
+                    this = coverage.safe_this(interp, cls, pf) if cls is not None else None
                     fr = PFrame(pf, cls, this, 0)
                     try:
                         if fn is None:

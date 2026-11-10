@@ -48,6 +48,7 @@ class ClassInfo:
     methods: dict[str, list[Node]] = field(default_factory=dict)
     ctors: list[Node] = field(default_factory=list)
     field_inits: dict[str, Node | None] = field(default_factory=dict)
+    field_types: dict[str, str] = field(default_factory=dict)  # declared type of each field (simple name)
     static_finals: set[str] = field(default_factory=set)
 
 
@@ -91,6 +92,7 @@ def _collect(node: Node, jf: JavaFile, outer: ClassInfo | None, out: list[ClassI
                             if decl.type == "variable_declarator":
                                 fname = _text(decl.child_by_field_name("name"))
                                 info.field_inits[fname] = decl.child_by_field_name("value")
+                                info.field_types[fname] = simple_type_name(_text(member.child_by_field_name("type")))
                                 if "static" in mods and "final" in mods:
                                     info.static_finals.add(fname)
             out.append(info)

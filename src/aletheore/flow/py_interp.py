@@ -772,6 +772,10 @@ class PyInterp:
                     return self._run_function(m[0].file, m[1], m[0], recv, args, kw, fr)
             if recv.type_name == "file" and name in ("read", "readline", "readlines", "write", "close", "seek", "__enter__", "__exit__"):
                 return UNKNOWN
+            if recv.type_name == "Path" and name in ("resolve", "absolute", "expanduser", "joinpath", "with_name", "with_suffix",
+                                                     "with_stem", "relative_to_x"):
+                # still a path, still built from the same data: resolving collapses `..` but checks nothing
+                return Obj(type_name="Path", fields={"v": self._combine(recv.fields.get("v", UNKNOWN), *args)})
             return self._opaque(recv, args + list(kw.values()))
         if isinstance(recv, ListV):
             return self._list_method(recv, name, args, fr)
@@ -812,7 +816,7 @@ class PyInterp:
             if consts:
                 try:
                     return Const(s.format(*[a.value for a in args], **{k: v.value for k, v in kw.items()}))
-                except (IndexError, KeyError, ValueError, AttributeError):
+                except Exception:  # "{:.2f}".format(None) is a TypeError; any failure means "a string we cannot compute"
                     return SAFE
             return self._combine(recv, *args, *kw.values())
         if name == "join" and args:
@@ -1037,11 +1041,21 @@ class PyInterp:
         args = [c for c in (call.child_by_field_name("arguments").named_children if call.child_by_field_name("arguments") is not None else [])]
         if len(args) != 1 or not self._untainted(args[0], fr):
             return None
-        if meth == "startswith" and obj is not None and obj.type == "identifier":
+        if meth == "startswith" and obj is not None and obj.type in ("identifier", "call"):
+            # `target.startswith(root + os.sep)`; a prefix without a trailing separator lets `/srv/upload` pass a
+            # check against `/srv/up`, so it proves nothing
+            if obj.type == "call" and _t(obj.child_by_field_name("function")) == "str" and obj.child_by_field_name("arguments") is not None \
+                    and len(obj.child_by_field_name("arguments").named_children) == 1:
+                obj = obj.child_by_field_name("arguments").named_children[0]
+            if obj.type != "identifier" or not G.prefix_has_separator(_t(args[0])):
+                return None
             name = _t(obj)
             if re.search(rb"\b" + re.escape(name.encode()) + rb"\s*=[^=\n]*\b(realpath|abspath|resolve)\b", fr.file.src):
                 return name
             return None
+        if meth == "is_relative_to" and obj is not None and obj.type == "identifier" \
+                and re.search(rb"\b" + re.escape(_t(obj).encode()) + rb"\s*=[^=\n]*\b(realpath|abspath|resolve)\b", fr.file.src):
+            return _t(obj)  # component-wise check: no prefix confusion
         if meth == "is_relative_to" and obj is not None and self._CANON_RX.search(_t(obj)):
             for c in obj.named_children if obj.type != "call" else [obj]:
                 inner = c

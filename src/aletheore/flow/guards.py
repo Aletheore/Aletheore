@@ -105,6 +105,15 @@ CANON_CALLS = r"(GetFullPath|getCanonicalPath|getCanonicalFile|toRealPath|normal
 STARTS = {"StartsWith", "startsWith", "HasPrefix", "start_with?", "starts_with", "startswith"}
 
 
+_SEPARATOR = re.compile(r"""(\bsep\b|separator|PathSeparator|DirectorySeparatorChar|SEPARATOR|["']/["']|["']\\\\["']|/["']\s*\)?\s*$)""")
+
+
+def prefix_has_separator(text: str) -> bool:
+    """The prefix a containment check compares against ends in a path separator (`root + os.sep`, `dest + File.separator`,
+    `base + path.sep`, `"/srv/up/"`): without it, `/srv/upload/x` passes a check against `/srv/up`."""
+    return _SEPARATOR.search(text) is not None
+
+
 def canonical_assignment(src: bytes, var: str, extra: str = "") -> bool:
     """True when the variable is assigned from a canonicalising call somewhere in the file (`target = Path.GetFullPath(...)`).
     `extra` adds language-specific canonicalisers (Node's `path.resolve`, which collapses `..`)."""
@@ -201,10 +210,14 @@ class GuardEngine:
             if len(ops) == 2:
                 x, prefix = ops[0], ops[1]
                 v = self.local(x)
-                if v and prefix is not None and self.untainted(prefix) and self.canon(v):
+                xt = x.text.decode("utf-8", "replace") if x is not None and hasattr(x, "text") else ""
+                # Path-typed checks compare whole components (java.nio / Kotlin Path.startsWith, Rust Path::starts_with)
+                component = name == "starts_with" or re.search(r"(normalize|toRealPath)\(", xt) is not None
+                sep_ok = prefix is not None and (component or prefix_has_separator(prefix.text.decode("utf-8", "replace") if hasattr(prefix, "text") else ""))
+                if v and sep_ok and self.untainted(prefix) and self.canon(v):
                     return ({v + "@canon"}, set())  # a canonical path that starts with the fixed root stays inside it
                 cv = self._canon_receiver(x)
-                if cv and prefix is not None and self.untainted(prefix):
+                if cv and sep_ok and self.untainted(prefix):
                     return ({cv + "@canon"}, set())  # out.canonicalPath.startsWith(root): the check is on out's canonical form
             return EMPTY
         if name in MATCHES:

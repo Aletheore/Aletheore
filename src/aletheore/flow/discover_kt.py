@@ -158,7 +158,7 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                         for fn in fns:
                             interp = KtInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                             interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                            fr = KFrame(kf, cls, interp.make_this(cls, kf) if cls.name != "<main>" else None, 0)
+                            fr = KFrame(kf, cls, coverage.safe_this(interp, cls, kf) if cls.name != "<main>" else None, 0)
                             try:
                                 interp.bind_entry(fn, fr, _is_action(cls, fn))
                                 body = next((c for c in fn.children if c.type == "function_body"), None)
