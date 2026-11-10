@@ -6,7 +6,7 @@ export function Prose({ children, className }: { children: React.ReactNode; clas
 
 export function Callout({ title, children, tone = "plain" }: { title: string; children: React.ReactNode; tone?: "plain" | "warn" }) {
   return (
-    <aside className={cn("border p-5", tone === "warn" ? "border-stamp/40 bg-stamp-soft" : "border-line bg-raised")}>
+    <aside className={cn("border p-5", tone === "warn" ? "border-needs/50 bg-needs-soft" : "border-line bg-raised")}>
       <h3 className="font-display text-[13.5px] font-bold">{title}</h3>
       <div className="mt-2 max-w-[74ch] text-[13.5px] leading-[1.7] text-muted">{children}</div>
     </aside>

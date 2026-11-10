@@ -38,7 +38,7 @@ export function Hero() {
         />
         <aside
           aria-label="A real resolved path from a historical Aletheore repository scan"
-          className="crop-marks absolute bottom-2 left-0 w-[min(100%,300px)] border border-line bg-raised/95 p-4 shadow-[0_18px_40px_rgba(22,20,15,0.08)] md:-left-6"
+          className="crop-marks absolute bottom-2 left-0 w-[min(100%,300px)] border border-line bg-raised/95 p-4 shadow-[0_18px_40px_rgba(0,0,0,0.5)] md:-left-6"
         >
           <p className="eyebrow mb-2">Resolved to code</p>
           <p className="font-display text-[13px] font-semibold">{endpoint.value}</p>

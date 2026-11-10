@@ -25,7 +25,7 @@ export function Header() {
     <header
       className={cn(
         "sticky top-0 z-40 border-b border-line bg-paper/90 backdrop-blur transition-shadow",
-        scrolled && "shadow-[0_12px_34px_rgba(22,20,15,0.08)]",
+        scrolled && "shadow-[0_12px_34px_rgba(0,0,0,0.5)]",
       )}
     >
       <nav aria-label="Main" className="mx-auto flex max-w-[1080px] items-center justify-between px-8 py-[18px]">
