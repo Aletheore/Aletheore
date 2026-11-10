@@ -360,7 +360,7 @@ Internal services accessible only within your Render account. Not exposed to the
 - **No public URL**: Only accessible via internal DNS
 - **Internal networking**: Fast, low-latency connections
 - **Port binding required**: Must bind to `0.0.0.0:$PORT`
-- **Private DNS**: `[service-name].render-internal.com`
+- **Internal address**: Get it from the service dashboard or via `fromService` (`hostport`); never hardcode or guess a hostname
 - **Same-account only**: Only accessible from same account
 - **No internet access**: Traffic stays within Render network
 
@@ -378,12 +378,14 @@ startCommand: npm start
 
 From other services in the same account:
 
+Read the private service's address from an environment variable populated
+with a service reference (below) rather than hardcoding a hostname:
+
 ```javascript
-// Use .render-internal.com domain
-const API_URL = 'http://internal-api.render-internal.com:10000';
+const API_URL = process.env.INTERNAL_API_URL;
 ```
 
-Or use service references:
+Service reference:
 
 ```yaml
 services:
@@ -400,7 +402,7 @@ services:
 
 ### Best Practices
 
-1. **Use internal DNS**: Always use `.render-internal.com` domains
+1. **Use service references**: Inject the internal address with `fromService` (`hostport`); do not hardcode or invent hostnames
 
 2. **No authentication needed**: Already isolated to account
 
