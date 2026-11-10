@@ -16,7 +16,7 @@ from aletheore.flow.rs_sinks import (
     EXTRACTORS, PASS_METHODS, REQUEST_BENIGN, REQUEST_TYPES, SAFE_METHODS, SAFE_PARAM_TYPES, SANITIZERS,
 )
 from aletheore.flow.values import (
-    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, ClosureV, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 from aletheore.scanner.graph import RUST_LANGUAGE
 
@@ -134,6 +134,7 @@ class RsInterp:
         self.probe_keys: set[tuple] = set()
         self.dead: list[tuple] = []
         self._active: set[tuple] = set()
+        self._outs: dict[int, str] | None = None
         self._frag = 0
 
     # ------------------------------------------------------------------ helpers
@@ -259,7 +260,7 @@ class RsInterp:
         if t == "generic_function":
             return self.eval(n.child_by_field_name("function"), fr)
         if t == "closure_expression":
-            return UNKNOWN
+            return ClosureV(n, fr.file, dict(fr.env))  # runs where it is invoked, with what it captured
         return UNKNOWN
 
     def _ident(self, name: str, fr: SFrame) -> Val:
@@ -522,7 +523,13 @@ class RsInterp:
             name = _t(fn)
             args = self._args(n, fr)
             self._hook(n, name, "", args, None, fr)
-            return self._unqualified(name, args, fr)
+            if isinstance(fr.env.get(name), ClosureV):
+                return self._invoke(fr.env[name], args, fr)
+            self._outs = self._mut_refs(n)
+            try:
+                return self._unqualified(name, args, fr)
+            finally:
+                self._outs = None
         if fn.type == "scoped_identifier":
             path, name = _t(fn.child_by_field_name("path")), _t(fn.child_by_field_name("name"))
             args = self._args(n, fr)
@@ -715,6 +722,36 @@ class RsInterp:
         return self._opaque(m, args)
 
     # --- closures & functions
+    @staticmethod
+    def _mut_refs(call: Node) -> dict[int, str] | None:
+        """Positions of `&mut name` arguments: what the callee writes through them lands back in `name`."""
+        an = call.child_by_field_name("arguments")
+        out = {}
+        for i, a in enumerate(an.named_children if an is not None else []):
+            if a.type == "reference_expression" and any(c.type == "mutable_specifier" for c in a.children):
+                v = a.child_by_field_name("value") or (a.named_children[-1] if a.named_children else None)
+                if v is not None and v.type == "identifier":
+                    out[i] = _t(v)
+        return out or None
+
+    def _invoke(self, clo: ClosureV, args: list[Val], fr: SFrame) -> Val:
+        """Call a closure value: its captures are visible, and writes to variables of the calling frame stick."""
+        key = (id(clo.file), clo.node.start_byte, "closure")
+        if key in self._active or fr.depth + 1 > self.MAX_DEPTH:
+            return self._opaque(None, args)
+        outer = fr.env
+        fr.env = {**clo.env, **outer}
+        self._active.add(key)
+        try:
+            res = self._run_closure(clo.node, args, fr)
+        finally:
+            self._active.discard(key)
+            inner, fr.env = fr.env, outer
+            for k in outer:
+                if k in inner:
+                    outer[k] = inner[k]
+        return res
+
     def _run_closure(self, cl: Node | None, params: list[Val], fr: SFrame) -> Val:
         if cl is None:
             return UNKNOWN
@@ -751,8 +788,11 @@ class RsInterp:
         if fr.depth + 1 > self.MAX_DEPTH or key in self._active:
             return self._opaque(recv, args)
         inner = SFrame(cls.file, cls, recv, fr.depth + 1)
+        outs, self._outs = self._outs, None
+        back: dict[str, str] = {}  # callee parameter -> caller variable, for `&mut` arguments
         pn = fn.child_by_field_name("parameters")
         pos = list(args)
+        k = 0
         for p in (pn.named_children if pn is not None else []):
             if p.type == "self_parameter":
                 if assoc and pos:
@@ -762,12 +802,18 @@ class RsInterp:
                 v = pos.pop(0) if pos else UNKNOWN
                 for nm in _pattern_names(p.child_by_field_name("pattern")):
                     inner.env[nm] = v
+                    if outs and k in outs:
+                        back[nm] = outs[k]
+                k += 1
         body = fn.child_by_field_name("body")
         self._active.add(key)
         try:
             self.exec(body, inner)
         finally:
             self._active.discard(key)
+        for pnm, var in back.items():
+            if pnm in inner.env:
+                fr.env[var] = join(fr.env[var], inner.env[pnm]) if (fr.branch > 0 and var in fr.env) else inner.env[pnm]
         return join_all(inner.rets + [inner.last]) if inner.rets else inner.last
 
     def bind_entry(self, fn: Node, fr: SFrame, action: bool) -> None:

@@ -17,14 +17,25 @@ def negate(f: Facts) -> Facts:
     return (f[1], f[0])
 
 
+def _meet(x: set, y: set) -> set:
+    """What holds when either side's facts hold. A plain fact (`v` is safe for everything) implies every qualified
+    fact on the same variable (`v@canon`, `v#..`), so `v` on one side and `v@canon` on the other leaves `v@canon`."""
+    out = x & y
+    for f in x | y:
+        q = min((i for i in (f.find("@"), f.find("#")) if i > 0), default=-1)
+        if q > 0 and ((f in x and f[:q] in y) or (f in y and f[:q] in x)):
+            out.add(f)
+    return out
+
+
 def both(a: Facts, b: Facts) -> Facts:
     """Facts for `a && b`: true means both true; false means at least one false."""
-    return (a[0] | b[0], a[1] & b[1])
+    return (a[0] | b[0], _meet(a[1], b[1]))
 
 
 def either(a: Facts, b: Facts) -> Facts:
     """Facts for `a || b`: true means at least one true; false means both false."""
-    return (a[0] & b[0], a[1] | b[1])
+    return (_meet(a[0], b[0]), a[1] | b[1])
 
 
 _ALLOWED_CLASS = ("a-z", "A-Z", "0-9", "\\w", "\\d", "_", "-", " ", "$", "\\-", "\\_")
@@ -88,9 +99,11 @@ CANON_CALLS = r"(GetFullPath|getCanonicalPath|getCanonicalFile|toRealPath|normal
 STARTS = {"StartsWith", "startsWith", "HasPrefix", "start_with?", "starts_with", "startswith"}
 
 
-def canonical_assignment(src: bytes, var: str) -> bool:
-    """True when the variable is assigned from a canonicalising call somewhere in the file (`target = Path.GetFullPath(...)`)."""
-    return re.search(rb"\b" + re.escape(var.encode()) + rb"\b\s*(:=|=)[^;\n]*" + CANON_CALLS.encode(), src) is not None
+def canonical_assignment(src: bytes, var: str, extra: str = "") -> bool:
+    """True when the variable is assigned from a canonicalising call somewhere in the file (`target = Path.GetFullPath(...)`).
+    `extra` adds language-specific canonicalisers (Node's `path.resolve`, which collapses `..`)."""
+    calls = CANON_CALLS if not extra else CANON_CALLS[:-1] + "|" + extra + ")"
+    return re.search(rb"\b" + re.escape(var.encode()) + rb"\b\s*(:=|=)[^;\n]*" + calls.encode(), src) is not None
 
 
 EQUALS = {"equals", "Equals", "equalsIgnoreCase", "EqualsIgnoreCase", "contentEquals", "EqualFold", "eql?", "equal?", "casecmp?", "isEqualTo"}

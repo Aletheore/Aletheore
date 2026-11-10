@@ -613,7 +613,7 @@ class RbInterp:
             return self._call_unqualified(name, args, fr, n, block)
         recv_text = _t(recv_n)
         args = self._args(args_n, fr)
-        if self._sanitizer(name):
+        if self._sanitizer(name) or (78 in self.cwes and recv_text in ("Shellwords", "::Shellwords") and name in ("escape", "join", "shellescape", "shelljoin")):
             self.eval(recv_n, fr)
             if block is not None:
                 self._run_block(block, [UNKNOWN], fr)

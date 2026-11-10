@@ -38,13 +38,27 @@ _EXTRA_SKIP = {".worktrees", ".repowise"}
 MAX_FILES = 6000
 
 
+_NEXT_VERBS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+_HARD_SKIP = {"node_modules", "dist", "build", "coverage", "__tests__", "test", "tests", "spec", "e2e", "vendor", "bower_components",
+              ".next", ".nuxt", "cypress", "storybook"}
+
+
+def _next_server_file(parts: tuple[str, ...]) -> bool:
+    """Next.js server code that runs on the backend even inside a `frontend`/`client` package: App Router
+    `app/**/route.ts` handlers and Pages Router `pages/api/**` handlers."""
+    stem = parts[-1].rsplit(".", 1)[0]
+    return ("app" in parts[:-1] and stem == "route") or any(parts[i] == "pages" and parts[i + 1] == "api" for i in range(len(parts) - 2))
+
+
 def _js_files(repo: Path) -> list[Path]:
     skip = set(IGNORED_DIRS) | _EXTRA_SKIP | _SKIP_PARTS
+    hard = set(IGNORED_DIRS) | _EXTRA_SKIP | _HARD_SKIP
     out: list[Path] = []
     for p in repo.rglob("*"):
         if p.suffix not in _EXTS or p.name.endswith((".min.js", ".d.ts")) or ".test." in p.name or ".spec." in p.name:
             continue
-        if skip.intersection(p.relative_to(repo).parts):
+        parts = p.relative_to(repo).parts
+        if skip.intersection(parts) and not (_next_server_file(parts) and not hard.intersection(parts)):
             continue
         out.append(p)
         if len(out) >= MAX_FILES:
@@ -84,6 +98,23 @@ def _route_handlers(jf: JsFile):
         stack.extend(n.children)
 
 
+def _next_route_handlers(jf: JsFile):
+    """Exported App Router handlers: `export async function GET(request, context)` or `export const POST = async (...) => ...`."""
+    for st in jf.root.named_children:
+        if st.type != "export_statement":
+            continue
+        for d in st.named_children:
+            if d.type == "function_declaration" and d.child_by_field_name("name") is not None \
+                    and d.child_by_field_name("name").text.decode("utf-8", "replace") in _NEXT_VERBS:
+                yield d
+            elif d.type in ("lexical_declaration", "variable_declaration"):
+                for v in d.named_children:
+                    nm, val = v.child_by_field_name("name"), v.child_by_field_name("value")
+                    if v.type == "variable_declarator" and nm is not None and val is not None and val.type in FN_TYPES \
+                            and nm.text.decode("utf-8", "replace") in _NEXT_VERBS:
+                        yield val
+
+
 def _request_like(fn) -> bool:
     return request_like(fn)
 
@@ -121,8 +152,9 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
         if jf is None:
             continue
         handlers = list(_route_handlers(jf))
-        handler_ids = {id(h) for h in handlers}
-        entries = [(None, False)] + [(h, True) for h in handlers]
+        nexts = list(_next_route_handlers(jf)) if _next_server_file(path.relative_to(repo).parts) else []
+        handler_ids = {id(h) for h in handlers} | {id(h) for h in nexts}
+        entries = [(None, False)] + [(h, True) for h in handlers] + [(h, "next") for h in nexts]
         seen_entries = set(handler_ids)
         # Enclosing functions (a handler factory or constructor) build the scope their handlers close over.
         for fn in list(jf.functions.values()):
@@ -164,6 +196,12 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                                 record(node, fr, f"a whole request object passed as the query to {name}")
                                 return
                     return
+                if not recv_text and name in fr.file.requires:
+                    # `import { createReadStream } from "fs"` / `const { exec } = require("child_process")`
+                    mod, orig = fr.file.requires[name]
+                    if isinstance(mod, str) and mod.removeprefix("node:").split("/")[0] in ("fs", "fs-extra", "child_process"):
+                        recv_text = "fs" if mod.removeprefix("node:").startswith("fs") else "child_process"
+                        name = orig if orig and orig != "default" else name
                 positions = sink_args(_cwe, name, recv_text, len(args))
                 if not positions:
                     return

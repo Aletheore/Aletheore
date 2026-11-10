@@ -16,7 +16,7 @@ from aletheore.flow.kt_sinks import (
     PARAM_ANNOTATIONS, PURE_TYPES, REQUEST_TYPES, SAFE_METHODS, SAFE_PARAM_TYPES, SANITIZERS, SERVLET_BENIGN,
 )
 from aletheore.flow.values import (
-    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, ClosureV, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 
 LOOP_FUNS = {"forEach", "map", "filter", "flatMap", "mapNotNull", "forEachIndexed", "mapIndexed", "let", "also", "apply", "run", "with", "takeIf", "takeUnless", "use",
@@ -195,7 +195,9 @@ class KtInterp:
                  "do_while_statement", "block", "control_structure_body", "statements"):
             self.exec(n, fr)
             return fr.last
-        if t == "lambda_literal" or t == "anonymous_function":
+        if t == "lambda_literal":
+            return ClosureV(n, fr.file, dict(fr.env))  # runs where it is invoked, with what it captured
+        if t == "anonymous_function":
             return UNKNOWN
         if t in ("annotated_lambda",):
             return UNKNOWN
@@ -500,6 +502,8 @@ class KtInterp:
         return None
 
     def _unqualified(self, name: str, args: list[Val], fr: KFrame, lam: Node | None, node: Node) -> Val:
+        if isinstance(fr.env.get(name), ClosureV):
+            return self._invoke(fr.env[name], args, fr)
         if fr.cls is not None:
             hit = self._find_fn(fr.cls, name)
             if hit is not None:
@@ -595,6 +599,8 @@ class KtInterp:
     def _method(self, recv: Val, name: str, args: list[Val], fr: KFrame, recv_n: Node | None, lam: Node | None) -> Val:
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, fr, recv_n, lam) for a in recv.alts)
+        if isinstance(recv, ClosureV) and name == "invoke":
+            return self._invoke(recv, args, fr)
         if isinstance(recv, Obj):
             if recv.kind == "request":
                 return SAFE if name in SERVLET_BENIGN else Tainted("request." + name)
@@ -739,6 +745,24 @@ class KtInterp:
         return self._opaque(m, args)
 
     # --- lambdas & functions
+    def _invoke(self, clo: ClosureV, args: list[Val], fr: KFrame) -> Val:
+        """Call a lambda value: its captured variables are visible, and writes to variables of the calling frame stick."""
+        key = (id(clo.file), clo.node.start_byte, "lambda")
+        if key in self._active or fr.depth + 1 > self.MAX_DEPTH:
+            return self._opaque(None, args)
+        outer = fr.env
+        fr.env = {**clo.env, **outer}
+        self._active.add(key)
+        try:
+            res = self._run_lambda(clo.node, args, fr)
+        finally:
+            self._active.discard(key)
+            inner, fr.env = fr.env, outer
+            for k in outer:
+                if k in inner:
+                    outer[k] = inner[k]
+        return res
+
     def _run_lambda(self, lam: Node | None, params: list[Val], fr: KFrame) -> Val:
         if lam is None:
             return UNKNOWN
@@ -1115,7 +1139,13 @@ class KtInterp:
                         fr.env[nm] = elem
             else:
                 self.eval(n.child_by_field_name("condition"), fr)
-            self.exec(next((c for c in n.named_children if c.type in ("block", "control_structure_body")), None), fr)
+            body = next((c for c in n.named_children if c.type in ("block", "control_structure_body")), None)
+            if body is None:
+                # a brace-less body (`for (i in xs) x = y`) is the statement after the closing parenthesis
+                rp = [c for c in n.children if c.type == ")"]
+                if rp and n.type != "do_while_statement":
+                    body = next((c for c in n.named_children if c.start_byte > rp[-1].end_byte), None)
+            self.exec(body, fr)
         finally:
             fr.branch -= 1
         self._join_envs(fr, base, fr.env)

@@ -239,17 +239,24 @@ class JsInterp:
         return self._combine(*parts)
 
     def _name(self, name: str, fr: JFrame) -> Val:
-        if name in fr.env:
+        if name in fr.env and not (fr.env[name] is UNKNOWN and name in fr.file.requires):
             return fr.env[name]
         if name == "undefined":
             return Const(None)
         c = fr.file.constants.get(name)
         if c is not None:
             return self.eval(c, JFrame(fr.file, None, None, fr.depth + 1))
-        return UNKNOWN
+        req = fr.file.requires.get(name)
+        if req and isinstance(req[0], str) and req[0].removeprefix("node:").startswith("path") and req[1] in ("sep", "delimiter"):
+            return SAFE  # `const { sep } = require("path")`
+        return fr.env.get(name, UNKNOWN)
 
     def _member(self, n: Node, fr: JFrame) -> Val:
         obj_n, prop = n.child_by_field_name("object"), _t(n.child_by_field_name("property"))
+        if obj_n is not None and _t(obj_n) == "process.env" and "process" not in fr.env:
+            return SAFE  # deployment configuration, not request data
+        if obj_n is not None and _t(obj_n) == "path" and prop in ("sep", "delimiter") and "path" not in fr.env:
+            return SAFE
         base = self.eval(obj_n, fr)
         if isinstance(base, Obj):
             if base.kind == "request":
@@ -551,7 +558,9 @@ class JsInterp:
         for i, name in enumerate(names):
             if not name:
                 continue
-            if name in REQ_NAMES or (route and i == 0):
+            if route == "next" and i == 1:  # App Router context: `params` holds the dynamic path segments
+                fr.env[name] = Obj(kind="request", type_name="NextContext")
+            elif name in REQ_NAMES or (route and i == 0):
                 fr.env[name] = Obj(kind="request", type_name="Request")
             elif name in KOA_ROOT:
                 fr.env[name] = Obj(kind="request", type_name="KoaContext")
@@ -610,6 +619,9 @@ class JsInterp:
             return self._run_symbol(hit, args, fr)
         if name in SAFE_RESULT:
             return SAFE
+        req = fr.file.requires.get(name) if fr.file is not None else None
+        if req and isinstance(req[0], str) and req[0].removeprefix("node:") in ("path", "path/posix", "path/win32") and req[1] in PURE_PATH:
+            return self._opaque(None, args, pure=True)  # `const { resolve } = require("path")`
         if name == "require":
             return Obj(type_name="module")
         if name in ("String", "decodeURIComponent", "decodeURI", "unescape", "atob", "btoa"):
@@ -952,7 +964,8 @@ class JsInterp:
                     return (local(first), prop)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr)
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr,
+                             canon=lambda var: G.canonical_assignment(fr.file.src, var, r"\bresolve\("))
 
     def _narrow(self, names: set, fr: JFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)
