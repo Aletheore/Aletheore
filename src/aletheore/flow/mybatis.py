@@ -82,16 +82,18 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
         jf = index.file(p)
         if jf is None:
             continue
+        pkg = _scope(jf)[0]
         for cls in jf.classes:
             if cls.node.type != "interface_declaration":
                 continue
-            ifaces[cls.name] = {nm: ms[0] for nm, ms in cls.methods.items() if ms}
+            fqn = _fqn(cls, pkg)
+            ifaces[fqn] = {nm: ms[0] for nm, ms in cls.methods.items() if ms}
             for nm, ms in cls.methods.items():
                 for m in ms:
                     sql = _annotation_sql(m)
                     names = set(_DOLLAR.findall(sql)) if sql else set()
                     if names:
-                        out.setdefault(cls.name, {})[nm] = _positions(names, _params(m))
+                        out.setdefault(fqn, {})[nm] = _positions(names, _params(m))
     # every mapper XML first: a statement can include a `<sql>` fragment from another mapper's namespace
     mappers: list[tuple[Path, str, list[tuple[str, str, str]]]] = []
     fragments: dict[str, list[tuple[str, str]]] = {}  # "namespace.id" -> [(namespace, body)]
@@ -117,7 +119,10 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
             if kind == "sql" and fid:
                 fragments.setdefault(_fragment_key(fid.group(1), ns.group(1)), []).append((ns.group(1), body))
     for p, namespace, stmts in (mappers if any_dollar else []):
-        iface = namespace.split(".")[-1]
+        iface = namespace.replace("$", ".")
+        if iface not in ifaces:  # a namespace written without the package: the one interface of that simple name
+            same = [f for f in ifaces if f.rsplit(".", 1)[-1] == iface.rsplit(".", 1)[-1]]
+            iface = same[0] if len(same) == 1 else iface
         for kind, attrs, body in stmts:
             if kind == "sql":
                 continue
@@ -138,7 +143,61 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
         for iface, methods in ifaces.items():
             for m in methods:
                 out["*methods*"].setdefault(m, set()).add(iface)
+        # simple name -> qualified names, so a receiver typed `UserMapper` is resolved against the caller's package
+        out["*simple*"] = {}
+        # (every mapper XML namespace too, safe ones included: its interface may carry no MyBatis marker)
+        known = set(ifaces) | {k for k in out if not k.startswith("*")} | {ns.replace("$", ".") for _, ns, _ in mappers}
+        for fqn in known:
+            out["*simple*"].setdefault(fqn.rsplit(".", 1)[-1], set()).add(fqn)
     return out
+
+
+def _fqn(cls, pkg: str) -> str:
+    parts = []
+    while cls is not None:
+        parts.append(cls.name)
+        cls = cls.outer
+    return ".".join(([pkg] if pkg else []) + parts[::-1])
+
+
+_SCOPES: dict = {}
+
+
+def _scope(jf) -> tuple[str, dict[str, str], list[str]]:
+    """(package, single-type imports by simple name, on-demand import packages) of a Java file."""
+    key = getattr(jf, "path", None)
+    if key in _SCOPES and _SCOPES[key][0] is jf:
+        return _SCOPES[key][1]
+    pkg, single, wild = "", {}, []
+    for child in jf.root.children:
+        text = _t(child).strip().rstrip(";").strip()
+        if child.type == "package_declaration":
+            pkg = re.sub(r"\s+", "", text[len("package"):])
+        elif child.type == "import_declaration" and not re.match(r"import\s+static\b", text):
+            name = re.sub(r"\s+", "", text[len("import"):])
+            if name.endswith(".*"):
+                wild.append(name[:-2])
+            else:
+                single[name.rsplit(".", 1)[-1]] = name
+    _SCOPES[key] = (jf, (pkg, single, wild))
+    return pkg, single, wild
+
+
+def _resolve_type(recv_type: str, cands: set[str], jf) -> set[str]:
+    """Which mapper interfaces a receiver type can be, by Java's own rules: a single-type import, then the caller's
+    package, then on-demand imports. When the caller does not settle it, every candidate (unknown means keep)."""
+    if "." in recv_type:  # written qualified
+        return {recv_type} & cands or cands
+    if jf is None or len(cands) == 1 and next(iter(cands)) == recv_type:
+        return cands
+    pkg, single, wild = _scope(jf)
+    if recv_type in single:
+        return {single[recv_type]} & cands  # imported from elsewhere: not one of these mappers
+    local = f"{pkg}.{recv_type}" if pkg else recv_type
+    if local in cands:
+        return {local}
+    on_demand = {f"{w}.{recv_type}" for w in wild} & cands
+    return on_demand or cands
 
 
 _INCLUDE = re.compile(r"<include\b([^>]*?)(?:/>|>(.*?)</include\s*>)", re.S)
@@ -212,12 +271,22 @@ def _expand_includes(body: str, ns_stmt: str, ns_here: str, ctx: dict[str, str],
     return _INCLUDE.sub(one, body)
 
 
-def positions(table: dict[str, dict[str, list[int]]], name: str, recv_type: str | None, recv_text: str) -> list[int] | None:
-    """Sink positions for a call `recv.name(...)` on a mapper, or None."""
+def positions(table: dict[str, dict[str, list[int]]], name: str, recv_type: str | None, recv_text: str,
+              caller=None) -> list[int] | None:
+    """Sink positions for a call `recv.name(...)` on a mapper, or None. `caller` is the calling JavaFile: two
+    mappers with one simple name in different packages are told apart by its package and imports."""
     every = table.get("*methods*", {})
     if recv_type:
-        return table[recv_type].get(name) if recv_type in table and recv_type != "*methods*" else None
-    owners = [(i, m[name]) for i, m in table.items() if i != "*methods*" and name in m]
+        simple = recv_type.rsplit(".", 1)[-1]
+        cands = table.get("*simple*", {}).get(simple, set())
+        hit: set[int] = set()
+        found = False
+        for fqn in _resolve_type(recv_type, cands, caller) if cands else ():
+            if fqn in table and name in table[fqn]:
+                hit.update(table[fqn][name])
+                found = True
+        return sorted(hit) if found else None
+    owners = [(i, m[name]) for i, m in table.items() if not i.startswith("*") and name in m]
     low = recv_text.lower()
     # the receiver's type is unknown: only a method name that no other mapper declares, on a mapper-looking receiver
     if len(owners) == 1 and len(every.get(name, {owners[0][0]})) == 1 and any(h in low for h in ("mapper", "dao", "repository", "repo")):

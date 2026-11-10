@@ -1,4 +1,4 @@
-"""Regressions for Codex pass-3 defects D-30 to D-38 and the D-4 visibility follow-up."""
+"""Regressions for Codex pass-3 defects D-30 to D-39 and the D-4 visibility follow-up."""
 from pathlib import Path
 
 from aletheore.flow.discover import discover_repo
@@ -173,3 +173,57 @@ def test_d38_unqualified_include_uses_the_local_fragment(tmp_path):
     assert _mb(tmp_path, '<sql id="inner"> ORDER BY ${sort} </sql>\n'
                '<select id="search">SELECT * FROM u <include refid="inner"/></select>',
                '<sql id="inner"> ORDER BY id </sql>') == [3]
+
+
+UNSAFE_MAPPER = ('package {pkg};\nimport org.apache.ibatis.annotations.*;\n'
+                 'public interface UserMapper {{ @Select("SELECT * FROM u ORDER BY ${{sort}}") Object search(@Param("sort") String sort); }}\n')
+SAFE_MAPPER = ('package {pkg};\nimport org.apache.ibatis.annotations.*;\n'
+               'public interface UserMapper {{ @Select("SELECT * FROM u WHERE id = #{{sort}}") Object search(@Param("sort") String sort); }}\n')
+
+
+def _ctl(pkg: str, imports: str = "") -> str:
+    return (f'package {pkg};\nimport javax.servlet.http.HttpServletRequest;\n{imports}'
+            'class Controller { UserMapper userMapper;\n'
+            ' Object search(HttpServletRequest req) { return userMapper.search(req.getParameter("sort")); }\n}\n')
+
+
+def _sqli(tmp_path: Path) -> list[str]:
+    return sorted(f["path"] for f in discover_repo(tmp_path) if f["rule_id"].endswith("sql-injection"))
+
+
+def test_d39_same_named_mappers_in_two_packages(tmp_path):
+    _write(tmp_path, {"alpha/UserMapper.java": UNSAFE_MAPPER.format(pkg="alpha"), "alpha/Controller.java": _ctl("alpha"),
+                      "beta/UserMapper.java": SAFE_MAPPER.format(pkg="beta"), "beta/Controller.java": _ctl("beta")})
+    assert _sqli(tmp_path) == ["alpha/Controller.java"]
+
+
+def test_d39_single_type_import_picks_the_mapper(tmp_path):
+    _write(tmp_path, {"alpha/UserMapper.java": UNSAFE_MAPPER.format(pkg="alpha"),
+                      "beta/UserMapper.java": SAFE_MAPPER.format(pkg="beta"),
+                      "web/A.java": _ctl("web", "import alpha.UserMapper;\n").replace("class Controller", "class A"),
+                      "web2/B.java": _ctl("web2", "import beta.UserMapper;\n").replace("class Controller", "class B")})
+    assert _sqli(tmp_path) == ["web/A.java"]
+
+
+def test_d39_on_demand_import_picks_the_mapper(tmp_path):
+    _write(tmp_path, {"alpha/UserMapper.java": UNSAFE_MAPPER.format(pkg="alpha"),
+                      "beta/UserMapper.java": SAFE_MAPPER.format(pkg="beta"),
+                      "web/A.java": _ctl("web", "import beta.*;\n").replace("class Controller", "class A")})
+    assert _sqli(tmp_path) == []
+
+
+def test_d39_unresolvable_receiver_keeps_the_finding(tmp_path):
+    # neither imported nor in the caller's package: the type is unknown, so the unsafe candidate is kept
+    _write(tmp_path, {"alpha/UserMapper.java": UNSAFE_MAPPER.format(pkg="alpha"),
+                      "beta/UserMapper.java": SAFE_MAPPER.format(pkg="beta"),
+                      "web/A.java": _ctl("web").replace("class Controller", "class A")})
+    assert _sqli(tmp_path) == ["web/A.java"]
+
+
+def test_d39_xml_namespace_is_matched_by_qualified_name(tmp_path):
+    iface = 'package {pkg};\npublic interface UserMapper {{ Object search(String sort); }}\n'
+    _write(tmp_path, {"alpha/UserMapper.java": iface.format(pkg="alpha"), "alpha/Controller.java": _ctl("alpha"),
+                      "beta/UserMapper.java": iface.format(pkg="beta"), "beta/Controller.java": _ctl("beta"),
+                      "alpha/UserMapper.xml": '<mapper namespace="alpha.UserMapper"><select id="search">SELECT * FROM u ORDER BY ${sort}</select></mapper>',
+                      "beta/UserMapper.xml": '<mapper namespace="beta.UserMapper"><select id="search">SELECT * FROM u WHERE id = #{sort}</select></mapper>'})
+    assert _sqli(tmp_path) == ["alpha/Controller.java"]

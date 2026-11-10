@@ -134,7 +134,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                                                      "" if name == "<init>" else (recv_text or recv_type or ""), len(args), args)
                             ext = positions is not None
                             if positions is None and _cwe == 89 and mapper_sql:
-                                positions = mybatis_positions(mapper_sql, name, recv_type, recv_text)
+                                positions = mybatis_positions(mapper_sql, name, recv_type, recv_text, getattr(fr, "file", None))
                                 positions = [i for i in positions if i < len(args)] if positions else None
                             if positions is None:
                                 return
