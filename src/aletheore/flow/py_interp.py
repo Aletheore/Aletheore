@@ -1070,6 +1070,14 @@ class PyInterp:
                     return _t(inner)
         return None
 
+    @staticmethod
+    def _unwrap_str(n: Node) -> Node:
+        """`str(target)` / `os.fspath(target)` is the same path as `target` for a containment check."""
+        while n is not None and n.type == "call" and _t(n.child_by_field_name("function")) in ("str", "os.fspath", "fspath") \
+                and n.child_by_field_name("arguments") is not None and len(n.child_by_field_name("arguments").named_children) == 1:
+            n = n.child_by_field_name("arguments").named_children[0]
+        return n
+
     def _commonpath_check(self, operands, fr: PFrame) -> str | None:
         """`os.path.commonpath([root, target]) == root`: target is inside root."""
         for call, other in ((operands[0], operands[1]), (operands[1], operands[0])):
@@ -1078,7 +1086,8 @@ class PyInterp:
             lst = call.child_by_field_name("arguments").named_children[0] if call.child_by_field_name("arguments") is not None and call.child_by_field_name("arguments").named_children else None
             if lst is None or lst.type not in ("list", "tuple"):
                 continue
-            items = [c for c in lst.named_children]
+            items = [self._unwrap_str(c) for c in lst.named_children]
+            other = self._unwrap_str(other)
             if len(items) == 2 and self._untainted(other, fr) and _t(other) in (_t(items[0]), _t(items[1])):
                 tgt = items[1] if _t(items[0]) == _t(other) else items[0]
                 if tgt.type == "identifier" and re.search(rb"\b" + re.escape(_t(tgt).encode()) + rb"\s*=[^=\n]*\b(realpath|abspath|resolve)\b", fr.file.src):

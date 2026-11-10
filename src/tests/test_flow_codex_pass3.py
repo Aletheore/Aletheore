@@ -66,3 +66,26 @@ def test_d4_kept_duplicate_says_flow_also_found_it():
     flow = {"tool": "aletheore-flow", "path": "a.py", "line": 4, "cwe": ["CWE-78"]}
     kept = _drop_duplicate_flow_findings([bandit, flow])
     assert kept == [bandit] and bandit["also_found_by"] == ["aletheore-flow"]
+
+
+def test_d33_commonpath_on_str_paths_is_a_containment_check(tmp_path):
+    guard = '            if os.path.commonpath([str(root), str(target)]) != str(root):\n                raise ValueError("x")\n'
+    _write(tmp_path, {"x.py": "import os\n" + ZIP % guard})
+    assert not [f for f in discover_repo(tmp_path) if f["rule_id"].endswith("path-traversal")]
+
+
+def test_d33_commonprefix_is_character_based_and_still_reported(tmp_path):
+    guard = '            if os.path.commonprefix([str(root), str(target)]) != str(root):\n                raise ValueError("x")\n'
+    _write(tmp_path, {"x.py": "import os\n" + ZIP % guard})
+    assert [f for f in discover_repo(tmp_path) if f["rule_id"].endswith("path-traversal")]
+
+
+def test_d34_mybatis_dollar_in_an_included_sql_fragment(tmp_path):
+    _write(tmp_path, {
+        "UserMapper.java": "interface UserMapper {\n  Object search(String sort);\n}\n",
+        "UserMapper.xml": ('<mapper namespace="UserMapper">\n  <sql id="orderFragment"> ORDER BY ${sort} </sql>\n'
+                           '  <select id="search">SELECT * FROM users <include refid="orderFragment"/></select>\n</mapper>\n'),
+        "Handler.java": ('import javax.servlet.http.HttpServletRequest;\nclass Handler {\n  UserMapper userMapper;\n'
+                         '  Object a(HttpServletRequest r) { return userMapper.search(r.getParameter("s")); }\n}\n'),
+    })
+    assert [f["line"] for f in discover_repo(tmp_path) if f["rule_id"].endswith("sql-injection")] == [4]

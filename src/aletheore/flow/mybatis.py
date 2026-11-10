@@ -106,7 +106,15 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
         if not ns:
             continue
         iface = ns.group(1).split(".")[-1]
-        for _kind, attrs, body in _STMT.findall(text):
+        fragments = {}
+        for kind, attrs, body in _STMT.findall(text):
+            fid = _ID.search(attrs)
+            if kind == "sql" and fid:
+                fragments[fid.group(1)] = body
+        for kind, attrs, body in _STMT.findall(text):
+            if kind == "sql":
+                continue
+            body = _expand_includes(body, fragments)
             mid = _ID.search(attrs)
             names = set(_DOLLAR.findall(body))
             if mid and names:
@@ -119,6 +127,17 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
             for m in methods:
                 out["*methods*"].setdefault(m, set()).add(iface)
     return out
+
+
+_INCLUDE = re.compile(r"<include\b[^>]*\brefid\s*=\s*[\"']([^\"']+)[\"'][^>]*?(?:/>|>.*?</include\s*>)", re.S)
+
+
+def _expand_includes(body: str, fragments: dict[str, str], depth: int = 0) -> str:
+    """Inline `<include refid="x"/>` with the `<sql id="x">` fragment it names (nested includes too), so a `${}` in a
+    shared fragment is seen in every statement that includes it."""
+    if depth > 5 or "<include" not in body:
+        return body
+    return _INCLUDE.sub(lambda m: _expand_includes(fragments.get(m.group(1).split(".")[-1], ""), fragments, depth + 1), body)
 
 
 def positions(table: dict[str, dict[str, list[int]]], name: str, recv_type: str | None, recv_text: str) -> list[int] | None:
