@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow import guards as G
 from aletheore.flow.cs_index import CsClass, CsFile, CsIndex
 from aletheore.flow.cs_sinks import PURE_TYPES, REQUEST_PROPS, SAFE_METHODS, SANITIZERS
@@ -70,6 +71,13 @@ def _declarator_value(d: Node) -> tuple[str, Node | None]:
     return name, val
 
 
+def _zip_archive(fr) -> Obj:
+    """A zip archive: each entry's FullName/Name is chosen by whoever made the archive (zip slip)."""
+    e = Tainted("archive.entry")
+    entry = Obj(type_name="ZipArchiveEntry", fields={"FullName": e, "Name": e})
+    return Obj(type_name="ZipArchive", fields={"Entries": ListV([entry], birth_depth=fr.branch)})
+
+
 class CsInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
@@ -99,8 +107,8 @@ class CsInterp:
         if n is not None:
             self.dead.append(self._key(fr, n))
 
-    def _sanitizer(self, name: str) -> bool:
-        return any(name in SANITIZERS.get(c, ()) for c in self.cwes)
+    def _sanitizer(self, name: str, recv: str = "") -> bool:
+        return any(name in SANITIZERS.get(c, ()) for c in self.cwes) or _X.sanitizes("csharp", self.cwes, name, recv)
 
     @staticmethod
     def _combine(*vals: Val) -> Val:
@@ -438,7 +446,7 @@ class CsInterp:
             expr, name = func.child_by_field_name("expression"), _t(func.child_by_field_name("name"))
             recv_text = _t(expr)
             args = self._args(args_n, fr)
-            if self._sanitizer(name):
+            if self._sanitizer(name, recv_text):
                 self.eval(expr, fr)
                 return SAFE
             cname = None
@@ -515,6 +523,8 @@ class CsInterp:
         return self._opaque(None, args)
 
     def _static_call(self, cname: str, name: str, args: list[Val], fr: CFrame) -> Val:
+        if cname == "ZipFile" and name in ("OpenRead", "Open"):
+            return _zip_archive(fr)
         cls = self.index.cls(cname, fr.file)
         if cls is not None:
             hit = self._find_method(cls, name, len(args))
@@ -659,6 +669,8 @@ class CsInterp:
         tname = _t(type_n).split("<")[0].split(".")[-1]
         args = self._args(n.child_by_field_name("arguments"), fr)
         self._hook(n, "<new>", tname, args, None, fr)
+        if tname == "ZipArchive":
+            return _zip_archive(fr)
         if tname in ("List", "ArrayList", "HashSet", "Queue", "Stack", "Collection", "LinkedList", "SortedSet"):
             return ListV(list(args[0].items) if args and isinstance(args[0], ListV) else [], birth_depth=fr.branch,
                          dirty=bool(args and not isinstance(args[0], (ListV, Const))))
@@ -897,7 +909,7 @@ class CsInterp:
                     return (local(inner), nm)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, canon=lambda var: G.canonical_assignment(fr.file.src, var))
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, canon=lambda var: G.canonical_assignment(fr.file.src, var), untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted")
 
     def _guard_facts(self, cond: Node | None, fr: CFrame):
         return self._engine(fr).facts(cond)

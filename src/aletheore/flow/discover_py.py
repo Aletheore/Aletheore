@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from aletheore.flow import coverage
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.py_index import PyFile, PyIndex
 from aletheore.flow.py_interp import BudgetExceeded, PFrame, PyInterp
@@ -31,6 +32,9 @@ _SINK_WORDS = {
     918: (b"requests", b"urlopen", b"httpx", b"urllib", b"aiohttp", b"session"),
     601: (b"redirect", b"HttpResponseRedirect", b"RedirectResponse"),
 }
+for _c in _X.rule_classes("python"):  # the shared catalogue's method names
+    _SINK_WORDS[_c] = tuple(_SINK_WORDS.get(_c, ())) + _X.prefilter_words("python", _c)
+_MASS_METHODS = {"create", "update", "get_or_create", "update_or_create", "bulk_create", "insert", "upsert", "filter_by_x"}
 _ENTRY_WORDS = (b"request", b"route(", b"sys.argv", b"input(", b"argparse", b"@app", b"@router", b"api_view", b"Flask(", b"Blueprint", b"FastAPI")
 _EXTRA_SKIP = {".worktrees", ".repowise", "site-packages", "migrations"}
 MAX_FILES = 6000
@@ -102,88 +106,112 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
     found: dict[tuple, dict] = {}
     files = _py_files(repo)
     present = classes_present(files, _SINK_WORDS)
-    for path in files:
-        if time.monotonic() - started > budget_seconds:
-            break
-        try:
-            data = path.read_bytes()
-        except OSError:
-            continue
-        entry_file = any(w in data for w in _ENTRY_WORDS)
-        cwes = [c for c in DISCOVER_CWES_PY if c in present] if entry_file else [c for c in DISCOVER_CWES_PY if any(w in data for w in _SINK_WORDS[c])]
-        if not cwes:
-            continue
-        pf = index.file(path)
-        if pf is None:
-            continue
-        for cwe in cwes:
-            slug, label = CWE_NAMES_PY[cwe]
+    core_budget = budget_seconds
+    # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
+    # bounded extra slice, so a large repository never loses a core finding to the time the added classes take.
+    for phase in (0, 1):
+        budget_seconds = core_budget if phase == 0 else core_budget * 1.4
+        for path in files:
+            if time.monotonic() - started > budget_seconds:
+                break
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            entry_file = any(w in data for w in _ENTRY_WORDS)
+            cwes = [c for c in DISCOVER_CWES_PY if c in present and _X.local_ok(c, data, _SINK_WORDS, "python")] if entry_file else [c for c in DISCOVER_CWES_PY if any(w in data for w in _SINK_WORDS[c])]
+            cwes = [c for c in cwes if _X.added("python", c) == (phase == 1)]
+            if not cwes:
+                continue
+            pf = index.file(path)
+            if pf is None:
+                continue
+            for cwe in cwes:
+                slug, label = CWE_NAMES_PY[cwe]
 
-            def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
-                rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
-                line = node.start_point[0] + 1
-                found.setdefault((rel, line, _cwe), {
-                    "tool": "aletheore-flow", "rule_id": f"flow.python.{_slug}", "severity": SEVERITY_PY[_cwe],
-                    "type": "vulnerability", "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                    "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                               "Found by following the value through the code, including calls into other functions and modules.",
-                })
+                def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
+                    rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
+                    line = node.start_point[0] + 1
+                    found.setdefault((rel, line, _cwe), {
+                        "tool": "aletheore-flow", "rule_id": f"flow.python.{_slug}", "severity": SEVERITY_PY[_cwe],
+                        "type": "vulnerability", "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
+                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                   "Found by following the value through the code, including calls into other functions and modules.",
+                    })
 
-            def sink(node, name, recv_text, args, kw, recv, fr, _cwe=cwe):
-                recv_tainted = isinstance(recv, Obj) and recv.type_name == "Path" and classify(recv) == "tainted"
-                positions = sink_args(_cwe, name, recv_text, len(args), kw, recv_tainted)
-                if positions is None:
-                    return
-                if not positions and recv_tainted:
-                    positions = [-1]
-                for i in positions:
-                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
-                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
-                    value = recv if i == -1 else args[i] if i < len(args) else None
-                    if value is None:
-                        continue
-                    if _cwe == 78 and hasattr(value, "items") and not (isinstance(kw.get("shell"), type(args[0])) and getattr(kw.get("shell"), "value", False) is True):
-                        items = value.items
-                        hit = bool(items) and classify(items[0]) == "tainted"
-                    elif _cwe in (501, 79):
-                        hit = _tainted_string(value)
-                    else:
-                        hit = classify(value) == "tainted"
-                    if hit:
-                        record(node, fr, f"{'receiver' if i == -1 else 'argument ' + str(i + 1)} of {name}")
+                def sink(node, name, recv_text, args, kw, recv, fr, _cwe=cwe):
+                    if _cwe == 470 and name == "getattr" and not recv_text and len(args) >= 2 and _tainted_string(args[1]) \
+                            and node.parent is not None and node.parent.type == "call" and node.parent.child_by_field_name("function") == node:
+                        record(node, fr, "getattr with a request-chosen name, then called")
                         return
+                    if _cwe == 915:
+                        if "**" in kw and _X.whole_body(kw["**"]) and (name[:1].isupper() or name in _MASS_METHODS):
+                            record(node, fr, f"every request field passed as keyword arguments to {name}")
+                        return
+                    recv_tainted = isinstance(recv, Obj) and recv.type_name == "Path" and classify(recv) == "tainted"
+                    positions = sink_args(_cwe, name, recv_text, len(args), kw, recv_tainted)
+                    ext = False
+                    if positions is None:  # the shared catalogue, for a string built from request data
+                        positions = _X.sink_args("python", _cwe, name, recv_text, len(args), args)
+                        ext = positions is not None
+                        if positions is None:
+                            return
+                    if not positions and recv_tainted:
+                        positions = [-1]
+                    for i in positions:
+                        if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
+                            continue  # a fixed scheme://host/ prefix: only the path is attacker data
+                        value = recv if i == -1 else args[i] if i < len(args) else None
+                        if value is None:
+                            continue
+                        if _cwe == 78 and hasattr(value, "items") and not (isinstance(kw.get("shell"), type(args[0])) and getattr(kw.get("shell"), "value", False) is True):
+                            items = value.items
+                            hit = bool(items) and classify(items[0]) == "tainted"
+                        elif ext:
+                            hit = _X.ext_hit("python", _cwe, name, i, args, _tainted_string, node)
+                        elif _cwe in (501, 79):
+                            hit = _tainted_string(value)
+                        else:
+                            hit = classify(value) == "tainted"
+                        if hit:
+                            record(node, fr, f"{'receiver' if i == -1 else 'argument ' + str(i + 1)} of {name}")
+                            return
 
-            def store(node, base_text, key, value, fr, _cwe=cwe):
-                if _cwe == 501 and base_text.split(".")[-1] == "session" and (_tainted_string(key) or _tainted_string(value)):
-                    record(node, fr, "write to the session")
+                def store(node, base_text, key, value, fr, _cwe=cwe):
+                    if _cwe == 942:
+                        if _X.acao_store(key, value, _tainted_string, node):
+                            record(node, fr, "Access-Control-Allow-Origin set from the request")
+                        return
+                    if _cwe == 501 and base_text.split(".")[-1] == "session" and (_tainted_string(key) or _tainted_string(value)):
+                        record(node, fr, "write to the session")
 
-            fastapi = b"fastapi" in data.lower()
+                fastapi = b"fastapi" in data.lower()
 
-            def returned(node, value, fr, _cwe=cwe, _fastapi=fastapi):
-                if _fastapi and b"HTMLResponse" not in data and b"response_class" not in data:
-                    return  # FastAPI serialises a returned value as JSON, not as an HTML page
-                if _cwe == 79 and fr.route and fr.depth == 0 and _tainted_string(value):
-                    record(node, fr, "value returned as the response body")
+                def returned(node, value, fr, _cwe=cwe, _fastapi=fastapi):
+                    if _fastapi and b"HTMLResponse" not in data and b"response_class" not in data:
+                        return  # FastAPI serialises a returned value as JSON, not as an HTML page
+                    if _cwe == 79 and fr.route and fr.depth == 0 and _tainted_string(value):
+                        record(node, fr, "value returned as the response body")
 
-            interp_args = dict(sink_hook=sink, store_hook=store, return_hook=returned)
-            runs = [(None, None, False)] + [(c, f, r) for c, f, r in _entries(pf, index)]
-            for cls, fnode, route in runs:
-                if time.monotonic() - started > budget_seconds:
-                    break
-                interp = PyInterp(index, {cwe}, **interp_args)
-                interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                self_obj = interp.make_this(cls, pf) if cls is not None else None
-                fr = PFrame(pf, cls, self_obj, 0, route=route)
-                try:
-                    if fnode is None:
-                        interp.exec(pf.root, fr)  # module-level code, once
-                    else:
-                        body = fnode.child_by_field_name("body")
-                        interp.bind_entry(fnode, fr, route)
-                        interp.exec(body, fr)
-                except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
-                    coverage.note(path)
-                    continue
+                interp_args = dict(sink_hook=sink, store_hook=store, return_hook=returned)
+                runs = [(None, None, False)] + [(c, f, r) for c, f, r in _entries(pf, index)]
+                for cls, fnode, route in runs:
+                    if time.monotonic() - started > budget_seconds:
+                        break
+                    interp = PyInterp(index, {cwe}, **interp_args)
+                    interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
+                    self_obj = interp.make_this(cls, pf) if cls is not None else None
+                    fr = PFrame(pf, cls, self_obj, 0, route=route)
+                    try:
+                        if fnode is None:
+                            interp.exec(pf.root, fr)  # module-level code, once
+                        else:
+                            body = fnode.child_by_field_name("body")
+                            interp.bind_entry(fnode, fr, route)
+                            interp.exec(body, fr)
+                    except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
+                        coverage.note(path)
+                        continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
 

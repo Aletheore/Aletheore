@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow import guards as G
 from aletheore.flow.rb_index import RbClass, RbFile, RbIndex, const_name
 from aletheore.flow.rb_sinks import (
@@ -85,6 +86,10 @@ def _arity_range(m: Node) -> tuple[int, int]:
     return lo, hi
 
 
+def _archive_entry() -> Obj:
+    return Obj(type_name="ArchiveEntry")
+
+
 class RbInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
@@ -114,8 +119,8 @@ class RbInterp:
         if n is not None:
             self.dead.append(self._key(fr, n))
 
-    def _sanitizer(self, name: str) -> bool:
-        return any(name in SANITIZERS.get(c, ()) for c in self.cwes)
+    def _sanitizer(self, name: str, recv: str = "") -> bool:
+        return any(name in SANITIZERS.get(c, ()) for c in self.cwes) or _X.sanitizes("ruby", self.cwes, name, recv)
 
     @staticmethod
     def _combine(*vals: Val) -> Val:
@@ -232,9 +237,9 @@ class RbInterp:
             a, b = n.child_by_field_name("begin"), n.child_by_field_name("end")
             return SAFE if all(classify(self.eval(x, fr)) == "safe" for x in (a, b) if x is not None) else UNKNOWN
         if t in ("regex", "lambda_x"):
-            for c in n.named_children:
-                if c.type == "interpolation":
-                    self.eval(c, fr)
+            parts = [self.eval(c, fr) for c in n.named_children if c.type == "interpolation"]
+            if t == "regex" and parts and 1333 in self.cwes and any(classify(p) == "tainted" for p in parts):
+                self._hook(n, "new", "Regexp", [self._combine(*parts)], None, fr)  # /#{x}/ is Regexp.new(x)
             return SAFE if t == "regex" else UNKNOWN
         if t in ("splat_argument", "block_argument", "hash_splat_argument"):
             return self.eval(n.named_children[0], fr) if n.named_children else UNKNOWN
@@ -613,7 +618,7 @@ class RbInterp:
             return self._call_unqualified(name, args, fr, n, block)
         recv_text = _t(recv_n)
         args = self._args(args_n, fr)
-        if self._sanitizer(name) or (78 in self.cwes and recv_text in ("Shellwords", "::Shellwords") and name in ("escape", "join", "shellescape", "shelljoin")):
+        if self._sanitizer(name, recv_text) or (78 in self.cwes and recv_text in ("Shellwords", "::Shellwords") and name in ("escape", "join", "shellescape", "shelljoin")):
             self.eval(recv_n, fr)
             if block is not None:
                 self._run_block(block, [UNKNOWN], fr)
@@ -693,6 +698,12 @@ class RbInterp:
             return SAFE
 
     def _static_call(self, cname: str, name: str, args: list[Val], fr: RFrame, recv_text: str, block: Node | None) -> Val:
+        if recv_text.lstrip(":") in ("Zip::File", "Zip::InputStream", "Gem::Package::TarReader", "Archive::Tar::Minitar::Reader", "Minitar::Reader") \
+                and name in ("open", "new", "open_buffer"):
+            arc = Obj(type_name="Archive")  # rubyzip / RubyGems tar: entry names are chosen by whoever made the archive
+            if block is not None:
+                self._run_block(block, [arc], fr)
+            return arc
         cls = self.index.cls(cname, fr.file)
         if cls is not None:
             if name == "new":
@@ -762,6 +773,15 @@ class RbInterp:
             return self._call_closure(recv, args, fr)
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, fr, recv_n, block) for a in recv.alts)
+        if isinstance(recv, Obj) and recv.type_name == "Archive":
+            if name in ("each", "each_entry", "glob", "entries", "map", "select", "find", "each_with_index") and block is not None:
+                self._run_block(block, [_archive_entry()], fr)
+                return UNKNOWN
+            if name in ("get_next_entry", "find_entry", "get_entry") or (name == "entries" and block is None):
+                return _archive_entry() if name != "entries" else ListV([_archive_entry()], birth_depth=fr.branch)
+        if isinstance(recv, Obj) and recv.type_name == "ArchiveEntry":
+            if name in ("name", "full_name", "to_s", "header_name_x"):
+                return Tainted("archive.entry")
         if isinstance(recv, Obj):
             if recv.kind == "request":
                 if name == "env":
@@ -1235,7 +1255,7 @@ class RbInterp:
                     return (local(first), m)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr)
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted", canon=lambda var: G.canonical_assignment(fr.file.src, var))
 
     def _narrow(self, names: set, fr: RFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)

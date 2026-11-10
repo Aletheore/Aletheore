@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node, Parser
 
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow import guards as G
 from aletheore.flow.rs_index import RsFile, RsIndex, RsType, type_name
 from aletheore.flow.rs_sinks import (
@@ -150,8 +151,8 @@ class RsInterp:
         if n is not None and not self._frag:
             self.dead.append(self._key(fr, n))
 
-    def _sanitizer(self, name: str) -> bool:
-        return any(name in SANITIZERS.get(c, ()) for c in self.cwes)
+    def _sanitizer(self, name: str, recv: str = "") -> bool:
+        return any(name in SANITIZERS.get(c, ()) for c in self.cwes) or _X.sanitizes("rust", self.cwes, name, recv)
 
     @staticmethod
     def _combine(*vals: Val) -> Val:
@@ -539,7 +540,7 @@ class RsInterp:
             recv_n, name = fn.child_by_field_name("value"), _t(fn.child_by_field_name("field"))
             recv_text = _t(recv_n)
             args = self._args_with_closures(n, fr)
-            if self._sanitizer(name):
+            if self._sanitizer(name, recv_text):
                 self.eval(recv_n, fr)
                 return SAFE
             recv = self.eval(recv_n, fr)
@@ -606,6 +607,14 @@ class RsInterp:
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, fr, recv_n, call, turbofish) for a in recv.alts)
         closure = next((c for c in (call.child_by_field_name("arguments").named_children if call.child_by_field_name("arguments") is not None else []) if c.type == "closure_expression"), None)
+        # zip / tar crates: an entry's name is chosen by whoever made the archive (zip slip). mangled_name() and
+        # enclosed_name() are the crate's own safe forms and stay unmodelled.
+        if name in ("by_index", "by_name", "by_index_raw", "by_index_decrypt"):
+            return Obj(type_name="ArchiveEntry")
+        if name == "entries" and recv_n is not None and any(h in _t(recv_n).lower() for h in ("archive", "tar")):
+            return ListV([Obj(type_name="ArchiveEntry")], birth_depth=fr.branch)
+        if isinstance(recv, Obj) and recv.type_name == "ArchiveEntry" and name in ("name", "path", "name_raw", "link_name"):
+            return Tainted("archive.entry")
         if isinstance(recv, Obj):
             if recv.kind == "request":
                 return SAFE if name in REQUEST_BENIGN else Tainted("request." + name)
@@ -1000,7 +1009,7 @@ class RsInterp:
                 return (v, _t(fn.child_by_field_name("field"))) if v else None
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr)
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted", canon=lambda var: G.canonical_assignment(fr.file.src, var))
 
     def _narrow(self, names: set, fr: SFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)

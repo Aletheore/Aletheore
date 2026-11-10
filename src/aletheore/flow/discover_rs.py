@@ -8,6 +8,7 @@ from pathlib import Path
 from tree_sitter import Node
 
 from aletheore.flow import coverage
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.rs_index import RsIndex, RsType, attrs_before, type_name
 from aletheore.flow.rs_interp import BudgetExceeded, RsInterp, SFrame
@@ -24,6 +25,8 @@ _SINK_WORDS = {
     918: (b"reqwest", b"ureq", b"surf", b"isahc", b"attohttpc", b"minreq", b"client", b"Client"),
     94: (b"Library", b"eval", b"engine", b"lua", b"rhai"),
 }
+for _c in _X.rule_classes("rust"):  # the shared catalogue's method names
+    _SINK_WORDS[_c] = tuple(_SINK_WORDS.get(_c, ())) + _X.prefilter_words("rust", _c)
 _ENTRY_WORDS = (b"HttpRequest", b"web::Query", b"web::Path", b"web::Json", b"web::Form", b"Query<", b"Path<", b"Json<", b"Form<", b"#[get", b"#[post", b"#[put", b"#[delete", b"axum", b"rocket", b"warp", b"actix")
 _EXTRA_SKIP = {"target", "tests", "benches", "examples", ".worktrees", ".repowise", "node_modules", "vendor"}
 MAX_FILES = 6000
@@ -74,61 +77,71 @@ def discover_rs(repo: Path, index: RsIndex | None = None, budget_seconds: float 
     found: dict[tuple, dict] = {}
     files = _rs_files(repo)
     present = classes_present(files, _SINK_WORDS)
-    for path in files:
-        if time.monotonic() - started > budget_seconds:
-            break
-        try:
-            data = path.read_bytes()
-        except OSError:
-            continue
-        entry_file = any(w in data for w in _ENTRY_WORDS)
-        cwes = [c for c in DISCOVER_CWES_RS if c in present] if entry_file else [c for c in DISCOVER_CWES_RS if any(w in data for w in _SINK_WORDS[c])]
-        if not cwes:
-            continue
-        rf = index.file(path)
-        if rf is None:
-            continue
-        for cwe in cwes:
-            slug, label = CWE_NAMES_RS[cwe]
+    core_budget = budget_seconds
+    # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
+    # bounded extra slice, so a large repository never loses a core finding to the time the added classes take.
+    for phase in (0, 1):
+        budget_seconds = core_budget if phase == 0 else core_budget * 1.4
+        for path in files:
+            if time.monotonic() - started > budget_seconds:
+                break
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            entry_file = any(w in data for w in _ENTRY_WORDS)
+            cwes = [c for c in DISCOVER_CWES_RS if c in present and _X.local_ok(c, data, _SINK_WORDS, "rust")] if entry_file else [c for c in DISCOVER_CWES_RS if any(w in data for w in _SINK_WORDS[c])]
+            cwes = [c for c in cwes if _X.added("rust", c) == (phase == 1)]
+            if not cwes:
+                continue
+            rf = index.file(path)
+            if rf is None:
+                continue
+            for cwe in cwes:
+                slug, label = CWE_NAMES_RS[cwe]
 
-            def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
-                rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
-                line = node.start_point[0] + 1
-                found.setdefault((rel, line, _cwe), {
-                    "tool": "aletheore-flow", "rule_id": f"flow.rs.{_slug}", "severity": SEVERITY_RS[_cwe], "type": "vulnerability",
-                    "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                    "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                               "Found by following the value through the code, including calls into other functions and types.",
-                })
+                def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
+                    rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
+                    line = node.start_point[0] + 1
+                    found.setdefault((rel, line, _cwe), {
+                        "tool": "aletheore-flow", "rule_id": f"flow.rs.{_slug}", "severity": SEVERITY_RS[_cwe], "type": "vulnerability",
+                        "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
+                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                   "Found by following the value through the code, including calls into other functions and types.",
+                    })
 
-            def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
-                positions = sink_args(_cwe, name, recv_text, len(args))
-                if not positions:
-                    return
-                for i in positions:
-                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
-                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
-                    if i >= len(args):
-                        continue
-                    hit = _tainted_string(args[i]) if _cwe in (79, 601) else classify(args[i]) == "tainted"
-                    if hit:
-                        record(node, fr, f"argument {i + 1} of {recv_text + '.' if recv_text else ''}{name}")
-                        return
-
-            for ty in rf.types:
-                if time.monotonic() - started > budget_seconds:
-                    break
-                for fns in ty.funcs.values():
-                    for fn in fns:
-                        interp = RsInterp(index, {cwe}, sink_hook=sink)
-                        interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                        fr = SFrame(rf, ty, Obj(cls=ty, type_name=ty.name) if ty.name != "<main>" else None, 0)
-                        try:
-                            interp.bind_entry(fn, fr, _is_action(fn))
-                            interp.exec(fn.child_by_field_name("body"), fr)
-                        except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
-                            coverage.note(path)
+                def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
+                    positions = sink_args(_cwe, name, recv_text, len(args))
+                    ext = False
+                    if not positions:  # the shared catalogue, for a string built from request data
+                        positions = _X.sink_args("rust", _cwe, name, recv_text, len(args), args)
+                        ext = bool(positions)
+                        if not positions:
+                            return
+                    for i in positions:
+                        if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
+                            continue  # a fixed scheme://host/ prefix: only the path is attacker data
+                        if i >= len(args):
                             continue
+                        hit = _X.ext_hit("rust", _cwe, name, i, args, _tainted_string, node) if ext else (_tainted_string(args[i]) if _cwe in (79, 601) else classify(args[i]) == "tainted")
+                        if hit:
+                            record(node, fr, f"argument {i + 1} of {recv_text + '.' if recv_text else ''}{name}")
+                            return
+
+                for ty in rf.types:
+                    if time.monotonic() - started > budget_seconds:
+                        break
+                    for fns in ty.funcs.values():
+                        for fn in fns:
+                            interp = RsInterp(index, {cwe}, sink_hook=sink)
+                            interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
+                            fr = SFrame(rf, ty, Obj(cls=ty, type_name=ty.name) if ty.name != "<main>" else None, 0)
+                            try:
+                                interp.bind_entry(fn, fr, _is_action(fn))
+                                interp.exec(fn.child_by_field_name("body"), fr)
+                            except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
+                                coverage.note(path)
+                                continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
 

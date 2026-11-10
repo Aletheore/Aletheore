@@ -9,6 +9,7 @@ from tree_sitter import Node
 
 from aletheore.flow.go_index import GoFile, GoIndex
 from aletheore.flow import coverage
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.go_interp import BudgetExceeded, GFrame, GoInterp
 from aletheore.flow.go_sinks import CWE_NAMES_GO, DISCOVER_CWES_GO, SEVERITY_GO, sink_args
@@ -28,6 +29,8 @@ _SINK_WORDS = {
     502: (b"yaml.", b"gob."),
     501: (b".Values["),
 }
+for _c in _X.rule_classes("go"):  # the shared catalogue's method names
+    _SINK_WORDS[_c] = tuple(_SINK_WORDS.get(_c, ())) + _X.prefilter_words("go", _c)
 _ENTRY_WORDS = (b"http.Request", b"gin.Context", b"echo.Context", b"fiber.Ctx", b"os.Args", b"fasthttp", b"iris.Context", b"mux.Vars", b"chi.URLParam")
 _EXTRA_SKIP = {"vendor", "testdata", ".worktrees", ".repowise", "node_modules", "third_party"}
 MAX_FILES = 6000
@@ -69,74 +72,88 @@ def discover_go(repo: Path, index: GoIndex | None = None, budget_seconds: float 
     found: dict[tuple, dict] = {}
     files = _go_files(repo)
     present = classes_present(files, _SINK_WORDS)
-    for path in files:
-        if time.monotonic() - started > budget_seconds:
-            break
-        try:
-            data = path.read_bytes()
-        except OSError:
-            continue
-        entry_file = any(w in data for w in _ENTRY_WORDS)
-        cwes = [c for c in DISCOVER_CWES_GO if c in present] if entry_file else [c for c in DISCOVER_CWES_GO if any(w in data for w in _SINK_WORDS[c])]
-        if not cwes:
-            continue
-        gf = index.file(path)
-        if gf is None:
-            continue
-        for cwe in cwes:
-            slug, label = CWE_NAMES_GO[cwe]
+    core_budget = budget_seconds
+    # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
+    # bounded extra slice, so a large repository never loses a core finding to the time the added classes take.
+    for phase in (0, 1):
+        budget_seconds = core_budget if phase == 0 else core_budget * 1.4
+        for path in files:
+            if time.monotonic() - started > budget_seconds:
+                break
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            entry_file = any(w in data for w in _ENTRY_WORDS)
+            cwes = [c for c in DISCOVER_CWES_GO if c in present and _X.local_ok(c, data, _SINK_WORDS, "go")] if entry_file else [c for c in DISCOVER_CWES_GO if any(w in data for w in _SINK_WORDS[c])]
+            cwes = [c for c in cwes if _X.added("go", c) == (phase == 1)]
+            if not cwes:
+                continue
+            gf = index.file(path)
+            if gf is None:
+                continue
+            for cwe in cwes:
+                slug, label = CWE_NAMES_GO[cwe]
 
-            def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
-                rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
-                line = node.start_point[0] + 1
-                found.setdefault((rel, line, _cwe), {
-                    "tool": "aletheore-flow", "rule_id": f"flow.go.{_slug}", "severity": SEVERITY_GO[_cwe], "type": "vulnerability",
-                    "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                    "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                               "Found by following the value through the code, including calls into other functions and packages.",
-                })
+                def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
+                    rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
+                    line = node.start_point[0] + 1
+                    found.setdefault((rel, line, _cwe), {
+                        "tool": "aletheore-flow", "rule_id": f"flow.go.{_slug}", "severity": SEVERITY_GO[_cwe], "type": "vulnerability",
+                        "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
+                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                   "Found by following the value through the code, including calls into other functions and packages.",
+                    })
 
-            def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
-                first_const = args[0].value if args and isinstance(args[0], Const) and isinstance(args[0].value, str) else None
-                positions = sink_args(_cwe, name, recv_text, len(args), first_const)
-                if not positions:
-                    return
-                if _cwe == 79:
-                    writer = args[0] if recv_text.split(".")[-1] in ("fmt", "io") and args else recv
-                    if not (isinstance(writer, Obj) and (writer.type_name == "ResponseWriter" or writer.kind == "request")):
+                def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
+                    first_const = args[0].value if args and isinstance(args[0], Const) and isinstance(args[0].value, str) else None
+                    positions = sink_args(_cwe, name, recv_text, len(args), first_const)
+                    ext = False
+                    if not positions:  # the shared catalogue, for a string built from request data
+                        positions = _X.sink_args("go", _cwe, name, recv_text, len(args), args)
+                        ext = bool(positions)
+                        if not positions:
+                            return
+                    if _cwe == 79:
+                        writer = args[0] if recv_text.split(".")[-1] in ("fmt", "io") and args else recv
+                        if not (isinstance(writer, Obj) and (writer.type_name == "ResponseWriter" or writer.kind == "request")):
+                            return
+                        ct = writer.fields.get("_ctype") if isinstance(writer, Obj) else None
+                        if isinstance(ct, Const) and "html" not in str(ct.value):
+                            return
+                    for i in positions:
+                        if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
+                            continue  # a fixed scheme://host/ prefix: only the path is attacker data
+                        if i >= len(args):
+                            continue
+                        hit = _X.ext_hit("go", _cwe, name, i, args, _tainted_string, node) if ext else (_tainted_string(args[i]) if _cwe in (79, 601) else classify(args[i]) == "tainted")
+                        if hit:
+                            record(node, fr, f"argument {i + 1} of {recv_text + '.' if recv_text else ''}{name}")
+                            return
+
+                def store(node, base_text, key, value, fr, _cwe=cwe):
+                    if _cwe == 942:
+                        if _X.acao_store(key, value, _tainted_string, node):
+                            record(node, fr, "Access-Control-Allow-Origin set from the request")
                         return
-                    ct = writer.fields.get("_ctype") if isinstance(writer, Obj) else None
-                    if isinstance(ct, Const) and "html" not in str(ct.value):
-                        return
-                for i in positions:
-                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
-                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
-                    if i >= len(args):
+                    if _cwe == 501 and base_text.endswith(".Values") and (_tainted_string(key) or _tainted_string(value)):
+                        record(node, fr, "write to the session")
+
+                stash: set = set()
+                fns = list(_functions(gf))
+                for step, (rtype, fn) in enumerate(fns + fns):  # a second pass sees state stored by a handler run later
+                    if time.monotonic() - started > budget_seconds or (step >= len(fns) and not stash):
+                        break
+                    interp = GoInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
+                    interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
+                    this = Obj(type_name=rtype) if rtype else None
+                    fr = GFrame(gf, this, 0)
+                    try:
+                        interp.bind_entry(fn, fr)
+                        interp.exec(fn.child_by_field_name("body"), fr)
+                    except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
+                        coverage.note(path)
                         continue
-                    hit = _tainted_string(args[i]) if _cwe in (79, 601) else classify(args[i]) == "tainted"
-                    if hit:
-                        record(node, fr, f"argument {i + 1} of {recv_text + '.' if recv_text else ''}{name}")
-                        return
-
-            def store(node, base_text, key, value, fr, _cwe=cwe):
-                if _cwe == 501 and base_text.endswith(".Values") and (_tainted_string(key) or _tainted_string(value)):
-                    record(node, fr, "write to the session")
-
-            stash: set = set()
-            fns = list(_functions(gf))
-            for step, (rtype, fn) in enumerate(fns + fns):  # a second pass sees state stored by a handler run later
-                if time.monotonic() - started > budget_seconds or (step >= len(fns) and not stash):
-                    break
-                interp = GoInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
-                interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                this = Obj(type_name=rtype) if rtype else None
-                fr = GFrame(gf, this, 0)
-                try:
-                    interp.bind_entry(fn, fr)
-                    interp.exec(fn.child_by_field_name("body"), fr)
-                except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
-                    coverage.note(path)
-                    continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
 

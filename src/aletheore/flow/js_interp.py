@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow import guards as G
 from aletheore.flow.js_index import FN_TYPES, JsClass, JsFile, JsIndex
 from aletheore.flow.js_sinks import KOA_ROOT, REQ_NAMES, REQUEST_METHODS, REQUEST_PROPS, SAFE_RESULT, SANITIZERS
@@ -100,6 +101,12 @@ def _falsy(v: object) -> bool:
     return v is None or v is False or v == 0 or v == ""
 
 
+def _archive_entry() -> Obj:
+    """An archive entry (adm-zip, yauzl, unzipper, tar-stream): its name is chosen by whoever made the archive."""
+    e = Tainted("archive.entry")
+    return Obj(type_name="ArchiveEntry", fields={"entryName": e, "fileName": e, "path": e, "name": e, "linkname": e})
+
+
 class JsInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
@@ -129,8 +136,8 @@ class JsInterp:
         if n is not None:
             self.dead.append(self._key(fr, n))
 
-    def _sanitizer(self, name: str) -> bool:
-        return any(name in SANITIZERS.get(c, ()) for c in self.cwes)
+    def _sanitizer(self, name: str, recv: str = "") -> bool:
+        return any(name in SANITIZERS.get(c, ()) for c in self.cwes) or _X.sanitizes("javascript", self.cwes, name, recv)
 
     @staticmethod
     def _combine(*vals: Val) -> Val:
@@ -455,6 +462,10 @@ class JsInterp:
             idx = self.eval(target.child_by_field_name("index"), fr)
             if self.store_hook is not None:
                 self.store_hook(target, _t(base_n), idx, val, fr)
+                if base_n is not None and base_n.type == "subscript_expression" and classify(idx) == "tainted" \
+                        and classify(self.eval(base_n.child_by_field_name("index"), fr)) == "tainted":
+                    # obj[a][b] = v with both keys from the request: a = "__proto__" writes to Object.prototype
+                    self.store_hook(target, "__proto_pollution__", idx, val, fr)
             if isinstance(base, MapV):
                 self._mutating(fr, base)
                 if isinstance(idx, Const):
@@ -481,22 +492,24 @@ class JsInterp:
         return Tainted("derived") if classify(val) == "tainted" else UNKNOWN
 
     # ------------------------------------------------------------------ calls
-    def _args(self, args_n: Node | None, fr: JFrame) -> list[Val]:
+    def _args(self, args_n: Node | None, fr: JFrame, cb_params: list[Val] | None = None) -> list[Val]:
         out: list[Val] = []
         for c in (args_n.named_children if args_n is not None else []):
             if c.type in FN_TYPES:
-                self._callback(c, fr)
+                self._callback(c, fr, cb_params)
                 out.append(UNKNOWN)
             else:
                 out.append(self.eval(c, fr))
         return out
 
-    def _callback(self, fn: Node, fr: JFrame) -> None:
-        """Run a callback once with the values it captures; its own parameters are unknown."""
+    def _callback(self, fn: Node, fr: JFrame, params: list[Val] | None = None) -> None:
+        """Run a callback once with the values it captures; its own parameters are unknown unless the caller knows them."""
         if fr.depth + 1 > self.MAX_DEPTH or id(fn) in self._active:
             return
         inner = JFrame(fr.file, fr.cls, fr.this_obj, fr.depth + 1, env=dict(fr.env), branch=fr.branch + 1, funcs=dict(fr.funcs))
-        if request_like(fn):
+        if params:
+            self._bind_params(fn, params, inner)
+        elif request_like(fn):
             self.bind_entry(fn, inner, route=False)  # a handler defined in this scope: the request is tainted
         else:
             self._bind_params(fn, [], inner, unknown=True)
@@ -586,8 +599,13 @@ class JsInterp:
         if func.type == "member_expression":
             obj_n, name = func.child_by_field_name("object"), _t(func.child_by_field_name("property"))
             recv_text = _t(obj_n)
-            args = self._args(args_n, fr)
-            if self._sanitizer(name):
+            first = args_n.named_children[0] if args_n is not None and args_n.named_children else None
+            if (name == "on" and first is not None and first.type == "string" and _t(first).strip("'\"`") == "entry") \
+                    or (name in ("forEach", "map", "filter", "some", "every") and recv_text.endswith("getEntries()")):
+                args = self._args(args_n, fr, cb_params=[_archive_entry()])  # yauzl / unzipper / tar-stream / adm-zip entries
+            else:
+                args = self._args(args_n, fr)
+            if self._sanitizer(name, recv_text):
                 return SAFE
             held = fr.env.get(_t(obj_n)) if obj_n is not None and obj_n.type == "identifier" else None
             # A name bound to require("...") is a placeholder module object: it must not hide the index.
@@ -688,6 +706,8 @@ class JsInterp:
     def _method(self, recv: Val, name: str, args: list[Val], fr: JFrame, recv_text: str, node: Node) -> Val:
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, fr, recv_text, node) for a in recv.alts)
+        if name == "getEntries" and not args:
+            return ListV([_archive_entry()], birth_depth=fr.branch)  # adm-zip
         if isinstance(recv, Obj):
             if recv.kind == "request":
                 if name in REQUEST_METHODS:
@@ -965,7 +985,8 @@ class JsInterp:
             return None
 
         return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr,
-                             canon=lambda var: G.canonical_assignment(fr.file.src, var, r"\bresolve\("))
+                             canon=lambda var: G.canonical_assignment(fr.file.src, var, r"\bresolve\("),
+                             untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted")
 
     def _narrow(self, names: set, fr: JFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)

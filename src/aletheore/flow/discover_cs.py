@@ -11,6 +11,7 @@ from aletheore.flow.cs_index import CsClass, CsFile, CsIndex
 from aletheore.flow.cs_interp import BudgetExceeded, CFrame, CsInterp
 from aletheore.flow.cs_sinks import CONTROLLER_BASES, CWE_NAMES_CS, DISCOVER_CWES_CS, SEVERITY_CS, sink_args
 from aletheore.flow import coverage
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
@@ -28,6 +29,8 @@ _SINK_WORDS = {
     94: (b"CompileAssembly", b"Assembly.Load", b"Type.GetType"),
     501: (b"Session[",),
 }
+for _c in _X.rule_classes("csharp"):  # the shared catalogue's method names
+    _SINK_WORDS[_c] = tuple(_SINK_WORDS.get(_c, ())) + _X.prefilter_words("csharp", _c)
 _ENTRY_WORDS = (b"Request", b"Controller", b"[Http", b"[FromQuery", b"[FromBody", b"[FromRoute", b"[FromForm", b"Page_Load", b"PageModel")
 _EXTRA_SKIP = {"obj", "packages", "bin", ".worktrees", ".repowise", "node_modules", "migrations", "Migrations", "Test", "Tests"}
 MAX_FILES = 8000
@@ -82,73 +85,87 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
     found: dict[tuple, dict] = {}
     files = _cs_files(repo)
     present = classes_present(files, _SINK_WORDS)
-    for path in files:
-        if time.monotonic() - started > budget_seconds:
-            break
-        try:
-            data = path.read_bytes()
-        except OSError:
-            continue
-        entry_file = any(w in data for w in _ENTRY_WORDS)
-        cwes = [c for c in DISCOVER_CWES_CS if c in present] if entry_file else [c for c in DISCOVER_CWES_CS if any(w in data for w in _SINK_WORDS[c])]
-        if not cwes:
-            continue
-        cf = index.file(path)
-        if cf is None:
-            continue
-        for cwe in cwes:
-            slug, label = CWE_NAMES_CS[cwe]
+    core_budget = budget_seconds
+    # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
+    # bounded extra slice, so a large repository never loses a core finding to the time the added classes take.
+    for phase in (0, 1):
+        budget_seconds = core_budget if phase == 0 else core_budget * 1.4
+        for path in files:
+            if time.monotonic() - started > budget_seconds:
+                break
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            entry_file = any(w in data for w in _ENTRY_WORDS)
+            cwes = [c for c in DISCOVER_CWES_CS if c in present and _X.local_ok(c, data, _SINK_WORDS, "csharp")] if entry_file else [c for c in DISCOVER_CWES_CS if any(w in data for w in _SINK_WORDS[c])]
+            cwes = [c for c in cwes if _X.added("csharp", c) == (phase == 1)]
+            if not cwes:
+                continue
+            cf = index.file(path)
+            if cf is None:
+                continue
+            for cwe in cwes:
+                slug, label = CWE_NAMES_CS[cwe]
 
-            def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
-                rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
-                line = node.start_point[0] + 1
-                found.setdefault((rel, line, _cwe), {
-                    "tool": "aletheore-flow", "rule_id": f"flow.cs.{_slug}", "severity": SEVERITY_CS[_cwe], "type": "vulnerability",
-                    "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                    "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                               "Found by following the value through the code, including calls into other methods and classes.",
-                })
+                def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
+                    rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
+                    line = node.start_point[0] + 1
+                    found.setdefault((rel, line, _cwe), {
+                        "tool": "aletheore-flow", "rule_id": f"flow.cs.{_slug}", "severity": SEVERITY_CS[_cwe], "type": "vulnerability",
+                        "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
+                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                   "Found by following the value through the code, including calls into other methods and classes.",
+                    })
 
-            def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
-                positions = sink_args(_cwe, name, recv_text, len(args), recv.type_name if isinstance(recv, Obj) else None)
-                if not positions:
-                    return
-                for i in positions:
-                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
-                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
-                    if i >= len(args):
-                        continue
-                    hit = _tainted_string(args[i]) if _cwe in (79, 601) else classify(args[i]) == "tainted"
-                    if hit:
-                        record(node, fr, f"argument {i + 1} of {recv_text + '.' if recv_text else ''}{name}")
+                def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
+                    positions = sink_args(_cwe, name, recv_text, len(args), recv.type_name if isinstance(recv, Obj) else None)
+                    ext = False
+                    if not positions:  # the shared catalogue, for a string built from request data
+                        positions = _X.sink_args("csharp", _cwe, recv_text if name == "<new>" else name, "" if name == "<new>" else recv_text, len(args), args)
+                        ext = bool(positions)
+                        if not positions:
+                            return
+                    for i in positions:
+                        if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
+                            continue  # a fixed scheme://host/ prefix: only the path is attacker data
+                        if i >= len(args):
+                            continue
+                        hit = _X.ext_hit("csharp", _cwe, recv_text if name == "<new>" else name, i, args, _tainted_string, node) if ext else (_tainted_string(args[i]) if _cwe in (79, 601) else classify(args[i]) == "tainted")
+                        if hit:
+                            record(node, fr, f"argument {i + 1} of {recv_text + '.' if recv_text else ''}{name}")
+                            return
+
+                def store(node, base_text, key, value, fr, _cwe=cwe):
+                    if _cwe == 942:
+                        if _X.acao_store(key, value, _tainted_string, node):
+                            record(node, fr, "Access-Control-Allow-Origin set from the request")
                         return
+                    if _cwe == 89 and isinstance(key, Const) and key.value == "CommandText" and classify(value) == "tainted":
+                        record(node, fr, "assigned to CommandText")
+                    elif _cwe == 90 and isinstance(key, Const) and key.value == "Filter" and classify(value) == "tainted" and "Searcher" in base_text.title():
+                        record(node, fr, "assigned to the search filter")
+                    elif _cwe == 501 and base_text.endswith("Session") and (_tainted_string(key) or _tainted_string(value)):
+                        record(node, fr, "write to the session")
 
-            def store(node, base_text, key, value, fr, _cwe=cwe):
-                if _cwe == 89 and isinstance(key, Const) and key.value == "CommandText" and classify(value) == "tainted":
-                    record(node, fr, "assigned to CommandText")
-                elif _cwe == 90 and isinstance(key, Const) and key.value == "Filter" and classify(value) == "tainted" and "Searcher" in base_text.title():
-                    record(node, fr, "assigned to the search filter")
-                elif _cwe == 501 and base_text.endswith("Session") and (_tainted_string(key) or _tainted_string(value)):
-                    record(node, fr, "write to the session")
-
-            for cls in cf.classes:
-                if time.monotonic() - started > budget_seconds:
-                    break
-                action_cls = _is_controller(cls)
-                for m, _ in _entry_methods(cls):
-                    interp = CsInterp(index, {cwe}, sink_hook=sink, store_hook=store)
-                    interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                    fr = CFrame(cf, cls, interp.make_this(cls, cf), 0)
-                    try:
-                        interp.bind_entry(m, fr, action_cls and _is_public(m))
-                        body = m.child_by_field_name("body") or next((c for c in m.children if c.type in ("block", "arrow_expression_clause")), None)
-                        if body is not None and body.type == "arrow_expression_clause":
-                            interp.eval(body.named_children[-1] if body.named_children else None, fr)
-                        else:
-                            interp.exec(body, fr)
-                    except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
-                        coverage.note(path)
-                        continue
+                for cls in cf.classes:
+                    if time.monotonic() - started > budget_seconds:
+                        break
+                    action_cls = _is_controller(cls)
+                    for m, _ in _entry_methods(cls):
+                        interp = CsInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                        interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
+                        fr = CFrame(cf, cls, interp.make_this(cls, cf), 0)
+                        try:
+                            interp.bind_entry(m, fr, action_cls and _is_public(m))
+                            body = m.child_by_field_name("body") or next((c for c in m.children if c.type in ("block", "arrow_expression_clause")), None)
+                            if body is not None and body.type == "arrow_expression_clause":
+                                interp.eval(body.named_children[-1] if body.named_children else None, fr)
+                            else:
+                                interp.exec(body, fr)
+                        except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
+                            coverage.note(path)
+                            continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
 

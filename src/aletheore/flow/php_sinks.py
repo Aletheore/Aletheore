@@ -42,7 +42,7 @@ import re as _re
 
 NAME_SANITIZERS: dict[int, "_re.Pattern[str]"] = {
     89: _re.compile(r"^(quote|backquote|escape|qstr|dbquote|sqlquote)\w*$"),
-    79: _re.compile(r"^(esc_|escape|htmlescape|html_escape|encode_?html|sanitize|purify|xss_)\w*$|^(e|h)$"),
+    79: _re.compile(r"^(esc_|escape|htmlescape|html_escape|encode_?html|encode_?for_?(html|xml|htmlattribute|js|javascript)|sanitize|purify|xss_)\w*$|^(e|h)$"),
     78: _re.compile(r"^(shellescape|escapeshell)\w*$"),
     22: _re.compile(r"^(safe_?filename|sanitize_?file|sanitizefilename)\w*$"),
 }
@@ -139,3 +139,15 @@ def sink_args(cwe: int, name: str, recv: str, argc: int, recv_type: str | None =
             return [0]
         return None
     return None
+
+
+# Weakness classes shared by every language (template injection, regex injection, reflection, expression
+# language, NoSQL), from extra_sinks.
+from aletheore.flow import extra_sinks as _X  # noqa: E402
+
+_X.ADDED["php"] = {c for c in _X.new_classes("php") if c not in DISCOVER_CWES_PHP}
+DISCOVER_CWES_PHP = DISCOVER_CWES_PHP + tuple(c for c in _X.new_classes("php") if c not in DISCOVER_CWES_PHP)
+for _c in _X.new_classes("php"):
+    CWE_NAMES_PHP.setdefault(_c, _X.CLASS_NAMES[_c])
+    SEVERITY_PHP.setdefault(_c, _X.CLASS_SEVERITY[_c])
+    SANITIZERS.setdefault(_c, set())

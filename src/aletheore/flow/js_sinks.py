@@ -107,3 +107,15 @@ def sink_args(cwe: int, name: str, recv: str, argc: int, kw_keys: set[str] | Non
     if cwe == 943:
         return None
     return None
+
+
+# Weakness classes shared by every language (template injection, regex injection, reflection, expression
+# language, NoSQL), from extra_sinks.
+from aletheore.flow import extra_sinks as _X  # noqa: E402
+
+_X.ADDED["javascript"] = {c for c in _X.new_classes("javascript") if c not in DISCOVER_CWES_JS}
+DISCOVER_CWES_JS = DISCOVER_CWES_JS + tuple(c for c in _X.new_classes("javascript") if c not in DISCOVER_CWES_JS)
+for _c in _X.new_classes("javascript"):
+    CWE_NAMES_JS.setdefault(_c, _X.CLASS_NAMES[_c])
+    SEVERITY_JS.setdefault(_c, _X.CLASS_SEVERITY[_c])
+    SANITIZERS.setdefault(_c, set())

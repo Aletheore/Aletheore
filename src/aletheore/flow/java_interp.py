@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow.java_index import ClassInfo, JavaFile, JavaIndex, simple_type_name
 from aletheore.flow import guards as G
 from aletheore.flow.values import (
@@ -47,6 +48,10 @@ BENIGN_RESULT_METHODS = {
     "length", "size", "isEmpty", "equals", "equalsIgnoreCase", "contains", "startsWith", "endsWith",
     "indexOf", "lastIndexOf", "hashCode", "compareTo", "compareToIgnoreCase", "matches", "isBlank",
     "hasNext", "hasMoreElements", "ordinal",
+    # Numbers, booleans and dates read from a result set or a boxed value: no markup, quote or path can ride in them.
+    "getInt", "getLong", "getDouble", "getFloat", "getShort", "getByte", "getBoolean", "getBigDecimal", "getRow",
+    "intValue", "longValue", "doubleValue", "floatValue", "shortValue", "byteValue", "booleanValue", "getColumnCount",
+    "getTimestamp", "getDate",
     # Metadata about the program itself, never request data: `this.getClass().getClassLoader()`, `Foo.class.getName()`.
     "getClass", "getClassLoader", "getSimpleName", "getCanonicalName", "getPackage", "getModifiers",
 }
@@ -157,6 +162,11 @@ def jf_src(fr) -> bytes:
     return fr.file.src
 
 
+# Entries of zip/jar/tar archives: their name is chosen by whoever made the archive.
+ARCHIVE_ENTRY_TYPES = {"ZipEntry", "JarEntry", "TarArchiveEntry", "ZipArchiveEntry", "ArchiveEntry", "SevenZArchiveEntry",
+                       "ArjArchiveEntry", "CpioArchiveEntry", "TarEntry", "FileHeader", "ArArchiveEntry"}
+
+
 class Interp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
@@ -185,8 +195,8 @@ class Interp:
         if node is not None:
             self.dead.append(self._key(fr, node))
 
-    def _sanitizer(self, name: str) -> bool:
-        return any(name in SANITIZERS.get(c, ()) for c in self.cwes)
+    def _sanitizer(self, name: str, recv: str = "") -> bool:
+        return any(name in SANITIZERS.get(c, ()) for c in self.cwes) or _X.sanitizes("java", self.cwes, name, recv)
 
     @staticmethod
     def _combine(*vals: Val) -> Val:
@@ -562,7 +572,7 @@ class Interp:
         name = _t(node.child_by_field_name("name"))
         obj_n = node.child_by_field_name("object")
         args_n = node.child_by_field_name("arguments")
-        if self._sanitizer(name):
+        if self._sanitizer(name, _t(obj_n) if obj_n is not None else ""):
             self._args(args_n, fr)
             if obj_n is not None:
                 self.eval(obj_n, fr)
@@ -582,7 +592,12 @@ class Interp:
             return self._unqualified(name, args, fr)
         recv = self.eval(obj_n, fr)
         args = self._args(args_n, fr)
-        self._hook(node, name, None, self._recv_type(obj_n, recv, fr), _t(obj_n), args, fr, recv)
+        rtype = self._recv_type(obj_n, recv, fr)
+        self._hook(node, name, None, rtype, _t(obj_n), args, fr, recv)
+        if name in ("getName", "getFileName") and not args and rtype in ARCHIVE_ENTRY_TYPES:
+            return Tainted("archive.entry")  # an entry name inside an uploaded or downloaded archive: zip slip
+        if name in ("getNextEntry", "getNextJarEntry", "getNextZipEntry", "getNextTarEntry") and not args:
+            return Obj(type_name="ZipEntry")
         return self._invoke(recv, name, args, fr, node)
 
     def _hook(self, node, name, cname, recv_type, recv_text, args, fr, recv=None) -> None:
@@ -644,7 +659,9 @@ class Interp:
             if name in cls.methods:
                 return self._user_call(cls, cls.methods[name], fr.this_obj, args, fr)
             sup = self.index.resolve_class(cls.superclass, cls.file) if cls.superclass else None
-            while sup is not None:
+            seen = {id(cls)}  # `class Foo extends other.Foo` resolves to itself by simple name: stop, do not spin
+            while sup is not None and id(sup) not in seen:
+                seen.add(id(sup))
                 if name in sup.methods:
                     return self._user_call(sup, sup.methods[name], fr.this_obj, args, fr)
                 sup = self.index.resolve_class(sup.superclass, sup.file) if sup.superclass else None
@@ -1174,6 +1191,17 @@ class Interp:
             return G.EMPTY
         if name == "startsWith" and len(args) == 1 and local(obj) and classify(self.eval(args[0], fr)) == "safe" and G.canonical_assignment(jf_src(fr), local(obj)):
             return ({local(obj) + "@canon"}, set())  # a canonical path that starts with the fixed root stays inside it
+        if name == "startsWith" and len(args) == 1 and obj is not None and obj.type == "method_invocation":
+            # out.getCanonicalPath().startsWith(root): the check is on the canonical form of `out`, against a root the
+            # attacker does not choose (a root built from request data proves nothing)
+            inner = obj
+            canon = False
+            while inner is not None and inner.type == "method_invocation":
+                canon = canon or _t(inner.child_by_field_name("name")) in ("getCanonicalPath", "getCanonicalFile", "toRealPath", "normalize", "getAbsoluteFile_x")
+                inner = inner.child_by_field_name("object")
+            v = local(inner) if inner is not None else None
+            if canon and v and classify(self.eval(args[0], fr)) != "tainted":
+                return ({v + "@canon"}, set())
         if name in ("isNumeric", "isDigits", "isCreatable", "isParsable", "isNumber") and len(args) == 1 and local(args[0]):
             return ({local(args[0])}, set())
         return G.EMPTY
@@ -1321,6 +1349,7 @@ class Interp:
         t = node.type
         if t == "enhanced_for_statement":
             name = _t(node.child_by_field_name("name"))
+            fr.types[name] = simple_type_name(node.child_by_field_name("type"))
             it = self.eval(node.child_by_field_name("value"), fr)
             if isinstance(it, ListV) and not it.items and not it.dirty:
                 return False

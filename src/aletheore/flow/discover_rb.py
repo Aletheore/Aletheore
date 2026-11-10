@@ -8,6 +8,7 @@ from pathlib import Path
 from tree_sitter import Node
 
 from aletheore.flow import coverage
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.rb_index import RbClass, RbFile, RbIndex
 from aletheore.flow.rb_interp import BudgetExceeded, RbInterp, RFrame
@@ -28,6 +29,8 @@ _SINK_WORDS = {
     90: (b"Filter.construct",),
     501: (b"session[",),
 }
+for _c in _X.rule_classes("ruby"):  # the shared catalogue's method names
+    _SINK_WORDS[_c] = tuple(_SINK_WORDS.get(_c, ())) + _X.prefilter_words("ruby", _c)
 _ENTRY_WORDS = (b"params", b"cookies", b"request", b"Controller", b"Sinatra", b"Rack", b"Grape", b"Hanami")
 _EXTRA_SKIP = {"spec", "test", "tests", "vendor", "db", "node_modules", ".worktrees", ".repowise", "tmp", "features", "bin"}
 MAX_FILES = 6000
@@ -88,102 +91,120 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
     found: dict[tuple, dict] = {}
     files = _rb_files(repo)
     present = classes_present(files, _SINK_WORDS)
-    for path in files:
-        if time.monotonic() - started > budget_seconds:
-            break
-        try:
-            data = path.read_bytes()
-        except OSError:
-            continue
-        entry_file = any(w in data for w in _ENTRY_WORDS)
-        cwes = [c for c in DISCOVER_CWES_RB if c in present] if entry_file else [c for c in DISCOVER_CWES_RB if any(w in data for w in _SINK_WORDS[c])]
-        if not cwes:
-            continue
-        rf = index.file(path)
-        if rf is None:
-            continue
-        for cwe in cwes:
-            slug, label = CWE_NAMES_RB[cwe]
+    core_budget = budget_seconds
+    # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
+    # bounded extra slice, so a large repository never loses a core finding to the time the added classes take.
+    for phase in (0, 1):
+        budget_seconds = core_budget if phase == 0 else core_budget * 1.4
+        for path in files:
+            if time.monotonic() - started > budget_seconds:
+                break
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            entry_file = any(w in data for w in _ENTRY_WORDS)
+            cwes = [c for c in DISCOVER_CWES_RB if c in present and _X.local_ok(c, data, _SINK_WORDS, "ruby")] if entry_file else [c for c in DISCOVER_CWES_RB if any(w in data for w in _SINK_WORDS[c])]
+            cwes = [c for c in cwes if _X.added("ruby", c) == (phase == 1)]
+            if not cwes:
+                continue
+            rf = index.file(path)
+            if rf is None:
+                continue
+            for cwe in cwes:
+                slug, label = CWE_NAMES_RB[cwe]
 
-            def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
-                rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
-                line = node.start_point[0] + 1
-                found.setdefault((rel, line, _cwe), {
-                    "tool": "aletheore-flow", "rule_id": f"flow.rb.{_slug}", "severity": SEVERITY_RB[_cwe], "type": "vulnerability",
-                    "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                    "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                               "Found by following the value through the code, including calls into other methods and classes.",
-                })
+                def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
+                    rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
+                    line = node.start_point[0] + 1
+                    found.setdefault((rel, line, _cwe), {
+                        "tool": "aletheore-flow", "rule_id": f"flow.rb.{_slug}", "severity": SEVERITY_RB[_cwe], "type": "vulnerability",
+                        "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
+                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                   "Found by following the value through the code, including calls into other methods and classes.",
+                    })
 
-            def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
-                if name == "render" and not recv_text and args and isinstance(args[-1], MapV):
-                    opts = args[-1].entries
-                    if _cwe == 22 and any(_cond_taint(opts.get(k)) for k in ("file", "template", "partial")):
-                        record(node, fr, "render file/template/partial name")
-                    elif _cwe == 94 and _cond_taint(opts.get("inline")):
-                        record(node, fr, "render inline template")
-                    return
-                first_const = bool(args) and isinstance(args[0], Const)
-                positions = sink_args(_cwe, name, recv_text, len(args), first_const)
-                if not positions:
-                    return
-                if _cwe == 601 and len(args) >= 2 and isinstance(args[-1], MapV) and isinstance(args[-1].entries.get("only_path"), Const) and args[-1].entries["only_path"].value is True:
-                    return
-                if _cwe == 601 and args and isinstance(args[-1], MapV) and isinstance(args[-1].entries.get("allow_other_host"), Const) and args[-1].entries["allow_other_host"].value is False:
-                    return
-                for i in positions:
-                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
-                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
-                    val = recv if i == -1 else (args[i] if i < len(args) else None)
-                    if val is None or isinstance(val, MapV):
-                        continue
-                    if hasattr(val, "items") and not isinstance(val, MapV) and hasattr(val, "dirty") and _cwe == 89:
-                        items = getattr(val, "items", [])
-                        val = items[0] if items else val
-                    hit = _tainted_string(val) if _cwe in (79, 601, 501) else classify(val) == "tainted"
-                    if hit:
-                        record(node, fr, f"argument {i + 1} of {recv_text + '.' if recv_text else ''}{name}" if i >= 0 else f"receiver of {name}")
+                def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
+                    if _cwe == 915:
+                        if name == "permit!" and (recv_text.split(".")[0] in ("params", "request") or (isinstance(recv, Obj) and recv.kind == "request")):
+                            record(node, fr, "params.permit! allows every request field into the model")
                         return
+                    if name == "render" and not recv_text and args and isinstance(args[-1], MapV):
+                        opts = args[-1].entries
+                        if _cwe == 22 and any(_cond_taint(opts.get(k)) for k in ("file", "template", "partial")):
+                            record(node, fr, "render file/template/partial name")
+                        elif _cwe == 94 and _cond_taint(opts.get("inline")):
+                            record(node, fr, "render inline template")
+                        return
+                    first_const = bool(args) and isinstance(args[0], Const)
+                    positions = sink_args(_cwe, name, recv_text, len(args), first_const)
+                    ext = False
+                    if not positions:  # the shared catalogue, for a string built from request data
+                        positions = _X.sink_args("ruby", _cwe, name, recv_text, len(args), args)
+                        ext = bool(positions)
+                        if not positions:
+                            return
+                    if _cwe == 601 and len(args) >= 2 and isinstance(args[-1], MapV) and isinstance(args[-1].entries.get("only_path"), Const) and args[-1].entries["only_path"].value is True:
+                        return
+                    if _cwe == 601 and args and isinstance(args[-1], MapV) and isinstance(args[-1].entries.get("allow_other_host"), Const) and args[-1].entries["allow_other_host"].value is False:
+                        return
+                    for i in positions:
+                        if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
+                            continue  # a fixed scheme://host/ prefix: only the path is attacker data
+                        val = recv if i == -1 else (args[i] if i < len(args) else None)
+                        if val is None or isinstance(val, MapV):
+                            continue
+                        if hasattr(val, "items") and not isinstance(val, MapV) and hasattr(val, "dirty") and _cwe == 89:
+                            items = getattr(val, "items", [])
+                            val = items[0] if items else val
+                        hit = _X.ext_hit("ruby", _cwe, name, i, args, _tainted_string, node) if ext else (_tainted_string(val) if _cwe in (79, 601, 501) else classify(val) == "tainted")
+                        if hit:
+                            record(node, fr, f"argument {i + 1} of {recv_text + '.' if recv_text else ''}{name}" if i >= 0 else f"receiver of {name}")
+                            return
 
-            def store(node, base_text, key, value, fr, _cwe=cwe):
-                if _cwe == 501 and base_text.endswith("session") and (_tainted_string(key) or _tainted_string(value)):
-                    record(node, fr, "write to the session")
+                def store(node, base_text, key, value, fr, _cwe=cwe):
+                    if _cwe == 942:
+                        if _X.acao_store(key, value, _tainted_string, node):
+                            record(node, fr, "Access-Control-Allow-Origin set from the request")
+                        return
+                    if _cwe == 501 and base_text.endswith("session") and (_tainted_string(key) or _tainted_string(value)):
+                        record(node, fr, "write to the session")
 
-            for cls in rf.classes:
-                if time.monotonic() - started > budget_seconds:
-                    break
-                action_cls = _is_controller(cls)
-                entries: list[tuple[Node, bool, bool]] = []
-                for ms in cls.methods.values():
-                    for m in ms:
-                        entries.append((m, action_cls and m.start_byte not in cls.private, False))
-                for ms in cls.smethods.values():
-                    for m in ms:
-                        entries.append((m, False, True))
-                for m, is_action, singleton in entries:
-                    interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
-                    interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                    fr = RFrame(rf, cls, interp.make_this(cls, rf) if not singleton else Obj(cls=cls, type_name=cls.name), 0, singleton=singleton)
-                    try:
-                        interp.bind_entry(m, fr, is_action)
-                        body = m.child_by_field_name("body")
-                        if body is not None:
-                            if body.type in ("body_statement", "begin"):
-                                interp.exec(body, fr)
-                            else:
-                                interp.eval(body, fr)
-                    except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
-                        coverage.note(path)
-                        continue
-                for blk in _sinatra_blocks(cls):
-                    interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
-                    interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                    fr = RFrame(rf, cls, Obj(cls=cls, type_name=cls.name), 0)
-                    try:
-                        _exec_block(interp, blk, fr)
-                    except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
-                        coverage.note(path)
-                        continue
+                for cls in rf.classes:
+                    if time.monotonic() - started > budget_seconds:
+                        break
+                    action_cls = _is_controller(cls)
+                    entries: list[tuple[Node, bool, bool]] = []
+                    for ms in cls.methods.values():
+                        for m in ms:
+                            entries.append((m, action_cls and m.start_byte not in cls.private, False))
+                    for ms in cls.smethods.values():
+                        for m in ms:
+                            entries.append((m, False, True))
+                    for m, is_action, singleton in entries:
+                        interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                        interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
+                        fr = RFrame(rf, cls, interp.make_this(cls, rf) if not singleton else Obj(cls=cls, type_name=cls.name), 0, singleton=singleton)
+                        try:
+                            interp.bind_entry(m, fr, is_action)
+                            body = m.child_by_field_name("body")
+                            if body is not None:
+                                if body.type in ("body_statement", "begin"):
+                                    interp.exec(body, fr)
+                                else:
+                                    interp.eval(body, fr)
+                        except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
+                            coverage.note(path)
+                            continue
+                    for blk in _sinatra_blocks(cls):
+                        interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                        interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
+                        fr = RFrame(rf, cls, Obj(cls=cls, type_name=cls.name), 0)
+                        try:
+                            _exec_block(interp, blk, fr)
+                        except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
+                            coverage.note(path)
+                            continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
 

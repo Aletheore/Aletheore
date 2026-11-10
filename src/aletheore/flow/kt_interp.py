@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow import guards as G
 from aletheore.flow.kt_index import KtClass, KtFile, KtIndex, annotations
 from aletheore.flow.kt_sinks import (
@@ -18,6 +19,11 @@ from aletheore.flow.kt_sinks import (
 from aletheore.flow.values import (
     add_prefix, SAFE, UNKNOWN, BuilderV, Choice, ClosureV, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
+
+def _zip_entry() -> Obj:
+    e = Tainted("archive.entry")
+    return Obj(type_name="ZipEntry", fields={"name": e, "getName": e})
+
 
 LOOP_FUNS = {"forEach", "map", "filter", "flatMap", "mapNotNull", "forEachIndexed", "mapIndexed", "let", "also", "apply", "run", "with", "takeIf", "takeUnless", "use",
              "onEach", "filterNot", "any", "all", "none", "count", "first", "firstOrNull", "find", "sortedBy", "groupBy", "associate", "associateBy", "fold", "reduce",
@@ -101,8 +107,8 @@ class KtInterp:
         if n is not None:
             self.dead.append(self._key(fr, n))
 
-    def _sanitizer(self, name: str) -> bool:
-        return any(name in SANITIZERS.get(c, ()) for c in self.cwes)
+    def _sanitizer(self, name: str, recv: str = "") -> bool:
+        return any(name in SANITIZERS.get(c, ()) for c in self.cwes) or _X.sanitizes("kotlin", self.cwes, name, recv)
 
     @staticmethod
     def _combine(*vals: Val) -> Val:
@@ -296,6 +302,8 @@ class KtInterp:
                 if cname in ("Integer", "Long", "Double", "Math", "Int", "System", "TimeUnit", "Charsets", "StandardCharsets", "MediaType", "HttpStatus") or name in ("MAX_VALUE", "MIN_VALUE", "EMPTY"):
                     return SAFE
         base = self.eval(recv_n, fr)
+        if name in ("nextEntry", "nextJarEntry", "nextTarEntry", "nextZipEntry"):
+            return _zip_entry()  # zis.nextEntry: an archive entry, named by whoever made the archive
         if isinstance(base, Obj):
             if base.kind == "request":
                 return SAFE if name in SERVLET_BENIGN else Tainted("request." + name)
@@ -303,8 +311,13 @@ class KtInterp:
                 return base.fields[name]
             return UNKNOWN
         if isinstance(base, Choice):
-            return join_all(self._prop(a, name) for a in base.alts)
+            return join_all(self._member_of(a, name) for a in base.alts)
         return self._prop(base, name)
+
+    def _member_of(self, a: Val, name: str) -> Val:
+        if isinstance(a, Obj) and a.kind != "request":
+            return a.fields.get(name, UNKNOWN)
+        return self._prop(a, name)
 
     def _prop(self, base: Val, name: str) -> Val:
         if name in ("length", "size", "indices", "lastIndex", "isEmpty"):
@@ -475,7 +488,7 @@ class KtInterp:
             recv_n, name, safe_nav = self._split_nav(callee)
             recv_text = _t(recv_n)
             args = self._args(n, fr)
-            if self._sanitizer(name):
+            if self._sanitizer(name, recv_text):
                 self.eval(recv_n, fr)
                 if lam is not None:
                     self._run_lambda(lam, [UNKNOWN], fr)
@@ -599,6 +612,10 @@ class KtInterp:
     def _method(self, recv: Val, name: str, args: list[Val], fr: KFrame, recv_n: Node | None, lam: Node | None) -> Val:
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, fr, recv_n, lam) for a in recv.alts)
+        if name in ("getNextEntry", "getNextJarEntry", "getNextTarEntry", "getNextZipEntry") and not args:
+            return _zip_entry()
+        if name == "entries" and not args and recv_n is not None and "zip" in _t(recv_n).lower():
+            return ListV([_zip_entry()], birth_depth=fr.branch)
         if isinstance(recv, ClosureV) and name == "invoke":
             return self._invoke(recv, args, fr)
         if isinstance(recv, Obj):
@@ -994,7 +1011,7 @@ class KtInterp:
                     return (local(kids[-1]), nm)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, anchored=("matches",), attr=attr, canon=lambda var: G.canonical_assignment(fr.file.src, var))
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, anchored=("matches",), attr=attr, canon=lambda var: G.canonical_assignment(fr.file.src, var), untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted")
 
     def _regex_arg(self, call: Node, fr: KFrame) -> str | None:
         va = next((c for c in call.children if c.type == "value_arguments"), None)

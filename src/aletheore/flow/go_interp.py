@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow import guards as G
 from aletheore.flow.go_index import GoFile, GoIndex
 from aletheore.flow.go_sinks import (
@@ -90,6 +91,12 @@ def _go_format(fmt: str, vals: list) -> str | None:
     return "".join(out) if k == len(vals) else None
 
 
+def _archive_entry() -> Obj:
+    """A zip or tar entry: its name is chosen by whoever made the archive (zip slip)."""
+    e = Tainted("archive.entry")
+    return Obj(type_name="ArchiveEntry", fields={"Name": e, "Linkname": e, "FileHeader": Obj(type_name="FileHeader", fields={"Name": e})})
+
+
 class GoInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
@@ -120,8 +127,8 @@ class GoInterp:
         if n is not None:
             self.dead.append(self._key(fr, n))
 
-    def _sanitizer(self, name: str) -> bool:
-        return any(name in SANITIZERS.get(c, ()) for c in self.cwes)
+    def _sanitizer(self, name: str, recv: str = "") -> bool:
+        return any(name in SANITIZERS.get(c, ()) for c in self.cwes) or _X.sanitizes("go", self.cwes, name, recv)
 
     @staticmethod
     def _combine(*vals: Val) -> Val:
@@ -409,7 +416,7 @@ class GoInterp:
             op_n, name_n = func.child_by_field_name("operand"), func.child_by_field_name("field")
             name, recv_text = _t(name_n), _t(op_n)
             args = self._args(args_n, fr)
-            if self._sanitizer(name):
+            if self._sanitizer(name, recv_text):
                 return SAFE
             if name == "WithValue" and recv_text == "context" and len(args) == 3 and classify(args[2]) == "tainted":
                 self.stash.add("ctx")  # a request value stored in the context: another handler reads it back
@@ -486,6 +493,10 @@ class GoInterp:
                 return SAFE
         if name in SAFE_FUNCS:
             return SAFE
+        if pkg == "zip" and name in ("OpenReader", "NewReader"):
+            return Obj(type_name="ZipReader", fields={"File": ListV([_archive_entry()], birth_depth=fr.branch)})
+        if pkg == "tar" and name == "NewReader":
+            return Obj(type_name="TarReader")
         if pkg == "exec" and name in ("Command", "CommandContext"):
             return Obj(type_name="Cmd", fields={"v": self._combine(*args)})
         if pkg == "http" and name in ("NewRequest", "NewRequestWithContext"):
@@ -500,6 +511,8 @@ class GoInterp:
         if isinstance(recv, Obj):
             if recv.kind == "request":
                 return Tainted("request." + name) if name in REQUEST_METHODS else UNKNOWN
+            if recv.type_name == "TarReader" and name == "Next":
+                return _archive_entry()
             if recv.type_name == "ResponseWriter":
                 if name == "Header":
                     return Obj(type_name="HeaderMap", fields={"_w": recv})  # w.Header().Set("Content-Type", ...) lands on w
@@ -797,7 +810,7 @@ class GoInterp:
                 return (local(op), _t(fn.child_by_field_name("field"))) if local(op) else None
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, canon=lambda var: G.canonical_assignment(fr.file.src, var))
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, canon=lambda var: G.canonical_assignment(fr.file.src, var), untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted")
 
     def _narrow(self, names: set, fr: GFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)

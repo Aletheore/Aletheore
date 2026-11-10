@@ -12,6 +12,7 @@ from pathlib import Path
 
 from aletheore.flow.js_index import FN_TYPES, JsFile, JsIndex
 from aletheore.flow import coverage
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.js_interp import BudgetExceeded, JFrame, JsInterp, request_like
 from aletheore.flow.js_sinks import CWE_NAMES_JS, DISCOVER_CWES_JS, ROUTE_METHODS, SEVERITY_JS, sink_args
@@ -30,6 +31,8 @@ _SINK_WORDS = {
     943: (b"$where", b"find(", b"findOne(", b"update(", b"remove(", b"deleteOne", b"countDocuments"),
     501: (b"session",),
 }
+for _c in _X.rule_classes("javascript"):  # the shared catalogue's method names
+    _SINK_WORDS[_c] = tuple(_SINK_WORDS.get(_c, ())) + _X.prefilter_words("javascript", _c)
 _ENTRY_WORDS = (b"req", b"request", b"ctx.", b"process.argv", b"express", b"koa", b"fastify", b"hapi")
 _EXTS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx")
 _SKIP_PARTS = {"node_modules", "dist", "build", "coverage", "__tests__", "test", "tests", "spec", "e2e", "frontend", "client",
@@ -115,6 +118,50 @@ def _next_route_handlers(jf: JsFile):
                         yield val
 
 
+_PROTO_GUARDS = ("__proto__", "constructor", "hasOwnProperty", "prototype", "Object.create(null)", "hasOwn(", "isSafeKey", "isPrototypePolluted")
+
+
+def _guards_proto(node) -> bool:
+    """The enclosing function checks for the dangerous keys (or only copies own properties)."""
+    cur = node
+    while cur is not None and cur.type not in FN_TYPES and cur.type not in ("function_declaration", "method_definition"):
+        cur = cur.parent
+    text = (cur or node).text.decode("utf-8", "replace")
+    return any(g in text for g in _PROTO_GUARDS)
+
+
+def _unsafe_merges(jf: JsFile) -> set[str]:
+    """Hand-written recursive merge / extend / clone functions that copy every key, `__proto__` included:
+    a for...in over the source, a write `target[key] = ...`, and a recursive call on `target[key]`."""
+    out: set[str] = set()
+    for name, fn in jf.functions.items():
+        text = fn.text.decode("utf-8", "replace")
+        if any(g in text for g in _PROTO_GUARDS):
+            continue
+        stack, loops = [fn], []
+        while stack:
+            n = stack.pop()
+            if n.type == "for_in_statement" and _t_kind(n) == "in":
+                loops.append(n)
+            stack.extend(n.children)
+        for lp in loops:
+            left = lp.child_by_field_name("left")
+            key = left.text.decode() if left is not None and left.type == "identifier" else \
+                next((c.text.decode() for c in (left.named_children if left is not None else []) if c.type == "identifier"), None)
+            if not key:
+                continue
+            body = lp.text.decode("utf-8", "replace")
+            import re as _re
+            if _re.search(r"\b\w+\[" + _re.escape(key) + r"\]\s*=[^=]", body) and _re.search(r"\b" + _re.escape(name) + r"\s*\([^)]*\[" + _re.escape(key) + r"\]", body):
+                out.add(name)
+    return out
+
+
+def _t_kind(n) -> str:
+    op = n.child_by_field_name("operator")
+    return op.text.decode() if op is not None else ("in" if any(c.type == "in" for c in n.children) else "")
+
+
 def _request_like(fn) -> bool:
     return request_like(fn)
 
@@ -137,119 +184,144 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
     found: dict[tuple, dict] = {}
     files = _js_files(repo)
     present = classes_present(files, _SINK_WORDS)
-    for path in files:
-        if time.monotonic() - started > budget_seconds:
-            break
-        try:
-            data = path.read_bytes()
-        except OSError:
-            continue
-        entry_file = any(w in data for w in _ENTRY_WORDS)
-        cwes = [c for c in DISCOVER_CWES_JS if c in present] if entry_file else [c for c in DISCOVER_CWES_JS if any(w in data for w in _SINK_WORDS[c])]
-        if not cwes:
-            continue
-        jf = index.file(path)
-        if jf is None:
-            continue
-        handlers = list(_route_handlers(jf))
-        nexts = list(_next_route_handlers(jf)) if _next_server_file(path.relative_to(repo).parts) else []
-        handler_ids = {id(h) for h in handlers} | {id(h) for h in nexts}
-        entries = [(None, False)] + [(h, True) for h in handlers] + [(h, "next") for h in nexts]
-        seen_entries = set(handler_ids)
-        # Enclosing functions (a handler factory or constructor) build the scope their handlers close over.
-        for fn in list(jf.functions.values()):
-            if id(fn) not in seen_entries:
-                seen_entries.add(id(fn))
-                entries.append((fn, False))
-        for fn in _request_like_functions(jf):
-            if id(fn) not in seen_entries:
-                seen_entries.add(id(fn))
-                entries.append((fn, False))
-        for cls in jf.classes.values():
-            for m in cls.methods.values():
-                if id(m) not in seen_entries:
-                    seen_entries.add(id(m))
-                    entries.append((m, False))
-        for cwe in cwes:
-            slug, label = CWE_NAMES_JS[cwe]
+    core_budget = budget_seconds
+    # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
+    # bounded extra slice, so a large repository never loses a core finding to the time the added classes take.
+    for phase in (0, 1):
+        budget_seconds = core_budget if phase == 0 else core_budget * 1.4
+        for path in files:
+            if time.monotonic() - started > budget_seconds:
+                break
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            entry_file = any(w in data for w in _ENTRY_WORDS)
+            cwes = [c for c in DISCOVER_CWES_JS if c in present and _X.local_ok(c, data, _SINK_WORDS, "javascript")] if entry_file else [c for c in DISCOVER_CWES_JS if any(w in data for w in _SINK_WORDS[c])]
+            cwes = [c for c in cwes if _X.added("javascript", c) == (phase == 1)]
+            if not cwes:
+                continue
+            jf = index.file(path)
+            if jf is None:
+                continue
+            merges = _unsafe_merges(jf) if 1321 in cwes else set()
+            handlers = list(_route_handlers(jf))
+            nexts = list(_next_route_handlers(jf)) if _next_server_file(path.relative_to(repo).parts) else []
+            handler_ids = {id(h) for h in handlers} | {id(h) for h in nexts}
+            entries = [(None, False)] + [(h, True) for h in handlers] + [(h, "next") for h in nexts]
+            seen_entries = set(handler_ids)
+            # Enclosing functions (a handler factory or constructor) build the scope their handlers close over.
+            for fn in list(jf.functions.values()):
+                if id(fn) not in seen_entries:
+                    seen_entries.add(id(fn))
+                    entries.append((fn, False))
+            for fn in _request_like_functions(jf):
+                if id(fn) not in seen_entries:
+                    seen_entries.add(id(fn))
+                    entries.append((fn, False))
+            for cls in jf.classes.values():
+                for m in cls.methods.values():
+                    if id(m) not in seen_entries:
+                        seen_entries.add(id(m))
+                        entries.append((m, False))
+            for cwe in cwes:
+                slug, label = CWE_NAMES_JS[cwe]
 
-            def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
-                rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
-                line = node.start_point[0] + 1
-                found.setdefault((rel, line, _cwe), {
-                    "tool": "aletheore-flow", "rule_id": f"flow.javascript.{_slug}", "severity": SEVERITY_JS[_cwe],
-                    "type": "vulnerability", "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                    "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                               "Found by following the value through the code, including calls into other functions and modules.",
-                })
+                def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
+                    rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
+                    line = node.start_point[0] + 1
+                    found.setdefault((rel, line, _cwe), {
+                        "tool": "aletheore-flow", "rule_id": f"flow.javascript.{_slug}", "severity": SEVERITY_JS[_cwe],
+                        "type": "vulnerability", "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
+                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                   "Found by following the value through the code, including calls into other functions and modules.",
+                    })
 
-            def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
-                if _cwe == 943:
-                    if name in ("find", "findOne", "update", "updateOne", "updateMany", "deleteOne", "deleteMany", "remove", "count",
-                                "countDocuments", "aggregate", "findOneAndUpdate", "findOneAndDelete", "replaceOne"):
-                        for a in args[:2]:
-                            alts = a.alts if isinstance(a, Choice) else (a,)
-                            if any(isinstance(m, MapV) and "$where" in m.entries and classify(m.entries["$where"]) == "tainted" for m in alts):
-                                record(node, fr, f"$where clause passed to {name}")
-                                return
-                            if isinstance(a, Tainted) and a.why in ("request.body", "request.query", "request.params"):
-                                record(node, fr, f"a whole request object passed as the query to {name}")
-                                return
-                    return
-                if not recv_text and name in fr.file.requires:
-                    # `import { createReadStream } from "fs"` / `const { exec } = require("child_process")`
-                    mod, orig = fr.file.requires[name]
-                    if isinstance(mod, str) and mod.removeprefix("node:").split("/")[0] in ("fs", "fs-extra", "child_process"):
-                        recv_text = "fs" if mod.removeprefix("node:").startswith("fs") else "child_process"
-                        name = orig if orig and orig != "default" else name
-                positions = sink_args(_cwe, name, recv_text, len(args))
-                if not positions:
-                    return
-                if _cwe == 79 and isinstance(recv, Obj) and isinstance(recv.fields.get("_ctype"), Const):
-                    ctype = recv.fields["_ctype"].value
-                    if "html" not in ctype:
-                        return  # an explicit non-HTML content type (JSON, event stream, plain text) is not XSS
-                if _cwe == 78 and name in ("spawn", "spawnSync", "execFile", "execFileSync") and len(args) >= 2 and isinstance(args[0], Const) \
-                        and str(args[0].value).rsplit("/", 1)[-1] in ("sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "dash") and isinstance(args[1], ListV):
-                    # spawn("sh", ["-c", "convert " + x]): the script after -c is the command line
-                    items = args[1].items
-                    for k, it_ in enumerate(items[:-1]):
-                        if isinstance(it_, Const) and str(it_.value) in ("-c", "/c", "/C", "-lc") and classify(items[k + 1]) == "tainted":
-                            record(node, fr, f"shell script passed to {name}")
-                            return
-                    if args[1].opaque or args[1].dirty:
-                        positions = [1]
-                for i in positions:
-                    if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
-                        continue  # a fixed scheme://host/ prefix: only the path is attacker data
-                    if i >= len(args):
-                        continue
-                    value = args[i]
-                    hit = _tainted_string(value) if _cwe in (79, 601) else classify(value) == "tainted"
-                    if hit:
-                        record(node, fr, f"argument {i + 1} of {name}")
+                def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
+                    if _cwe == 1321:
+                        inside = name in merges and fr.file.functions.get(name) is not None and \
+                            fr.file.functions[name].start_byte <= node.start_byte < fr.file.functions[name].end_byte
+                        if not recv_text and name in merges and not inside and any(classify(x) == "tainted" for x in args):
+                            record(node, fr, f"request data deep-merged by {name}, which copies __proto__ keys")
                         return
+                    if _cwe == 943:
+                        if name in ("find", "findOne", "update", "updateOne", "updateMany", "deleteOne", "deleteMany", "remove", "count",
+                                    "countDocuments", "aggregate", "findOneAndUpdate", "findOneAndDelete", "replaceOne"):
+                            for a in args[:2]:
+                                alts = a.alts if isinstance(a, Choice) else (a,)
+                                if any(isinstance(m, MapV) and "$where" in m.entries and classify(m.entries["$where"]) == "tainted" for m in alts):
+                                    record(node, fr, f"$where clause passed to {name}")
+                                    return
+                                if isinstance(a, Tainted) and a.why in ("request.body", "request.query", "request.params"):
+                                    record(node, fr, f"a whole request object passed as the query to {name}")
+                                    return
+                        return
+                    if not recv_text and name in fr.file.requires:
+                        # `import { createReadStream } from "fs"` / `const { exec } = require("child_process")`
+                        mod, orig = fr.file.requires[name]
+                        if isinstance(mod, str) and mod.removeprefix("node:").split("/")[0] in ("fs", "fs-extra", "child_process"):
+                            recv_text = "fs" if mod.removeprefix("node:").startswith("fs") else "child_process"
+                            name = orig if orig and orig != "default" else name
+                    positions = sink_args(_cwe, name, recv_text, len(args))
+                    ext = False
+                    if not positions:  # the shared catalogue, for a string built from request data
+                        positions = _X.sink_args("javascript", _cwe, name, recv_text, len(args), args)
+                        ext = bool(positions)
+                        if not positions:
+                            return
+                    if _cwe == 79 and isinstance(recv, Obj) and isinstance(recv.fields.get("_ctype"), Const):
+                        ctype = recv.fields["_ctype"].value
+                        if "html" not in ctype:
+                            return  # an explicit non-HTML content type (JSON, event stream, plain text) is not XSS
+                    if _cwe == 78 and name in ("spawn", "spawnSync", "execFile", "execFileSync") and len(args) >= 2 and isinstance(args[0], Const) \
+                            and str(args[0].value).rsplit("/", 1)[-1] in ("sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "dash") and isinstance(args[1], ListV):
+                        # spawn("sh", ["-c", "convert " + x]): the script after -c is the command line
+                        items = args[1].items
+                        for k, it_ in enumerate(items[:-1]):
+                            if isinstance(it_, Const) and str(it_.value) in ("-c", "/c", "/C", "-lc") and classify(items[k + 1]) == "tainted":
+                                record(node, fr, f"shell script passed to {name}")
+                                return
+                        if args[1].opaque or args[1].dirty:
+                            positions = [1]
+                    for i in positions:
+                        if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
+                            continue  # a fixed scheme://host/ prefix: only the path is attacker data
+                        if i >= len(args):
+                            continue
+                        value = args[i]
+                        hit = _X.ext_hit("javascript", _cwe, name, i, args, _tainted_string, node) if ext else (_tainted_string(value) if _cwe in (79, 601) else classify(value) == "tainted")
+                        if hit:
+                            record(node, fr, f"argument {i + 1} of {name}")
+                            return
 
-            def store(node, base_text, key, value, fr, _cwe=cwe):
-                if _cwe == 501 and base_text.split(".")[-1] == "session" and (_tainted_string(key) or _tainted_string(value)):
-                    record(node, fr, "write to the session")
+                def store(node, base_text, key, value, fr, _cwe=cwe):
+                    if _cwe == 1321:
+                        if base_text == "__proto_pollution__" and not _guards_proto(node):
+                            record(node, fr, "two-level property write with request-chosen keys")
+                        return
+                    if _cwe == 942:
+                        if _X.acao_store(key, value, _tainted_string, node):
+                            record(node, fr, "Access-Control-Allow-Origin set from the request")
+                        return
+                    if _cwe == 501 and base_text.split(".")[-1] == "session" and (_tainted_string(key) or _tainted_string(value)):
+                        record(node, fr, "write to the session")
 
-            stash: set = set()
-            for step, (fn, route) in enumerate(entries + entries):  # a second pass sees request state written by a middleware that ran later
-                if time.monotonic() - started > budget_seconds or (step >= len(entries) and not stash):
-                    break
-                interp = JsInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
-                interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                fr = JFrame(jf, None, Obj(type_name="module"), 0, route=route)
-                try:
-                    if fn is None:
-                        interp.exec(jf.root, fr)
-                    else:
-                        interp.bind_entry(fn, fr, route)
-                        interp._run_body(fn, fr)
-                except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
-                    coverage.note(path)
-                    continue
+                stash: set = set()
+                for step, (fn, route) in enumerate(entries + entries):  # a second pass sees request state written by a middleware that ran later
+                    if time.monotonic() - started > budget_seconds or (step >= len(entries) and not stash):
+                        break
+                    interp = JsInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
+                    interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
+                    fr = JFrame(jf, None, Obj(type_name="module"), 0, route=route)
+                    try:
+                        if fn is None:
+                            interp.exec(jf.root, fr)
+                        else:
+                            interp.bind_entry(fn, fr, route)
+                            interp._run_body(fn, fr)
+                    except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
+                        coverage.note(path)
+                        continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
 

@@ -82,11 +82,11 @@ def test_the_wrong_escape_for_the_sink_class_still_reports(tmp_path):
 
 
 GUARDED_SAFE = {
-    "is_numeric on an element": "$o = explode('.', $_GET['ip']);\nif (is_numeric($o[0]) && is_numeric($o[1])) {\n  system('ping ' . $o[0] . '.' . $o[1]);\n}",
+    "ctype_digit on an element": "$o = explode('.', $_GET['ip']);\nif (ctype_digit($o[0]) && ctype_digit($o[1])) {\n  system('ping ' . $o[0] . '.' . $o[1]);\n}",
     "in_array of constants": "$n = $_GET['n'];\nif (in_array($n, array('a', 'b'))) { system($n); }",
     "equality with a constant": "$n = $_GET['n'];\nif ($n === 'admin') { system($n); }",
     "ctype test": "$n = $_GET['n'];\nif (ctype_alnum($n)) { system($n); }",
-    "early exit": "$n = $_GET['n'];\nif (!is_numeric($n)) { die('bad'); }\nsystem('x ' . $n);",
+    "early exit": "$n = $_GET['n'];\nif (!ctype_digit($n)) { die('bad'); }\nsystem('x ' . $n);",
     "case folded equality with a value built before the guard": (
         "$e = $_GET['e'];\n$t = md5(uniqid()) . '.' . $e;\n"
         "if (strtolower($e) == 'jpg' || strtolower($e) == 'png') {\n  unlink($t);\n}"),
@@ -142,8 +142,23 @@ def test_include_with_a_choice_of_files_links_the_flow(tmp_path):
     assert "file-inclusion" in kinds(found)
 
 
+def test_is_numeric_is_not_a_shell_guard(tmp_path):
+    # PHP 8: is_numeric("1\n") is true, and a newline ends a shell command (Codex D-26). Still a guard for SQL.
+    (tmp_path / "a.php").write_text("<?php\n$v = $_GET['v'];\nif (!is_numeric($v)) { return; }\nsystem('echo ' . $v . 'id');\n")
+    assert "command-injection" in kinds(discover_php(tmp_path))
+    (tmp_path / "a.php").write_text("<?php\n$v = $_GET['v'];\nif (!is_numeric($v)) { return; }\nmysqli_query($c, 'SELECT * FROM t WHERE id = ' . $v);\n")
+    assert "sql-injection" not in kinds(discover_php(tmp_path))
+
+
+def test_is_numeric_octets_joined_by_dots_stay_a_guard(tmp_path):
+    # DVWA's "impossible" level: only numbers and dots follow each checked value, so a newline cannot start a command.
+    (tmp_path / "a.php").write_text("<?php\n$t = $_GET['ip'];\n$o = explode('.', $t);\n"
+                                    "if (is_numeric($o[0]) && is_numeric($o[1])) {\n  $t = $o[0] . '.' . $o[1];\n  shell_exec('ping -c 4 ' . $t);\n}\n")
+    assert "command-injection" not in kinds(discover_php(tmp_path))
+
+
 def test_validate_mode_suppresses_a_provably_safe_finding_and_keeps_a_tainted_one(tmp_path):
-    src = ("<?php\n$a = $_GET['a'];\nif (!is_numeric($a)) { die('x'); }\nshell_exec('ping ' . $a);\n"
+    src = ("<?php\n$a = $_GET['a'];\nif (!ctype_digit($a)) { die('x'); }\nshell_exec('ping ' . $a);\n"
            "$b = $_GET['b'];\nshell_exec('ping ' . $b);\n")
     (tmp_path / "a.php").write_text(src)
     lines = src.splitlines()

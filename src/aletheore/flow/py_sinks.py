@@ -141,3 +141,15 @@ def sink_args(cwe: int, name: str, recv: str, argc: int, kw: dict, recv_tainted:
             return [0]
         return None
     return None
+
+
+# Weakness classes shared by every language (template injection, regex injection, reflection, expression
+# language, NoSQL), from extra_sinks.
+from aletheore.flow import extra_sinks as _X  # noqa: E402
+
+_X.ADDED["python"] = {c for c in _X.new_classes("python") if c not in DISCOVER_CWES_PY}
+DISCOVER_CWES_PY = DISCOVER_CWES_PY + tuple(c for c in _X.new_classes("python") if c not in DISCOVER_CWES_PY)
+for _c in _X.new_classes("python"):
+    CWE_NAMES_PY.setdefault(_c, _X.CLASS_NAMES[_c])
+    SEVERITY_PY.setdefault(_c, _X.CLASS_SEVERITY[_c])
+    SANITIZERS.setdefault(_c, set())

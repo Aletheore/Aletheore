@@ -40,7 +40,7 @@ def test_java_vulnerable(tmp_path, case):
 JAVA_SAFE = {
     "regex allowlist": ('String c = req.getParameter("c"); if (!V.matcher(c).matches()) { return; } java.sql.DriverManager.getConnection("x").createStatement().executeQuery("select " + c);', "  static final Pattern V = Pattern.compile(\"^[A-Z]{2}-[0-9]{1,4}$\");"),
     "path tokens excluded": ('String n = req.getParameter("n"); if (n.contains("..") || n.contains("/") || n.contains("\\\\")) { return; } new java.io.FileInputStream("/srv/" + n);', ""),
-    "constant program no shell": ('new ProcessBuilder("convert", req.getParameter("a"), "out.png").start();', ""),
+    "constant program no shell": ('new ProcessBuilder("file", req.getParameter("a")).start();', ""),
     "list allowlist": ('String t = req.getParameter("t"); if (!Arrays.asList("a", "b").contains(t)) { return; } java.sql.DriverManager.getConnection("x").createStatement().executeQuery("select " + t);', ""),
 }
 
@@ -49,6 +49,14 @@ JAVA_SAFE = {
 def test_java_safe(tmp_path, case):
     body, extra = JAVA_SAFE[case]
     assert run(tmp_path, "S.java", java(body, extra)) == []
+
+
+def test_java_constant_option_parsing_program_is_argument_injection(tmp_path):
+    # No shell, so not command injection; but `convert` reads a leading "-" as an option (`-write /x`), so a request
+    # value given as its own argument is argument injection.
+    body = 'new ProcessBuilder("convert", req.getParameter("a"), "out.png").start();'
+    found = run(tmp_path, "S.java", java(body))
+    assert "argument-injection" in found and "command-injection" not in found
 
 
 def test_java_regex_with_a_quote_is_not_a_guard(tmp_path):

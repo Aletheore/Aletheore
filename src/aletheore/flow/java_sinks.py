@@ -100,8 +100,11 @@ def sink_args(cwe: int, name: str, cname: str | None, recv_type: str | None, rec
             return [0]
         return None
     if cwe == 918:
-        if name in ("openConnection", "openStream", "getContent") and recv_tainted:
+        if name in ("openConnection", "openStream") and recv_tainted:
             return []  # opening a URL built from request data (constructing one only parses it)
+        if name == "getContent" and recv_tainted and (recv_type in ("URL", "URLConnection", "HttpURLConnection", "HttpsURLConnection")
+                                                      or (recv_type is None and "url" in recv_text.lower())):
+            return []  # URL.getContent(); Spring Data's Page.getContent() returns a list, not a fetch
         if name in ("getForObject", "getForEntity", "postForObject", "postForEntity", "exchange", "execute", "headForHeaders", "postForLocation", "put") \
                 and recv_type in ("RestTemplate", "TestRestTemplate") and argc >= 1:
             return [0]
@@ -170,3 +173,13 @@ def probe_positions(cwes: set[int], name: str, argc: int) -> list[int] | None:
         if pos is not None:
             found.update(i for i in pos if i < argc)
     return sorted(found) if found else None
+
+
+# Weakness classes shared by every language (template injection, regex injection, reflection, expression
+# language, NoSQL), from extra_sinks.
+from aletheore.flow import extra_sinks as _X  # noqa: E402
+
+_X.ADDED["java"] = {c for c in _X.new_classes("java") if c not in DISCOVER_CWES}
+DISCOVER_CWES = DISCOVER_CWES + tuple(c for c in _X.new_classes("java") if c not in DISCOVER_CWES)
+for _c in _X.new_classes("java"):
+    CWE_NAMES.setdefault(_c, _X.CLASS_NAMES[_c])

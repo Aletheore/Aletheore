@@ -53,8 +53,14 @@ def safe_regex(pattern: str, cwes: set[int] | None = None, implicit_anchor: bool
     if not (p.startswith("^") and p.endswith("$")) and not (p.startswith("\\A") and (p.endswith("\\z") or p.endswith("\\Z"))):
         return False
     p = p[1:-1] if p.startswith("^") else p[2:-2]
-    allow_dot = 22 not in (cwes or set())
-    allowed = list(_ALLOWED_CLASS) + (["."] if allow_dot else [])
+    cw = set(cwes or ())
+    allowed = [t for t in _ALLOWED_CLASS if t != " "]
+    if not cw & {89, 78, 88, 943, 90, 643}:
+        allowed.append(" ")  # a space ends an unquoted SQL / shell token (`1 or 1=1`); harmless in HTML or a file name
+    if 22 not in cw:
+        allowed += ["\\.", "."]
+        if not cw & {601, 918}:
+            allowed.append("/")  # "/" makes `//evil.example` in a redirect or URL
     quant = r"(?:[+*?]|\{\d+(?:,\d*)?\})?"
     atom_fixed = r"[A-Za-z0-9_\-]"
     token = rf"(?:\\[dw]|\[[^\]]+\]|{atom_fixed}|\([A-Za-z0-9_\-|]+\)){quant}"
@@ -95,7 +101,7 @@ def resolve(names: set, cwes: set[int]) -> set[str]:
 
 
 HOST_ATTRS = {"host", "hostname", "netloc", "authority", "Host", "Hostname", "getHost", "getAuthority", "host_str", "HostName", "Authority", "origin"}
-CANON_CALLS = r"(GetFullPath|getCanonicalPath|getCanonicalFile|toRealPath|normalize|filepath\.Clean|filepath\.Abs|EvalSymlinks|realpath|abspath|expand_path|canonicalize|Canonicalize)"
+CANON_CALLS = r"(GetFullPath|getCanonicalPath|getCanonicalFile|toRealPath|normalize|filepath\.Clean|filepath\.Abs|filepath\.Join|EvalSymlinks|realpath|abspath|expand_path|canonicalize|Canonicalize|cleanpath)"
 STARTS = {"StartsWith", "startsWith", "HasPrefix", "start_with?", "starts_with", "startswith"}
 
 
@@ -123,12 +129,32 @@ class GuardEngine:
     pattern_source(node)  -> constant regex text the node stands for (a compiled pattern constant), else None
     """
 
-    def __init__(self, norm, local, const, safe, safe_collection, pattern_source, cwes, anchored=(), attr=None, canon=None):
+    def __init__(self, norm, local, const, safe, safe_collection, pattern_source, cwes, anchored=(), attr=None, canon=None, untainted=None):
         self.canon = canon or (lambda var: False)  # canon(var): was the variable produced by a canonicalising call
+        # untainted(node): the value is not attacker data (a root directory the server chose, even if not a constant)
+        self.untainted = untainted or safe
         self.attr = attr or (lambda n: None)  # attr(node) -> (local variable, host-like attribute) for `u.host`, `new URL(u).hostname`, ...
         self.anchored = set(anchored)  # method names that match the whole string (Kotlin matches, Java matches)
         self.norm, self.local, self.const, self.safe = norm, local, const, safe
         self.safe_collection, self.pattern_source, self.cwes = safe_collection, pattern_source, cwes
+
+    _CANON_RECV = re.compile(r"^[A-Za-z_]\w*\s*\.\s*(canonicalPath|canonicalFile|getCanonicalPath\(\)|getCanonicalFile\(\)|toRealPath\([^)]*\)|"
+                             r"normalize\(\)|realpath|realpath\(\)|cleanpath\(\)|canonicalize\(\)|absolutePath_x)")
+
+    def _canon_receiver(self, x) -> str | None:
+        """`out.canonicalPath`, `p.toRealPath()`, `path.realpath`: the canonical form of a local variable."""
+        if x is None:
+            return None
+        txt = (x.text.decode("utf-8", "replace") if hasattr(x, "text") else "").lstrip("!( \t")
+        if not self._CANON_RECV.match(txt):
+            return None
+        stack = [x]  # the first identifier, past a `!` the Kotlin grammar folds into the receiver
+        while stack:
+            cur = stack.pop(0)
+            if cur.type in ("identifier", "simple_identifier", "variable_name") and cur.child_count == 0 or cur.type == "simple_identifier":
+                return self.local(cur)
+            stack = list(cur.children) + stack
+        return None
 
     def facts(self, cond) -> Facts:
         if cond is None:
@@ -170,12 +196,16 @@ class GuardEngine:
                         return ({v}, set())
             return EMPTY
         if name in STARTS:
-            ops = ([recv] if recv is not None else []) + list(args)
-            if len(ops) == 2 and recv_text not in ("strings", "Strings") or len(ops) == 2:
-                x, prefix = (args[0], args[1]) if recv_text in ("strings", "bytes") else (ops[0], ops[1])
+            pkg = recv_text in ("strings", "bytes", "Strings")  # Go strings.HasPrefix(x, prefix): the package is not an operand
+            ops = list(args) if pkg else ([recv] if recv is not None else []) + list(args)
+            if len(ops) == 2:
+                x, prefix = ops[0], ops[1]
                 v = self.local(x)
-                if v and prefix is not None and self.safe(prefix) and self.canon(v):
+                if v and prefix is not None and self.untainted(prefix) and self.canon(v):
                     return ({v + "@canon"}, set())  # a canonical path that starts with the fixed root stays inside it
+                cv = self._canon_receiver(x)
+                if cv and prefix is not None and self.untainted(prefix):
+                    return ({cv + "@canon"}, set())  # out.canonicalPath.startsWith(root): the check is on out's canonical form
             return EMPTY
         if name in MATCHES:
             target = rx = None
@@ -213,6 +243,8 @@ class GuardEngine:
             if hv and hv[1] in HOST_ATTRS and recv is not None and self.safe_collection(recv):
                 return ({hv[0] + "@918"}, set())  # `ALLOWED_HOSTS.include?(u.host)`: the URL points at an allowed host
             return EMPTY
+        if name == "is_numeric" and self.cwes & {78, 88}:
+            return EMPTY  # PHP's is_numeric accepts surrounding whitespace, newline included
         if name in NUMERIC and (len(args) == 1 or (recv is not None and not args)):
             v = self.local(args[0]) if args else self.local(recv)
             return ({v}, set()) if v else EMPTY

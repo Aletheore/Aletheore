@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow.php_index import PhpClass, PhpFile, PhpIndex
 from aletheore.flow.php_sinks import (
     CAST_SAFE, INCLUDE_KINDS, NAME_SANITIZERS, SAFE_FUNCS, SANITIZERS, SERVER_TAINTED_PREFIXES, SUPERGLOBALS,
@@ -143,7 +144,7 @@ class PhpInterp:
         if n is not None:
             self.dead.append(self._key(fr, n))
 
-    def _sanitizer(self, name: str) -> bool:
+    def _sanitizer(self, name: str, recv: str = "") -> bool:
         low = name.lower()
         for c in self.cwes:
             if low in {x.lower() for x in SANITIZERS.get(c, ())}:
@@ -151,7 +152,7 @@ class PhpInterp:
             pat = NAME_SANITIZERS.get(c)
             if pat is not None and pat.match(low):
                 return True
-        return False
+        return _X.sanitizes("php", self.cwes, name, recv)
 
     def _combine(self, *vals: Val) -> Val:
         rank = {"safe": 0, "unknown": 1, "tainted": 2}
@@ -375,6 +376,8 @@ class PhpInterp:
             # `$request->query`, `Flight::request()->query`, `$this->request()->data`: framework request collections
             return Tainted("request." + prop)
         if isinstance(base, Obj) and prop in base.fields:
+            if "*dynamic*" in base.fields:  # `$this->{$k} = v` may have overwritten any property
+                return join(base.fields[prop], base.fields["*dynamic*"])
             return base.fields[prop]
         if isinstance(base, Obj) and "*dynamic*" in base.fields:
             return join(base.fields["*dynamic*"], UNKNOWN)
@@ -627,6 +630,8 @@ class PhpInterp:
     def _builtin(self, low: str, n: Node, args: list[Val], fr: PFrame) -> Val:
         if low in SAFE_FUNCS:
             return SAFE
+        if low == "zip_entry_name":
+            return Tainted("archive.entry")
         if low == "filter_var":
             flt = _t(n.child_by_field_name("arguments").named_children[1]) if n.child_by_field_name("arguments") and len(n.child_by_field_name("arguments").named_children) > 1 else ""
             if any(k in flt for k in ("FILTER_VALIDATE_INT", "FILTER_VALIDATE_FLOAT", "FILTER_VALIDATE_BOOL", "FILTER_VALIDATE_IP", "FILTER_SANITIZE_NUMBER_INT",
@@ -673,8 +678,10 @@ class PhpInterp:
         args = self._args(args_n, fr)
         rtype = recv.type_name if isinstance(recv, Obj) else None
         self._hook(n, name, recv_text, args, recv, fr)
-        if self._sanitizer(name):
+        if self._sanitizer(name, recv_text):
             return SAFE
+        if name in ("getNameIndex", "getNameIndex_x") and not (isinstance(recv, Obj) and recv.cls is not None):
+            return Tainted("archive.entry")  # ZipArchive entry name: chosen by whoever made the archive (zip slip)
         if isinstance(recv, Obj) and recv.kind == "request":
             # Laravel / Symfony / PSR-7 request object: $request->input('x'), ->get(), ->header(), ->getContent()
             return SAFE if name in ("hasHeader", "has", "filled", "isMethod", "expectsJson", "wantsJson", "ip", "method", "ajax", "secure") else Tainted("request." + name)
@@ -740,14 +747,44 @@ class PhpInterp:
         cls = self.index.cls(cname, fr.file) if cname else None
         if cls is not None:
             obj = Obj(cls=cls, type_name=cls.name)
+            self._init_props(cls, obj, fr)
             ctor = self._find_method(cls, "__construct")
             if ctor is not None:
                 self._run_function(ctor[0].file, ctor[1], ctor[0], obj, args, fr)
             return obj
         return Obj(type_name=cname, fields={"v": self._combine(*args)} if args else {})
 
+    def _init_props(self, cls: PhpClass, obj: Obj, fr: PFrame) -> None:
+        """Declared instance properties start with their default (`private $encode = false;`), parents first, so a
+        write inside one branch of the constructor joins with the default instead of looking like the only value."""
+        chain, seen, cur = [], set(), cls
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            chain.append(cur)
+            cur = self.index.cls(cur.parent, cur.file) if cur.parent else None
+        for c in reversed(chain):
+            body = next((x for x in c.node.children if x.type == "declaration_list"), None)
+            for decl in (body.named_children if body is not None else []):
+                if decl.type != "property_declaration" or any(m.type == "static_modifier" for m in decl.children):
+                    continue
+                for el in decl.named_children:
+                    if el.type != "property_element":
+                        continue
+                    name_n = next((x for x in el.named_children if x.type == "variable_name"), None)
+                    init = next((x for x in el.named_children if x is not name_n), None)
+                    if name_n is None:
+                        continue
+                    nm = _t(name_n).lstrip("$")
+                    try:
+                        obj.fields[nm] = self.eval(init, PFrame(c.file, c, obj, fr.depth + 1)) if init is not None else Const(None)
+                    except (BudgetExceeded, RecursionError):
+                        raise
+                    except Exception:
+                        obj.fields[nm] = UNKNOWN
+
     def make_this(self, cls: PhpClass, pf: PhpFile) -> Obj:
         obj = Obj(cls=cls, type_name=cls.name)
+        self._init_props(cls, obj, PFrame(pf, cls, obj, 0))
         ctor = self._find_method(cls, "__construct")
         if ctor is not None:
             try:
@@ -863,6 +900,18 @@ class PhpInterp:
         return (alts, False) if alts is not None else (None, False)
 
     # ------------------------------------------------------------------ guards
+    def _text_follows(self, var_n: Node, cond: Node) -> bool:
+        """Somewhere after the check, the checked value is concatenated with literal text containing a letter."""
+        fn = cond
+        while fn is not None and fn.type not in ("function_definition", "method_declaration", "program"):
+            fn = fn.parent
+        if fn is None:
+            return True
+        after = fn.text[max(0, cond.end_byte - fn.start_byte):].decode("utf-8", "replace")
+        var = re.escape(_t(var_n))
+        return re.search(var + r"""\s*\.\s*(['"])[^'"]*[A-Za-z][^'"]*\1""", after) is not None or \
+            re.search(r"""(['"])[^'"]*""" + var + r"""\s*[A-Za-z]""", after) is not None
+
     def _guard_keys(self, cond: Node | None, fr: PFrame, negated: bool = False) -> set[str]:
         """Variables or array elements proven safe when `cond` holds (negated: when it does not hold)."""
         if cond is None:
@@ -893,6 +942,11 @@ class PhpInterp:
             fn = _t(cond.child_by_field_name("function")).lower()
             args_n = cond.child_by_field_name("arguments")
             args = [a.named_children[-1] for a in (args_n.named_children if args_n is not None else []) if a.named_children]
+            if fn == "is_numeric" and self.cwes & {78, 88} and args and self._text_follows(args[0], cond):
+                # is_numeric("1\n") is true on PHP 8: the newline ends the shell command, and constant text written after
+                # the value (`'echo ' . $v . 'id'`) runs as a second one. With nothing but digits, dots or other numbers
+                # after it (DVWA's `$o[0] . '.' . $o[1]`), the attacker can only split the line into numbers.
+                return set()
             if fn in ("is_numeric", "is_int", "is_float", "ctype_digit", "ctype_alnum", "ctype_alpha", "ctype_xdigit", "is_bool") and args:
                 key = self._expr_key(args[0], fr)
                 return {key} if key else set()
@@ -1079,7 +1133,14 @@ class PhpInterp:
                 if take:
                     for _, later in clauses[i + 1:]:
                         self._dead(fr, later)
-                    term = self.exec(block, fr)
+                    alternative = cond_n is None and (results or i > 0)  # an `else` after branches that ran
+                    if alternative:
+                        fr.branch += 1  # so its object-field writes join the other branches' instead of replacing them
+                    try:
+                        term = self.exec(block, fr)
+                    finally:
+                        if alternative:
+                            fr.branch -= 1
                     if results:
                         if not term:
                             results.append(fr.env)

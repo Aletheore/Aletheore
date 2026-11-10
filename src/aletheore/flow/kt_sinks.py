@@ -67,14 +67,12 @@ def sink_args(cwe: int, name: str, recv: str, argc: int) -> list[int] | None:
             return [0]
         return None
     if cwe in (22, 23, 36, 73):
-        if (not recv or recv.startswith(("java.io", "java.nio"))) and name in ("File", "FileInputStream", "FileOutputStream", "FileReader", "FileWriter", "RandomAccessFile", "FileSystemResource", "FileInputStream") and argc >= 1:
+        # Building a File or Path is not a file operation (a containment check usually follows it); opening, reading,
+        # writing or deleting is. A tainted File/Path used as a receiver is judged by the driver (FILE_USE).
+        if (not recv or recv.startswith(("java.io", "java.nio"))) and name in ("FileInputStream", "FileOutputStream", "FileReader", "FileWriter", "RandomAccessFile", "FileSystemResource") and argc >= 1:
             return [0, 1] if argc >= 2 else [0]
-        if base in ("Paths", "Path") and name in ("get", "of") and argc >= 1:
-            return list(range(argc))
         if base == "Files" and name in ("readAllBytes", "readAllLines", "readString", "newInputStream", "newBufferedReader", "write", "writeString", "delete", "deleteIfExists", "copy", "move", "createFile", "createDirectory", "createDirectories", "lines", "list", "walk", "newOutputStream", "newBufferedWriter") and argc >= 1:
             return [0, 1] if name in ("copy", "move") and argc >= 2 else [0]
-        if name in ("resolve",) and argc >= 1 and any(h in r for h in ("file", "dir", "path", "folder", "root", "upload")):
-            return [0]
         if name in ("readText", "readBytes", "writeText", "writeBytes", "appendText", "deleteRecursively", "copyTo", "forEachLine", "bufferedReader", "inputStream", "outputStream") and not argc and False:
             return None
         return None
@@ -137,3 +135,20 @@ def sink_args(cwe: int, name: str, recv: str, argc: int) -> list[int] | None:
             return [0, 1]
         return None
     return None
+
+
+# Weakness classes shared by every language (template injection, regex injection, reflection, expression
+# language, NoSQL), from extra_sinks.
+from aletheore.flow import extra_sinks as _X  # noqa: E402
+
+_X.ADDED["kotlin"] = {c for c in _X.new_classes("kotlin") if c not in DISCOVER_CWES_KT}
+DISCOVER_CWES_KT = DISCOVER_CWES_KT + tuple(c for c in _X.new_classes("kotlin") if c not in DISCOVER_CWES_KT)
+for _c in _X.new_classes("kotlin"):
+    CWE_NAMES_KT.setdefault(_c, _X.CLASS_NAMES[_c])
+    SEVERITY_KT.setdefault(_c, _X.CLASS_SEVERITY[_c])
+    SANITIZERS.setdefault(_c, set())
+
+# Kotlin File / Path extension functions and java.io.File methods that touch the file system.
+FILE_USE = {"readText", "readBytes", "readLines", "writeText", "writeBytes", "appendText", "appendBytes", "delete", "deleteRecursively",
+            "copyTo", "copyRecursively", "renameTo", "inputStream", "outputStream", "bufferedReader", "bufferedWriter", "reader", "writer",
+            "forEachLine", "useLines", "listFiles", "list", "mkdirs", "mkdir", "createNewFile", "printWriter", "exists", "transferTo_x"}

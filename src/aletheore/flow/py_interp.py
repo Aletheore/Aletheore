@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node
 
+from aletheore.flow import extra_sinks as _X
 from aletheore.flow.py_index import PyClass, PyFile, PyIndex
 from aletheore.flow.py_sinks import REQUEST_ATTRS_SAFE, SAFE_RESULT_CALLS, SANITIZERS
 from aletheore.flow import guards as G
@@ -100,8 +101,8 @@ class PyInterp:
         if n is not None:
             self.dead.append(self._key(fr, n))
 
-    def _sanitizer(self, name: str) -> bool:
-        return any(name in SANITIZERS.get(c, ()) for c in self.cwes)
+    def _sanitizer(self, name: str, recv: str = "") -> bool:
+        return any(name in SANITIZERS.get(c, ()) for c in self.cwes) or _X.sanitizes("python", self.cwes, name, recv)
 
     @staticmethod
     def _combine(*vals: Val) -> Val:
@@ -528,7 +529,10 @@ class PyInterp:
             if c.type == "keyword_argument":
                 kw[_t(c.child_by_field_name("name"))] = self.eval(c.child_by_field_name("value"), fr)
             elif c.type in ("list_splat", "dictionary_splat"):
-                pos.append(self.eval(c.named_children[0], fr) if c.named_children else UNKNOWN)
+                v = self.eval(c.named_children[0], fr) if c.named_children else UNKNOWN
+                pos.append(v)
+                if c.type == "dictionary_splat":
+                    kw["**"] = v  # Model(**request.json): the caller's keys become the callee's keyword arguments
             else:
                 pos.append(self.eval(c, fr))
         return pos, kw
@@ -553,7 +557,7 @@ class PyInterp:
         if func.type == "attribute":
             obj_n, name = func.child_by_field_name("object"), _t(func.child_by_field_name("attribute"))
             recv_text = _t(obj_n)
-            if self._sanitizer(name):
+            if self._sanitizer(name, recv_text):
                 self.eval(obj_n, fr)
                 return SAFE
             # module.function resolved through the import index
@@ -743,9 +747,22 @@ class PyInterp:
                 fr.env[name] = UNKNOWN
 
     # ------------------------------------------------------------------ methods on values
+    @staticmethod
+    def _archive_entry() -> Obj:
+        e = Tainted("archive.entry")
+        return Obj(type_name="ArchiveEntry", fields={"filename": e, "name": e, "orig_filename": e, "path": e, "linkname": e})
+
     def _method(self, recv: Val, name: str, args: list[Val], kw: dict, fr: PFrame, recv_text: str) -> Val:
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, kw, fr, recv_text) for a in recv.alts)
+        if recv_text not in ("inspect", "self") and not (isinstance(recv, Obj) and (recv.kind == "request" or recv.cls is not None)):
+            # zipfile / tarfile: entry names are chosen by whoever made the archive (zip slip)
+            if name in ("namelist", "getnames") and not args:
+                return ListV([Tainted("archive.entry")], birth_depth=fr.branch)
+            if name in ("infolist", "getmembers") and not args:
+                return ListV([self._archive_entry()], birth_depth=fr.branch)
+            if name in ("getinfo", "getmember", "next") and recv_text.split(".")[-1] in ("zf", "zip", "zipf", "tar", "tf", "archive", "z", "t", "zfile", "tarf"):
+                return self._archive_entry()
         if isinstance(recv, Obj):
             if recv.kind == "request":
                 return Tainted("request." + name) if name not in REQUEST_ATTRS_SAFE else SAFE
@@ -1007,6 +1024,53 @@ class PyInterp:
                 return _t(first)
         return None
 
+    _CANON_RX = re.compile(r"\b(realpath|abspath|resolve|normpath|canonicalize)\b")
+
+    def _untainted(self, n: Node | None, fr: PFrame) -> bool:
+        return n is not None and classify(self.eval(n, fr)) != "tainted"
+
+    def _canonical_check(self, f: Node, call: Node, fr: PFrame) -> str | None:
+        """`target.startswith(root)` with target canonicalised (realpath/abspath) or `Path(t).resolve().is_relative_to(root)`:
+        the canonical path is inside a root the attacker does not choose."""
+        meth = _t(f.child_by_field_name("attribute"))
+        obj = f.child_by_field_name("object")
+        args = [c for c in (call.child_by_field_name("arguments").named_children if call.child_by_field_name("arguments") is not None else [])]
+        if len(args) != 1 or not self._untainted(args[0], fr):
+            return None
+        if meth == "startswith" and obj is not None and obj.type == "identifier":
+            name = _t(obj)
+            if re.search(rb"\b" + re.escape(name.encode()) + rb"\s*=[^=\n]*\b(realpath|abspath|resolve)\b", fr.file.src):
+                return name
+            return None
+        if meth == "is_relative_to" and obj is not None and self._CANON_RX.search(_t(obj)):
+            for c in obj.named_children if obj.type != "call" else [obj]:
+                inner = c
+                while inner is not None and inner.type in ("call", "attribute"):
+                    nxt = inner.child_by_field_name("function") if inner.type == "call" else inner.child_by_field_name("object")
+                    if inner.type == "call" and inner.child_by_field_name("arguments") is not None:
+                        ids = [a for a in inner.child_by_field_name("arguments").named_children if a.type == "identifier"]
+                        if ids and _t(inner.child_by_field_name("function")).split(".")[-1] in ("Path", "PurePath", "realpath", "abspath"):
+                            return _t(ids[0])
+                    inner = nxt
+                if inner is not None and inner.type == "identifier" and inner is not obj:
+                    return _t(inner)
+        return None
+
+    def _commonpath_check(self, operands, fr: PFrame) -> str | None:
+        """`os.path.commonpath([root, target]) == root`: target is inside root."""
+        for call, other in ((operands[0], operands[1]), (operands[1], operands[0])):
+            if call.type != "call" or not _t(call.child_by_field_name("function")).endswith("commonpath"):
+                continue
+            lst = call.child_by_field_name("arguments").named_children[0] if call.child_by_field_name("arguments") is not None and call.child_by_field_name("arguments").named_children else None
+            if lst is None or lst.type not in ("list", "tuple"):
+                continue
+            items = [c for c in lst.named_children]
+            if len(items) == 2 and self._untainted(other, fr) and _t(other) in (_t(items[0]), _t(items[1])):
+                tgt = items[1] if _t(items[0]) == _t(other) else items[0]
+                if tgt.type == "identifier" and re.search(rb"\b" + re.escape(_t(tgt).encode()) + rb"\s*=[^=\n]*\b(realpath|abspath|resolve)\b", fr.file.src):
+                    return _t(tgt)
+        return None
+
     def _guarded_names(self, cond: Node | None, fr: PFrame, negated: bool = False) -> set[str]:
         """Names proven safe when `cond` holds (or, with negated=True, when it does NOT hold).
 
@@ -1031,12 +1095,20 @@ class PyInterp:
             if not negated and f is not None and f.type == "attribute" and _t(f.child_by_field_name("object")).isidentifier() \
                     and _t(f.child_by_field_name("attribute")) in self._CLASS_CALLS:
                 return {_t(f.child_by_field_name("object"))}
+            if not negated and 22 in self.cwes and f is not None and f.type == "attribute":
+                canon = self._canonical_check(f, cond, fr)
+                if canon:
+                    return {canon}
             return set()
         if t == "comparison_operator":
             operands = cond.named_children
             ops = " ".join(_t(c) for c in cond.children if not c.is_named)
             if len(operands) != 2:
                 return set()
+            if 22 in self.cwes and ((ops == "==" and not negated) or (ops == "!=" and negated)):
+                common = self._commonpath_check(operands, fr)
+                if common:
+                    return {common}
             positive = ops in ("in", "==")
             negative = ops in ("not in", "!=")
             if (positive and negated) or (negative and not negated) or not (positive or negative):
@@ -1082,7 +1154,14 @@ class PyInterp:
             if tv is True:
                 for _, later in clauses[i + 1:]:
                     self._dead(fr, later)
-                term = self.exec(block, fr)
+                alternative = cond_n is None and i > 0  # an `else` after branches that ran
+                if alternative:
+                    fr.branch += 1  # so its attribute writes join the other branches' instead of replacing them
+                try:
+                    term = self.exec(block, fr)
+                finally:
+                    if alternative:
+                        fr.branch -= 1
                 if results:
                     if not term:
                         results.append(fr.env)
