@@ -92,6 +92,10 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
                     names = set(_DOLLAR.findall(sql)) if sql else set()
                     if names:
                         out.setdefault(cls.name, {})[nm] = _positions(names, _params(m))
+    # every mapper XML first: a statement can include a `<sql>` fragment from another mapper's namespace
+    mappers: list[tuple[Path, str, list[tuple[str, str, str]]]] = []
+    fragments: dict[str, list[tuple[str, str]]] = {}  # "namespace.id" -> [(namespace, body)]
+    any_dollar = False
     for p in repo.rglob("*.xml"):
         if _SKIP.intersection(p.relative_to(repo).parts):
             continue
@@ -99,24 +103,32 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
             text = p.read_text("utf-8", "replace")
         except OSError:
             continue
-        if "<mapper" not in text or "${" not in text:
+        if "<mapper" not in text:
             continue
         text = _COMMENT.sub("", text)
         ns = _NAMESPACE.search(text)
         if not ns:
             continue
-        iface = ns.group(1).split(".")[-1]
-        fragments = {}
-        for kind, attrs, body in _STMT.findall(text):
+        any_dollar = any_dollar or "${" in text
+        stmts = _STMT.findall(text)
+        mappers.append((p, ns.group(1), stmts))
+        for kind, attrs, body in stmts:
             fid = _ID.search(attrs)
             if kind == "sql" and fid:
-                fragments[fid.group(1)] = body
-        for kind, attrs, body in _STMT.findall(text):
+                fragments.setdefault(_fragment_key(fid.group(1), ns.group(1)), []).append((ns.group(1), body))
+    for p, namespace, stmts in (mappers if any_dollar else []):
+        iface = namespace.split(".")[-1]
+        for kind, attrs, body in stmts:
             if kind == "sql":
                 continue
-            body = _expand_includes(body, fragments)
+            state = _Expansion()
+            body = _expand_includes(body, namespace, namespace, {}, fragments, (), state)
             mid = _ID.search(attrs)
             names = set(_DOLLAR.findall(body))
+            if state.truncated:
+                from aletheore.flow.coverage import note
+                note(p)
+                names.add("*unexpanded*")  # an include chain past the safety cap: keep the call as a sink
             if mid and names:
                 meth = ifaces.get(iface, {}).get(mid.group(1))
                 out.setdefault(iface, {})[mid.group(1)] = _positions(names, _params(meth) if meth is not None else None)
@@ -129,15 +141,75 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
     return out
 
 
-_INCLUDE = re.compile(r"<include\b[^>]*\brefid\s*=\s*[\"']([^\"']+)[\"'][^>]*?(?:/>|>.*?</include\s*>)", re.S)
+_INCLUDE = re.compile(r"<include\b([^>]*?)(?:/>|>(.*?)</include\s*>)", re.S)
+_REFID = re.compile(r"\brefid\s*=\s*[\"']([^\"']+)[\"']")
+_PROPERTY = re.compile(r"<property\b([^>]*?)/?>")
+_PNAME = re.compile(r"\bname\s*=\s*[\"']([^\"']*)[\"']")
+_PVALUE = re.compile(r"\bvalue\s*=\s*[\"']([^\"']*)[\"']")
+_VAR = re.compile(r"\$\{([^}]*)\}")
+_MAX_DEPTH = 64  # far past any real mapper; only a pathological chain reaches it
+_MAX_CHARS = 2_000_000
 
 
-def _expand_includes(body: str, fragments: dict[str, str], depth: int = 0) -> str:
-    """Inline `<include refid="x"/>` with the `<sql id="x">` fragment it names (nested includes too), so a `${}` in a
-    shared fragment is seen in every statement that includes it."""
-    if depth > 5 or "<include" not in body:
+class _Expansion:
+    def __init__(self) -> None:
+        self.truncated = False
+        self.chars = 0
+
+
+def _fragment_key(fid: str, namespace: str) -> str:
+    """MyBatis stores a `<sql id>` as `namespace.id` (an id already prefixed by its own namespace is kept)."""
+    return fid if fid.startswith(namespace + ".") else f"{namespace}.{fid}"
+
+
+def _resolve(refid: str, ns_stmt: str, ns_here: str, fragments: dict) -> list[str]:
+    """Fragment keys an include names. As in MyBatis, a refid with a dot is fully qualified and one without gets the
+    current namespace. Inside another namespace's fragment the "current" namespace is ambiguous (MyBatis uses the
+    including mapper's), so both are tried: unknown means keep."""
+    if "." in refid:
+        if refid in fragments:
+            return [refid]
+        return [k for k in fragments if k.endswith("." + refid)]  # a refid written with a shortened namespace
+    return [k for k in dict.fromkeys((f"{ns_stmt}.{refid}", f"{ns_here}.{refid}")) if k in fragments]
+
+
+def _subst(text: str, ctx: dict[str, str]) -> str:
+    """MyBatis replaces `${name}` in included text with the include's `<property>` values at load time; a name that
+    is not a property stays and is decided at run time."""
+    return _VAR.sub(lambda m: ctx.get(m.group(1).strip(), m.group(0)), text) if ctx else text
+
+
+def _expand_includes(body: str, ns_stmt: str, ns_here: str, ctx: dict[str, str], fragments: dict,
+                     stack: tuple[str, ...], state: _Expansion) -> str:
+    """Inline every `<include refid>` with the `<sql>` fragment it names, in any mapper's namespace and nested to any
+    depth, after substituting the include's `<property>` values, so a `${}` in a shared fragment is seen in every
+    statement that includes it and one fixed by a property is not. A cycle (which MyBatis rejects) is cut."""
+    if "<include" not in body:
         return body
-    return _INCLUDE.sub(lambda m: _expand_includes(fragments.get(m.group(1).split(".")[-1], ""), fragments, depth + 1), body)
+
+    def one(m: re.Match) -> str:
+        r = _REFID.search(m.group(1))
+        if r is None:
+            return ""
+        refid = _subst(r.group(1), ctx).strip()
+        props = dict(ctx)
+        for pm in _PROPERTY.finditer(m.group(2) or ""):
+            n, v = _PNAME.search(pm.group(1)), _PVALUE.search(pm.group(1))
+            if n is not None and v is not None:
+                props[n.group(1)] = _subst(v.group(1), ctx)
+        parts = []
+        for key in _resolve(refid, ns_stmt, ns_here, fragments):
+            if key in stack:
+                continue
+            if len(stack) >= _MAX_DEPTH or state.chars > _MAX_CHARS:
+                state.truncated = True
+                continue
+            for fns, fbody in fragments[key]:
+                state.chars += len(fbody)
+                parts.append(_expand_includes(_subst(fbody, props), ns_stmt, fns, props, fragments, stack + (key,), state))
+        return " ".join(parts)
+
+    return _INCLUDE.sub(one, body)
 
 
 def positions(table: dict[str, dict[str, list[int]]], name: str, recv_type: str | None, recv_text: str) -> list[int] | None:

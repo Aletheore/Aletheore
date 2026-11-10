@@ -1,4 +1,4 @@
-"""Regressions for Codex pass-3 defects D-30 to D-32 and the D-4 visibility follow-up."""
+"""Regressions for Codex pass-3 defects D-30 to D-38 and the D-4 visibility follow-up."""
 from pathlib import Path
 
 from aletheore.flow.discover import discover_repo
@@ -89,3 +89,87 @@ def test_d34_mybatis_dollar_in_an_included_sql_fragment(tmp_path):
                          '  Object a(HttpServletRequest r) { return userMapper.search(r.getParameter("s")); }\n}\n'),
     })
     assert [f["line"] for f in discover_repo(tmp_path) if f["rule_id"].endswith("sql-injection")] == [4]
+
+
+MB_IFACE = 'import org.apache.ibatis.annotations.Param;\ninterface UserMapper { Object search(@Param("sort") String sort); }\n'
+MB_HANDLER = ('import javax.servlet.http.HttpServletRequest;\nclass Handler { UserMapper userMapper;\n'
+              ' Object search(HttpServletRequest r) { return userMapper.search(r.getParameter("sort")); }\n}\n')
+
+
+def _mb(tmp_path: Path, user_xml: str, shared_xml: str | None = None) -> list[int]:
+    files = {"UserMapper.java": MB_IFACE, "Handler.java": MB_HANDLER,
+             "UserMapper.xml": f'<mapper namespace="UserMapper">\n{user_xml}\n</mapper>\n'}
+    if shared_xml is not None:
+        files["Shared.xml"] = f'<mapper namespace="com.example.Shared">\n{shared_xml}\n</mapper>\n'
+    _write(tmp_path, files)
+    return [f["line"] for f in discover_repo(tmp_path) if f["rule_id"].endswith("sql-injection")]
+
+
+def test_d35_fragment_in_another_mapper_namespace(tmp_path):
+    assert _mb(tmp_path, '<select id="search">SELECT * FROM u <include refid="com.example.Shared.inner"/></select>',
+               '<sql id="inner"> ORDER BY ${sort} </sql>') == [3]
+
+
+def test_d35_nested_fragment_in_another_namespace(tmp_path):
+    assert _mb(tmp_path, '<select id="search">SELECT * FROM u <include refid="com.example.Shared.outer"/></select>',
+               '<sql id="outer"><include refid="com.example.Shared.inner"/></sql>\n'
+               '<sql id="inner"> ORDER BY ${sort} </sql>') == [3]
+
+
+def test_d35_unqualified_refid_inside_a_foreign_fragment_is_followed(tmp_path):
+    # MyBatis resolves it against the including mapper's namespace; either reading is tried
+    assert _mb(tmp_path, '<select id="search">SELECT * FROM u <include refid="com.example.Shared.outer"/></select>',
+               '<sql id="outer"><include refid="inner"/></sql>\n<sql id="inner"> ORDER BY ${sort} </sql>') == [3]
+
+
+def test_d35_bound_parameter_in_a_foreign_fragment_is_quiet(tmp_path):
+    assert _mb(tmp_path, '<select id="search">SELECT * FROM u <include refid="com.example.Shared.inner"/></select>',
+               '<sql id="inner"> ORDER BY #{sort} </sql>') == []
+
+
+def test_d36_include_chain_past_the_old_depth_cap(tmp_path):
+    chain = "\n".join(f'<sql id="p{i}"><include refid="p{i + 1}"/></sql>' for i in range(12))
+    assert _mb(tmp_path, chain + '\n<sql id="p12"> ORDER BY ${sort} </sql>\n'
+               '<select id="search">SELECT * FROM u <include refid="p0"/></select>') == [3]
+
+
+def test_d36_include_cycle_terminates(tmp_path):
+    assert _mb(tmp_path, '<sql id="a"><include refid="b"/> ${sort}</sql>\n<sql id="b"><include refid="a"/></sql>\n'
+               '<select id="search">SELECT * FROM u <include refid="a"/></select>') == [3]
+
+
+def test_d36_chain_past_the_safety_cap_is_kept_and_listed_incomplete(tmp_path):
+    from aletheore.flow import coverage
+    from aletheore.flow.mybatis import _MAX_DEPTH
+    n = _MAX_DEPTH + 5
+    chain = "\n".join(f'<sql id="p{i}"><include refid="p{i + 1}"/></sql>' for i in range(n))
+    assert _mb(tmp_path, chain + f'\n<sql id="p{n}"> ORDER BY ${{sort}} </sql>\n'
+               '<select id="search">SELECT * FROM u <include refid="p0"/></select>') == [3]
+    assert any(p.endswith("UserMapper.xml") for p in coverage.INCOMPLETE)
+
+
+def test_d37_include_property_fixes_the_placeholder(tmp_path):
+    assert _mb(tmp_path, '<sql id="order"> ORDER BY ${sort} </sql>\n<select id="search">SELECT * FROM u WHERE id = #{sort} '
+               '<include refid="order"><property name="sort" value="id"/></include></select>') == []
+
+
+def test_d37_property_for_another_name_leaves_the_placeholder(tmp_path):
+    assert _mb(tmp_path, '<sql id="order"> ORDER BY ${sort} </sql>\n<select id="search">SELECT * FROM u '
+               '<include refid="order"><property name="dir" value="asc"/></include></select>') == [3]
+
+
+def test_d37_property_reaches_a_nested_include(tmp_path):
+    assert _mb(tmp_path, '<sql id="inner"> ORDER BY ${sort} </sql>\n<sql id="outer"><include refid="inner"/></sql>\n'
+               '<select id="search">SELECT * FROM u <include refid="outer"><property name="sort" value="id"/></include></select>') == []
+
+
+def test_d38_qualified_include_ignores_a_same_named_local_fragment(tmp_path):
+    assert _mb(tmp_path, '<sql id="inner"> ORDER BY ${sort} </sql>\n'
+               '<select id="search">SELECT * FROM u WHERE id = #{sort} <include refid="com.example.Shared.inner"/></select>',
+               '<sql id="inner"> ORDER BY id </sql>') == []
+
+
+def test_d38_unqualified_include_uses_the_local_fragment(tmp_path):
+    assert _mb(tmp_path, '<sql id="inner"> ORDER BY ${sort} </sql>\n'
+               '<select id="search">SELECT * FROM u <include refid="inner"/></select>',
+               '<sql id="inner"> ORDER BY id </sql>') == [3]
