@@ -1,0 +1,10 @@
+# OPTIONAL: also give the stack a low disk (IO) weight. Use only on a kernel that supports it:
+#   docker compose --env-file council.env -f compose.yml -f compose.io-weight.yml up -d
+# Some kernels (Docker Desktop's, for one) refuse to start a container that sets an IO weight, so this is not in the default file.
+services:
+  council:
+    blkio_config:
+      weight: 100
+  postgres:
+    blkio_config:
+      weight: 100

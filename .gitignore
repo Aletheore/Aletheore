@@ -77,3 +77,9 @@ benchmarks/pr-review-benchmark/results/
 # whatever directory the opt-in SonarQube static-analysis check runs from
 # (aletheore/static_analysis/sonarqube_scanner.py). Machine-local, regenerated every scan.
 .scannerwork/
+
+# Council: the real server settings and backups never go in git
+council/deploy/council.env
+council/deploy/council_tokens.json
+council/deploy/secrets/
+council/deploy/backups/

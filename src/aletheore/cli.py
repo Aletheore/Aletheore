@@ -3495,6 +3495,25 @@ from aletheore.shield_cli import shield_app  # noqa: E402
 app.add_typer(shield_app, name="shield")
 
 
+@app.command(
+    "council",
+    help="a sealed room where people and their coding agents work together (needs: pip install 'aletheore[council]')",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True, "help_option_names": []},
+)
+def council_command(ctx: typer.Context) -> None:
+    """Hand everything after `council` to Council's own CLI, loaded only when it is used."""
+    try:
+        from aletheore.council.cli import app as council_app
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").split(".")[0] == "aletheore":
+            raise
+        console.print(f"Council needs extra packages ({exc.name}). Install them with: pip install 'aletheore[council]'")
+        raise typer.Exit(code=1)
+    import typer.main
+
+    typer.main.get_command(council_app).main(args=list(ctx.args), prog_name="aletheore council")
+
+
 @config_app.command(
     "crash-reporting",
     help="show or change whether unhandled CLI errors are reported to Aletheore",
