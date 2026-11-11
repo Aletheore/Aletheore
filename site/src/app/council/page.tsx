@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 };
 
 const can = ["who is in the room", "the room's title", "when messages are sent, and how large", "which devices sent them"];
-const cannot = ["the messages", "the files and images", "who wrote what, inside the room", "the room key"];
+const cannot = ["the messages and plans", "the files and images", "agent and thread names", "the room key"];
 
 function Term({ children }: { children: string }) {
   return <pre className="max-w-[780px] overflow-x-auto whitespace-pre-wrap border border-line bg-term px-5 py-4 font-display text-[13px] leading-[1.7] text-ink">{children}</pre>;
@@ -24,28 +24,26 @@ export default function CouncilPage() {
   return (
     <>
       <PageHead eyebrow="Council" title="A room where your agents and your people work together.">
-        <p>Council is a separate product from Aletheore, made by the same team. People and their coding agents share one room. It is sealed end to end, it runs on your own machine, and a free tunnel gives it an address.</p>
+        <p>Council is made by the Aletheore team and installs with Aletheore as an optional extra. People and their coding agents share one room. It is sealed end to end, it runs on your own machine, and a free tunnel can give it an address. It has not had an independent security review yet.</p>
         <div className="mt-7 flex flex-wrap gap-3">
           <a href={COUNCIL_URL} className="inline-flex min-h-11 items-center bg-ink px-5 py-3 font-display text-[13.5px] font-semibold text-paper focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink">Open aletheorecouncil.com</a>
           <a href="#how" className="inline-flex min-h-11 items-center border border-line-strong px-5 py-3 font-display text-[13.5px] hover:border-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink">How it works</a>
         </div>
       </PageHead>
 
-      <Section id="how" eyebrow="1" title="One command starts it. One link invites a friend."
-        intro="You run Council on your own machine. A friend joins with a single-use link, and you let them in only after you both see the same four words.">
-        <Term>{`$ council serve
-Free tunnel slots in use: 3 / 150
-Friends can reach this room at https://slot-017.aletheorecouncil.com
-
-$ council invite-link --room cache --me hosty
-https://slot-017.aletheorecouncil.com/j/inv_7c1e…#…   (the key stays in the link)`}</Term>
+      <Section id="how" eyebrow="1" title="You start the room. One link invites a friend."
+        intro="You run Council on your own machine. A friend asks to join with a single-use link, and you let them in only after you both see the same four safety words.">
+        <Term>{`$ pip install 'aletheore[council]'
+$ council start --repo /path/to/project --host alice --title "Cache work"
+$ council invite-link --room ROOM --me alice
+$ council approve-join REQUEST_ID --room ROOM --me alice`}</Term>
       </Section>
 
-      <Section id="agents" eyebrow="2" title="Your agents join through MCP"
-        intro="Each agent gets three tools: read the room, see its status, and post. It can propose a plan or answer a question, but it cannot approve work or let anyone in. You do that.">
-        <Term>{`council_status   what is going on in the room
-council_read     read the room's messages (framed as untrusted text)
-council_post     a claim, a question, evidence, a proposal, a result`}</Term>
+      <Section id="agents" eyebrow="2" title="Your agents can set a room up through MCP"
+        intro="Council has six tools for agents, in an MCP server called council-control. An agent can start a room, make an invitation and define an area. It cannot approve anyone, reject anyone, remove anyone or touch keys. Only you can let someone in.">
+        <Term>{`list_rooms           list_join_requests
+room_status          define_area
+start_room           make_invite`}</Term>
       </Section>
 
       <Section id="private" eyebrow="3" title="The server sees almost nothing"
