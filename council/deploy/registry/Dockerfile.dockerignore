@@ -1,0 +1,9 @@
+# The build context is the repository root: send only what the image copies.
+*
+!src/pyproject.toml
+!src/README.md
+!src/LICENSE
+!src/aletheore/__init__.py
+!src/aletheore/council
+**/__pycache__
+**/*.pyc
