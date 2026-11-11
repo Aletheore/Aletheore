@@ -7,6 +7,7 @@ starting with a dot) resolve to nothing, which the interpreter treats as unknown
 
 from __future__ import annotations
 
+import os
 import re
 
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ from tree_sitter import Node, Parser
 
 from aletheore.scanner.graph import JS_LANGUAGE, TS_LANGUAGE, TSX_LANGUAGE
 
+_TS_OF_JS = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
 EXTS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx")
 FN_TYPES = ("function_declaration", "function_expression", "function", "arrow_function", "generator_function_declaration",
             "generator_function")
@@ -50,8 +52,42 @@ def _fn_value(n: Node | None) -> Node | None:
     return n if n is not None and n.type in FN_TYPES else None
 
 
+def _promisified(val: Node) -> Node | None:
+    """`promisify(exec)` / `util.promisify(cp.exec)`: the function it wraps."""
+    if val.type != "call_expression":
+        return None
+    fn = _t(val.child_by_field_name("function"))
+    if fn != "promisify" and not fn.endswith(".promisify"):
+        return None
+    args = val.child_by_field_name("arguments")
+    return args.named_children[0] if args is not None and args.named_children else None
+
+
+def _resolve_promisified(f: JsFile, wrapped: list[tuple[str, Node]]) -> None:
+    """A promisified child_process function is the same command sink under another name: record the alias like an import
+    of child_process.exec, so the sink table sees it."""
+    for alias, arg in wrapped:
+        if arg.type == "identifier" and _t(arg) in f.requires:
+            mod, orig = f.requires[_t(arg)]
+            member = orig if orig and orig != "default" else _t(arg)
+        elif arg.type == "member_expression":
+            obj, member = arg.child_by_field_name("object"), _t(arg.child_by_field_name("property"))
+            if obj is not None and obj.type == "identifier" and _t(obj) in f.requires:
+                mod = f.requires[_t(obj)][0]
+            elif obj is not None and obj.type == "call_expression" and _t(obj.child_by_field_name("function")) == "require":
+                oargs = obj.child_by_field_name("arguments")
+                mod = next((_t(a).strip("'\"`") for a in (oargs.named_children if oargs else []) if a.type == "string"), "")
+            else:
+                continue
+        else:
+            continue
+        if isinstance(mod, str) and mod.removeprefix("node:") == "child_process" and member in ("exec", "execFile", "spawn"):
+            f.requires[alias] = (mod, member)
+
+
 def _scan(f: JsFile) -> None:
     stack = [f.root]
+    wrapped: list[tuple[str, Node]] = []
     while stack:
         n = stack.pop()
         t = n.type
@@ -75,6 +111,8 @@ def _scan(f: JsFile) -> None:
             if name_n is not None and name_n.type == "identifier" and val is not None:
                 if _fn_value(val) is not None:
                     f.functions[_t(name_n)] = val
+                elif _promisified(val) is not None:
+                    wrapped.append((_t(name_n), _promisified(val)))
                 elif val.type == "call_expression" and _t(val.child_by_field_name("function")) == "require":
                     args = val.child_by_field_name("arguments")
                     spec = next((_t(a).strip("'\"`") for a in (args.named_children if args else []) if a.type == "string"), None)
@@ -151,6 +189,8 @@ def _scan(f: JsFile) -> None:
                         al = sp.child_by_field_name("alias")
                         f.exports[_t(al) if al is not None else _t(nm)] = nm
         stack.extend(n.children)
+    if wrapped:
+        _resolve_promisified(f, wrapped)
 
 
 class JsIndex:
@@ -182,6 +222,13 @@ class JsIndex:
         for cand in [base] + [Path(str(base) + e) for e in EXTS] + [base / ("index" + e) for e in EXTS]:
             if cand.is_file():
                 return self.file(cand)
+        # TypeScript ESM (NodeNext) writes the compiled name: `import "./logic.js"` names logic.ts
+        stem, ext = os.path.splitext(str(base))
+        for js, ts in _TS_OF_JS.items():
+            if ext == js:
+                for cand in [Path(stem + t) for t in ts]:
+                    if cand.is_file():
+                        return self.file(cand)
         return None
 
     def named_in(self, jf: JsFile, name: str):

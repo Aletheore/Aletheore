@@ -33,7 +33,7 @@ _SINK_WORDS = {
 }
 for _c in _X.rule_classes("javascript"):  # the shared catalogue's method names
     _SINK_WORDS[_c] = tuple(_SINK_WORDS.get(_c, ())) + _X.prefilter_words("javascript", _c)
-_ENTRY_WORDS = (b"req", b"request", b"ctx.", b"process.argv", b"express", b"koa", b"fastify", b"hapi")
+_ENTRY_WORDS = (b"req", b"request", b"ctx.", b"process.argv", b"express", b"koa", b"fastify", b"hapi", b".tool(", b".tool<", b".registerTool", b".setRequestHandler")
 _EXTS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx")
 _SKIP_PARTS = {"node_modules", "dist", "build", "coverage", "__tests__", "test", "tests", "spec", "e2e", "frontend", "client",
                "public", "static", "vendor", "bower_components", ".next", ".nuxt", "cypress", "storybook"}
@@ -98,6 +98,26 @@ def _route_handlers(jf: JsFile):
                         yield a
                     elif a.type == "identifier" and a.text.decode("utf-8", "replace") in jf.functions:
                         yield jf.functions[a.text.decode("utf-8", "replace")]
+        stack.extend(n.children)
+
+
+_MCP_REGISTRARS = {"tool", "registerTool", "setRequestHandler", "addTool"}
+
+
+def _mcp_handlers(jf: JsFile):
+    """Handlers an MCP server registers (`server.tool(name, schema, async (args) => ...)`, `registerTool`, `setRequestHandler`):
+    the model, and whoever prompts it, chooses their arguments."""
+    stack = [jf.root]
+    while stack:
+        n = stack.pop()
+        if n.type == "call_expression":
+            f = n.child_by_field_name("function")
+            if f is not None and f.type == "member_expression" and f.child_by_field_name("property") is not None \
+                    and f.child_by_field_name("property").text.decode("utf-8", "replace") in _MCP_REGISTRARS:
+                args = n.child_by_field_name("arguments")
+                fns = [a for a in (args.named_children if args is not None else []) if a.type in FN_TYPES]
+                if fns:
+                    yield fns[-1]
         stack.extend(n.children)
 
 
@@ -208,7 +228,9 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
             handlers = list(_route_handlers(jf))
             nexts = list(_next_route_handlers(jf)) if _next_server_file(path.relative_to(repo).parts) else []
             handler_ids = {id(h) for h in handlers} | {id(h) for h in nexts}
-            entries = [(None, False)] + [(h, True) for h in handlers] + [(h, "next") for h in nexts]
+            mcps = [h for h in _mcp_handlers(jf) if id(h) not in handler_ids]
+            entries = [(None, False)] + [(h, True) for h in handlers] + [(h, "next") for h in nexts] + [(h, "mcp") for h in mcps]
+            handler_ids |= {id(h) for h in mcps}
             seen_entries = set(handler_ids)
             # Enclosing functions (a handler factory or constructor) build the scope their handlers close over.
             for fn in list(jf.functions.values()):

@@ -80,3 +80,94 @@ def test_go_struct_without_a_request_field_is_not_a_request_context(tmp_path):
     }
     _write(tmp_path, files)
     assert _rules(tmp_path, "path-traversal") == []
+
+
+# ---- JS: promisified child_process functions are command sinks
+
+JS_PROMISIFIED = ('const { exec } = require("child_process");\nconst { promisify } = require("util");\nconst execAsync = promisify(exec);\n'
+                  'const express = require("express"); const app = express();\n'
+                  'app.post("/x", async (req, res) => { const { stdout } = await execAsync(`git init -b "${req.body.branch}"`); res.send("ok"); });\n')
+
+
+def test_js_promisified_exec_is_a_command_sink(tmp_path):
+    _write(tmp_path, {"a.js": JS_PROMISIFIED})
+    assert _rules(tmp_path, "command-injection") == [("command-injection", 5)]
+
+
+def test_js_util_promisify_of_a_module_member(tmp_path):
+    src = ('const cp = require("child_process"); const util = require("util");\nconst run = util.promisify(cp.execFile);\n'
+           'const express = require("express"); const app = express();\n'
+           'app.get("/x", async (req, res) => { await run("sh", ["-c", req.query.c]); res.send("ok"); });\n')
+    _write(tmp_path, {"a.js": src})
+    assert _rules(tmp_path, "command-injection") == [("command-injection", 4)]
+
+
+def test_ts_import_style_promisified_exec(tmp_path):
+    src = ('import { exec } from "node:child_process";\nimport { promisify } from "node:util";\nconst execAsync = promisify(exec);\n'
+           'import express from "express"; const app = express();\n'
+           'app.post("/x", async (req, res) => { await execAsync("ls " + req.body.dir); res.send("ok"); });\n')
+    _write(tmp_path, {"a.ts": src})
+    assert _rules(tmp_path, "command-injection") == [("command-injection", 5)]
+
+
+def test_js_promisify_of_something_else_is_not_a_sink(tmp_path):
+    src = ('const fs = require("fs"); const { promisify } = require("util");\nconst readAsync = promisify(fs.readFile);\n'
+           'const wait = promisify((ms, cb) => setTimeout(cb, ms));\nconst express = require("express"); const app = express();\n'
+           'app.get("/x", async (req, res) => { await wait(Number(req.query.ms)); res.send("ok"); });\n')
+    _write(tmp_path, {"a.js": src})
+    assert _rules(tmp_path, "command-injection") == []
+
+
+# ---- JS/TS: MCP tool handlers receive attacker-influenced arguments
+
+def test_mcp_tool_handler_arguments_reach_a_command(tmp_path):
+    src = ('import { exec } from "child_process"; import { promisify } from "util";\nconst execAsync = promisify(exec);\n'
+           'export function register(server: any) {\n  server.tool("git_init", "init", {}, async (args: any) => {\n'
+           '    await execAsync(`git init -b "${args.branch}"`);\n    return { content: [] };\n  });\n}\n')
+    _write(tmp_path, {"t.ts": src})
+    assert _rules(tmp_path, "command-injection") == [("command-injection", 5)]
+
+
+def test_mcp_tool_arguments_flow_into_another_file(tmp_path):
+    logic = ('import { exec } from "child_process"; import { promisify } from "util";\nconst execAsync = promisify(exec);\n'
+             'export async function run(input: { dir: string }) {\n  await execAsync(`ls ${input.dir}`);\n}\n')
+    reg = ('import { run } from "./logic";\nexport function register(server: any) {\n'
+           '  server.registerTool("ls", { description: "x" }, async (params: any) => { await run(params); return { content: [] }; });\n}\n')
+    _write(tmp_path, {"logic.ts": logic, "reg.ts": reg})
+    assert [r for r in _rules(tmp_path, "command-injection")] == [("command-injection", 4)]
+
+
+def test_mcp_tool_that_ignores_its_arguments_is_quiet(tmp_path):
+    src = ('import { exec } from "child_process"; import { promisify } from "util";\nconst execAsync = promisify(exec);\n'
+           'export function register(server: any) {\n  server.tool("status", "s", {}, async (args: any) => {\n'
+           '    await execAsync("git status");\n    return { content: [] };\n  });\n}\n')
+    _write(tmp_path, {"t.ts": src})
+    assert _rules(tmp_path, "command-injection") == []
+
+
+def test_mcp_tool_registered_with_a_type_argument(tmp_path):
+    logic = ('import { exec } from "child_process"; import { promisify } from "util";\nconst execAsync = promisify(exec);\n'
+             'export async function run(input: any) {\n  await execAsync(`ls ${input.dir}`);\n}\n')
+    reg = ('import { run } from "./logic";\nexport function register(server: any) {\n'
+           '  server.tool<typeof Schema>("ls", "d", Schema, async (validatedArgs: any) => { return await run({ ...validatedArgs, path: "p" }); });\n}\n')
+    _write(tmp_path, {"logic.ts": logic, "reg.ts": reg})
+    assert _rules(tmp_path, "command-injection") == [("command-injection", 4)]
+
+
+def test_ts_esm_import_with_js_extension_resolves_to_the_ts_file(tmp_path):
+    logic = ('import { exec } from "child_process"; import { promisify } from "util";\nconst execAsync = promisify(exec);\n'
+             'export async function run(input: any) {\n  await execAsync(`ls ${input.dir}`);\n}\n')
+    reg = ('import { run } from "./logic.js";\nexport function register(server: any) {\n'
+           '  server.registerTool("ls", {}, async (args: any) => { return await run(args); });\n}\n')
+    _write(tmp_path, {"logic.ts": logic, "reg.ts": reg})
+    assert _rules(tmp_path, "command-injection") == [("command-injection", 4)]
+
+
+def test_ts_esm_js_extension_does_not_override_a_real_js_file(tmp_path):
+    safe = 'export async function run(input) { return 1; }\n'
+    ts = ('import { exec } from "child_process";\nexport async function run(input: any) { exec(`ls ${input.dir}`); }\n')
+    reg = ('import { run } from "./logic.js";\nexport function register(server: any) {\n'
+           '  server.registerTool("ls", {}, async (args: any) => { return await run(args); });\n}\n')
+    _write(tmp_path, {"logic.js": safe, "logic.ts": ts, "reg.ts": reg})
+    # the real logic.js exists, so that is the file the import names; its run() runs no command
+    assert _rules(tmp_path, "command-injection") == []
