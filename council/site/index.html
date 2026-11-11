@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aletheore Council: a room for your agents and your people</title>
+<meta name="description" content="Council is a shared room where coding agents and people work together. It runs on your own machine, it is sealed end to end, and you decide who comes in.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0F0E0B">
+<link rel="canonical" href="https://aletheorecouncil.com/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Aletheore Council">
+<meta property="og:title" content="Aletheore Council: a room for your agents and your people">
+<meta property="og:description" content="Council is a shared room where coding agents and people work together. It runs on your own machine, it is sealed end to end, and you decide who comes in.">
+<meta property="og:url" content="https://aletheorecouncil.com/">
+<meta property="og:image" content="https://aletheorecouncil.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Aletheore Council: a room where your agents and your people work together.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Aletheore Council: a room for your agents and your people">
+<meta name="twitter:description" content="Council is a shared room where coding agents and people work together. It runs on your own machine, it is sealed end to end, and you decide who comes in.">
+<meta name="twitter:image" content="https://aletheorecouncil.com/og.png">
+<!-- LAUNCH: remove the next line (and the X-Robots-Tag header in vercel.json) when Council is released -->
+<meta name="robots" content="noindex, nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--paper:#0F0E0B;--raised:#17150F;--term:#1B1912;--ink:#F1EEE6;--muted:#A39D8E;--faint:#8C8676;--dim:#756F61;--line:#2B2820;--line2:#3F3B2F;--accent:#fff;--needs:#E3A23B;--ok:#6FA874;--err:#E0584A;
+--mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;--sans:Geist,-apple-system,"Segoe UI",system-ui,sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--paper);color:var(--ink);scroll-behavior:auto}
+body{font-family:var(--sans);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit}
+.brand{display:inline-flex;align-items:center;gap:.5ch;background:var(--accent);color:var(--paper);font:600 12px/1 var(--mono);letter-spacing:.06em;padding:8px 12px}
+header{position:fixed;inset:0 0 auto 0;z-index:50;display:flex;justify-content:space-between;align-items:center;padding:16px 32px;background:linear-gradient(var(--paper) 40%,transparent)}
+header nav{display:flex;gap:28px;font:500 13px var(--mono);color:var(--muted)}
+header nav a{text-decoration:none}header nav a:hover{color:var(--ink)}
+.hero{min-height:100vh;display:grid;place-items:center;text-align:center;padding:120px 24px 80px;position:relative}
+.hero h1{font:500 clamp(34px,6.2vw,76px)/1.04 var(--mono);letter-spacing:-.03em;max-width:15ch;margin:0 auto}
+.hero h1 em{font-style:normal;color:var(--accent);background:linear-gradient(transparent 62%,rgba(255,255,255,.14) 62%)}
+.hero p{margin:28px auto 0;max-width:52ch;color:var(--muted);font-size:clamp(16px,1.6vw,20px);line-height:1.55}
+.cta{display:inline-flex;gap:12px;margin-top:38px;flex-wrap:wrap;justify-content:center}
+.btn{font:500 14px var(--mono);padding:14px 22px;border:1px solid var(--line2);text-decoration:none;color:var(--ink)}
+.btn.primary{background:var(--accent);color:var(--paper);border-color:var(--accent)}
+.cue{position:absolute;bottom:36px;left:50%;transform:translateX(-50%);font:12px var(--mono);color:var(--faint);letter-spacing:.2em;animation:bob 2.4s ease-in-out infinite}
+@keyframes bob{50%{transform:translate(-50%,8px)}}
+/* ---------- the pinned demo ---------- */
+#stage{height:100vh;position:relative;overflow:hidden;background:radial-gradient(1200px 600px at 70% 40%,#1a1812 0,var(--paper) 70%)}
+.stage-inner{position:absolute;inset:0;display:grid;grid-template-columns:minmax(260px,.8fr) minmax(0,2fr);gap:40px;padding:90px 48px 40px;align-items:center}
+.captions{position:relative;height:340px}
+.cap{position:absolute;inset:0;opacity:0;visibility:hidden}
+.cap .n{font:600 12px var(--mono);color:var(--faint);letter-spacing:.18em}
+.cap h2{font:500 clamp(24px,2.6vw,38px)/1.12 var(--mono);letter-spacing:-.02em;margin:14px 0 16px}
+.cap p{color:var(--muted);font-size:17px;line-height:1.55;max-width:34ch}
+.cap b{color:var(--ink);font-weight:500}
+.dots{position:absolute;left:48px;bottom:34px;display:flex;gap:10px}
+.dots i{width:26px;height:3px;background:var(--line2);display:block;transition:background .3s}
+.dots i.on{background:var(--accent)}
+.viewport{position:relative;height:min(74vh,620px);overflow:hidden;border:1px solid var(--line2);background:var(--term);box-shadow:0 40px 120px rgba(0,0,0,.6)}
+.camera{position:absolute;inset:0;transform-origin:50% 50%;will-change:transform}
+.titlebar{height:30px;background:#12110c;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:7px;padding:0 12px;font:11px var(--mono);color:var(--faint)}
+.titlebar i{width:9px;height:9px;border-radius:50%;background:#3a3629;display:block}
+.screen{position:absolute;inset:30px 0 0 0;font:13px/1.55 var(--mono);color:var(--ink);padding:18px 20px}
+.layer{position:absolute;inset:0;opacity:0;visibility:hidden}
+.t-line{white-space:pre-wrap;min-height:1.55em}
+.prompt{color:var(--accent);font-weight:600}.m{color:var(--muted)}.f{color:var(--faint)}.ok{color:var(--ok)}.nd{color:var(--needs)}.bd{font-weight:600}
+.hl{padding:0 3px;border-radius:2px}
+.caret{display:inline-block;width:.6ch;height:1.1em;background:var(--accent);vertical-align:-2px;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+/* join modal */
+.modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(520px,86%);background:var(--raised);border:1px solid var(--needs);padding:22px 26px}
+.words{font:600 24px var(--mono);letter-spacing:.06em;display:flex;gap:18px;flex-wrap:wrap;margin:16px 0;color:var(--accent)}
+.guest{position:absolute;right:16px;bottom:16px;width:300px;background:#12110c;border:1px solid var(--line2);padding:12px 14px;font-size:11.5px}
+.btns{display:flex;gap:10px;margin-top:14px;font:500 12px var(--mono)}
+.btns span{padding:8px 14px;border:1px solid var(--line2)}.btns .go{background:var(--accent);color:var(--paper);border-color:var(--accent)}
+/* app mock */
+.app{position:absolute;inset:0;display:grid;grid-template-rows:auto auto 1fr auto auto;font-size:11.5px}
+.top{display:flex;gap:14px;align-items:center;padding:10px 14px;background:var(--raised);border-bottom:1px solid var(--line)}
+.top .r{margin-left:auto;display:flex;gap:14px;color:var(--muted);align-items:center}
+.stamp{font-weight:600;color:var(--accent)}
+.banner{overflow:hidden;height:0;background:var(--raised);border-left:3px solid var(--needs);padding:0 14px;color:var(--muted);display:flex;align-items:center}
+.body{display:grid;grid-template-columns:150px 1fr 170px;min-height:0}
+.rooms,.side{background:var(--raised);padding:12px;border-right:1px solid var(--line)}
+.side{border-right:0;border-left:1px solid var(--line)}
+.stream{padding:12px 16px;overflow:hidden;display:flex;flex-direction:column;gap:10px}
+.sec{color:var(--muted);font-weight:600;margin:0 0 6px}
+.sel{background:var(--term);display:flex;justify-content:space-between;padding:3px 6px 3px 0;border-left:3px solid var(--accent);padding-left:6px;font-weight:600}
+.badge{background:var(--needs);color:var(--paper);padding:0 6px;font-weight:600}
+.msg{border-left:3px solid #9a8ac0;padding-left:10px}
+.msg.b{border-color:#7fa7c7}
+.msg .who{font-weight:600}
+.card{border-left:3px solid var(--needs);padding:6px 10px;background:rgba(227,162,59,.05)}
+.bar{display:inline-block;letter-spacing:-1px}
+.queued{color:var(--faint)}
+.composer{margin:0 14px 6px;border:1px solid var(--line2);padding:8px 10px;color:var(--faint)}
+.status{padding:4px 14px 8px;color:var(--faint)}
+/* overlay: what the server sees */
+.sees{position:absolute;inset:34px 26px 26px 26px;background:rgba(15,14,11,.94);border:1px solid var(--line2);padding:20px 24px;display:grid;grid-template-columns:1fr 1fr;gap:26px;font-size:12.5px}
+.sees h4{font:600 12px var(--mono);letter-spacing:.14em;color:var(--muted);margin-bottom:12px}
+.sees li{list-style:none;margin:8px 0}
+.sees .can li::before{content:"○ ";color:var(--needs)}.sees .cannot li::before{content:"✓ ";color:var(--ok)}
+.tagline{position:absolute;inset:0;display:grid;place-items:center;text-align:center;font:500 clamp(22px,3.4vw,42px)/1.15 var(--mono);letter-spacing:-.02em;opacity:0;visibility:hidden;background:rgba(15,14,11,.86)}
+/* agents scene */
+.agents{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:minmax(0,1fr) auto;gap:12px;padding:14px;font-size:11.5px;line-height:1.5}
+.pane{background:#12110c;border:1px solid var(--line2);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.ptitle{display:flex;justify-content:space-between;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--raised)}
+.pbody{padding:12px;display:flex;flex-direction:column;gap:9px}
+.tool{border-left:3px solid var(--needs);padding:3px 10px;background:rgba(227,162,59,.05)}
+.gate{grid-column:1 / -1;display:grid;grid-template-columns:1fr 1.5fr;gap:12px}
+.gate>div{border:1px solid var(--line2);padding:10px 12px;background:var(--raised)}
+.gate .human{border-color:var(--needs)}
+.chips span{display:inline-block;border:1px solid var(--line2);padding:0 6px;margin:2px 5px 2px 0}
+.chips.no span{text-decoration:line-through;color:var(--faint)}
+/* sections after */
+section.after{padding:140px 48px;max-width:1180px;margin:0 auto}
+.lab{font:600 12px var(--mono);letter-spacing:.18em;color:var(--faint);margin-bottom:18px}
+.h2{font:500 clamp(28px,4vw,52px)/1.08 var(--mono);letter-spacing:-.03em;max-width:20ch}
+.grid150{display:grid;grid-template-columns:repeat(30,1fr);gap:6px;margin:48px 0 18px;max-width:820px}
+.grid150 i{aspect-ratio:1;border:1px solid var(--line2);display:block;transition:all .5s}
+.grid150 i.on{background:var(--accent);border-color:var(--accent)}
+.count{font:600 clamp(40px,6vw,84px) var(--mono);letter-spacing:-.04em}
+.limits{margin-top:28px;max-width:720px;color:var(--muted);line-height:1.6;font-size:16px}.limits b{color:var(--ink);font-weight:500}
+.sponsor{margin-top:34px;padding:22px 24px;border:1px solid var(--line2);max-width:720px;color:var(--muted);line-height:1.6}
+.three{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);margin-top:56px;border:1px solid var(--line)}
+.three div{background:var(--paper);padding:30px}
+.three h3{font:500 18px var(--mono);margin-bottom:12px}.three p{color:var(--muted);line-height:1.55;font-size:15px}
+pre.install{margin-top:30px;background:var(--term);border:1px solid var(--line2);padding:18px 22px;font:14px var(--mono);max-width:640px;color:var(--ink)}
+footer{border-top:1px solid var(--line);padding:36px 48px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:16px;color:var(--faint);font:13px var(--mono)}
+footer a{color:var(--muted)}
+.titlebar span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:900px){.agents{grid-template-columns:1fr;grid-template-rows:none;overflow:hidden;font-size:9.5px;gap:8px;padding:8px}.pbody{padding:8px;gap:5px}.tool{padding:2px 7px}.ptitle{padding:5px 8px}.gate{grid-template-columns:1fr}.gate>div:last-child{display:none}.stage-inner{grid-template-columns:1fr;padding:80px 18px 30px;gap:18px}.captions{height:170px}.cap h2{font-size:22px;margin:8px 0}.cap p{font-size:14px}.viewport{height:66vh}.dots{left:18px;bottom:12px}.tool .f,.gate .human .f{display:none}.three{grid-template-columns:1fr}header nav a:not(:last-child){display:none}section.after{padding:90px 20px}}
+/* phones: the room view and the join request get one column and less chrome (found by the device sweep) */
+@media(max-width:700px){.guest{left:12px;right:12px;width:auto}.modal{top:36%}
+.app{font-size:10.5px}.top{gap:8px;padding:8px 10px}.top .brand{display:none}.top .r{gap:8px}.top .r>span:nth-child(n+3){display:none}
+.body{grid-template-columns:1fr}.rooms,.side{display:none}.stream{padding:8px 12px;gap:7px}.composer{display:none}.banner{font-size:10px}}
+@media(max-width:420px){.agents{font-size:8.8px;gap:6px;padding:6px}.ptitle .f{display:none}.pbody{padding:6px 8px;gap:4px}.tool{padding:1px 6px}}
+@media(min-width:701px) and (max-width:1100px){.agents{font-size:10px}.tool .f{display:none}}
+@media(max-width:380px){.agents{font-size:8.3px}}
+.rotate{display:none;padding:56px 24px;text-align:center;color:var(--muted);font:14px/1.6 var(--mono)}
+@media (max-width:900px) and (max-height:619px), (max-height:480px){#stage{display:none}.rotate{display:block}}
+#stage{height:100svh}
+@media(max-width:900px){.stage-inner{padding:72px 18px 60px}.captions{height:150px}.cap h2{font-size:20px}.cap p{font-size:13.5px}
+.viewport{height:min(66vh,calc(100vh - 300px));height:min(66svh,calc(100svh - 300px))}.dots{bottom:22px}}
+@media(max-width:700px){.modal{top:10px;left:12px;right:12px;width:auto;transform:none;padding:14px 16px}.modal .f{display:none}
+.words{font-size:19px;gap:10px;margin:10px 0}.btns{margin-top:8px}.guest{bottom:10px}}
+@media(max-width:700px) and (max-height:760px){.stream{justify-content:flex-end}}
+@media(max-width:700px) and (max-height:780px){.pbody .t-line:first-child{display:none}}
+@media(max-width:900px) and (max-height:760px){.stage-inner{padding:64px 18px 48px;gap:10px}.captions{height:112px}.cap .n{font-size:11px}
+.cap h2{font-size:18px;margin:6px 0}.cap p{font-size:12.5px;line-height:1.4}.viewport{height:calc(100vh - 236px);height:calc(100svh - 236px)}.dots{bottom:20px}}
+</style>
+</head>
+<body>
+<header><span class="brand">◆ ALETHEORE COUNCIL</span><nav><a href="#demo">Demo</a><a href="#tunnels">Free tunnels</a><a href="#install">Availability</a></nav></header>
+
+<div class="hero">
+  <div>
+    <h1>A room where your agents and your <em>people</em> work together.</h1>
+    <p>Sealed end to end. Runs on your machine. Invite a friend with one link, compare four words, and let your coding agents join the conversation.</p>
+    <div class="cta"><a class="btn primary" href="#demo">Watch it work</a><a class="btn" href="#install">Availability</a></div>
+  </div>
+  <div class="cue">SCROLL</div>
+</div>
+
+<div id="demo"></div>
+<div class="rotate">The walkthrough needs a taller screen. Turn your phone upright if it is sideways, or open this page on a laptop or a larger phone.</div>
+<div id="stage">
+  <div class="stage-inner">
+    <div class="captions" id="caps">
+      <div class="cap"><div class="n">01 · HOST</div><h2>One command starts your room.</h2><p>It runs on <b>your machine</b>. A free tunnel gives it a public address. No port forwarding, no account.</p></div>
+      <div class="cap"><div class="n">02 · INVITE</div><h2>The key stays in the link.</h2><p>The part after the <b>#</b> never reaches any server. One link, one person, one use.</p></div>
+      <div class="cap"><div class="n">03 · TRUST</div><h2>Compare four words, out loud.</h2><p>Your guest's screen and yours must show the <b>same four words</b>. Only then do you let them in.</p></div>
+      <div class="cap"><div class="n">04 · TOGETHER</div><h2>People and agents, one room.</h2><p>Messages are <b>sealed</b>. Agents propose plans; you approve them. Nothing runs without you.</p></div>
+      <div class="cap"><div class="n">05 · APPROVE</div><h2>You stay in charge.</h2><p>The plan waits for you, marked in amber. <b>One key</b> to approve, one to reject.</p></div>
+      <div class="cap"><div class="n">06 · OFFLINE</div><h2>When the connection drops, nothing is lost.</h2><p>Messages <b>wait their turn</b> and are sent in order, exactly once, when the host is back.</p></div>
+      <div class="cap"><div class="n">07 · PRIVATE</div><h2>The server sees almost nothing.</h2><p>Who is in the room, and when. Never the <b>text, the files, or the key</b>.</p></div>
+      <div class="cap"><div class="n">08 · AGENTS</div><h2>Ask your agent to set it up.</h2><p>It can start the room, make the invite and see who is waiting. <b>Six tools, and none of them let anyone in.</b> That key is yours.</p></div>
+    </div>
+    <div class="viewport">
+      <div class="camera" id="camera">
+        <div class="titlebar"><i></i><i></i><i></i><span style="margin-left:8px">council · illustration, except the recorded agent runs</span></div>
+        <div class="screen">
+          <!-- A: the shell -->
+          <div class="layer" id="L-shell" style="opacity:1;visibility:visible">
+            <div class="t-line"><span class="prompt">$ </span><span id="ty1"></span><span class="caret" id="caret1"></span></div>
+            <div class="t-line m" id="o1">Council room server on 127.0.0.1:8765 for accounts</div>
+            <div class="t-line m" id="o2">Free tunnel slots in use: <span class="bd" style="color:var(--ink)">3 / 150</span></div>
+            <div class="t-line" id="o3">Friends can reach this room at <span class="hl" id="addr" style="color:var(--accent);font-weight:600">https://slot-017.aletheorecouncil.com</span></div>
+            <div class="t-line f" id="o4">A student developed open source project. Free tunnels stay free with your help:
+please sponsor https://github.com/sponsors/ArihantK15</div>
+            <div class="t-line" id="o5" style="margin-top:14px"><span class="prompt">$ </span><span id="ty2"></span></div>
+            <div class="t-line m" id="o6">Invitation link for room cache:</div>
+            <div class="t-line" id="o7" style="word-break:break-all">https://slot-017.aletheorecouncil.com/j/inv_7c1e9a4d<span class="hl" id="secret" style="color:var(--accent);font-weight:600">#Qz8kV3xH9pL2mN7aR5tWc1Yb</span>.dev_4f72a9</div>
+            <div class="t-line m" id="o8">Share it with one person. It works once and expires in 24 hours.</div>
+          </div>
+          <!-- B: join request -->
+          <div class="layer" id="L-join">
+            <div class="modal" id="modal">
+              <div class="nd bd" style="letter-spacing:.1em">SOMEONE WANTS TO JOIN</div>
+              <div style="margin-top:8px"><span class="bd">megan</span> <span class="m">asks to join Cache work</span></div>
+              <div class="m" style="margin-top:12px">Ask them to read these four words to you. They must match exactly.</div>
+              <div class="words" id="words"><span>CALM</span><span>OTTER</span><span>REEF</span><span>LAMP</span></div>
+              <div class="f">Approving gives them the room key (epoch 1). Older messages stay closed.</div>
+              <div class="btns"><span class="go">Approve (a)</span><span>Reject (r)</span><span>Later (esc)</span></div>
+            </div>
+            <div class="guest" id="guest">
+              <div class="f">megan's laptop, on another network</div>
+              <div style="margin-top:6px"><span class="prompt">$ </span>council join-link …</div>
+              <div class="m">Tell the host these safety words:</div>
+              <div class="bd" style="color:var(--accent);letter-spacing:.04em" id="gwords">calm-otter-reef-lamp</div>
+              <div class="ok" id="match" style="margin-top:6px">✓ the host's screen shows the same words</div>
+            </div>
+          </div>
+          <!-- C: the app -->
+          <div class="layer" id="L-app" style="padding:0">
+            <div class="app">
+              <div class="top"><span class="brand" style="font-size:10px;padding:5px 8px">◆ ALETHEORE COUNCIL</span><span><span class="f">ROOM</span> <b>Cache work</b> <span class="f">r1</span></span>
+                <span class="r"><span class="stamp" id="sealed">▌SEALED▐</span><span id="live" class="ok">● live</span><span>host hosty</span><span>you: hosty</span></span></div>
+              <div class="banner" id="banner"><span id="bannertxt"><span class="nd bd">◌ unreachable </span>for <span id="secs">62</span> s: your connection to the server is down. Messages you send wait here (<span id="nwait">2</span> waiting); next try in 3 s.</span></div>
+              <div class="body">
+                <div class="rooms" id="rooms"><div class="sec">§ ROOMS</div><div class="sel"><span>Cache work</span><span class="badge">1</span></div><div class="m" style="padding:3px 0 3px 9px">Billing refactor</div><div class="m" style="padding:3px 0 3px 9px">Docs sweep</div>
+                  <div class="f" style="margin:12px 0 6px">┄┄┄┄┄┄┄┄┄┄┄┄</div><div class="nd bd">◆ NEEDS YOU</div><div class="m">Cache work</div><div class="f">&nbsp;&nbsp;plan plan-p-1</div></div>
+                <div class="stream" id="stream">
+                  <div class="f" id="dd">── Today ─────────────────────────</div>
+                  <div class="msg" id="m1"><div><span class="who" style="color:#a99bd1">megan</span> <span class="f">says</span></div><div id="mt1"></div></div>
+                  <div class="msg b" id="m2"><div><span class="who" style="color:#8fb4d6">hosty</span> <span class="f">· hosty-codex  claim</span></div><div id="mt2"></div></div>
+                  <div class="card" id="plan"><div><span class="nd bd">┌ PLAN</span> <span class="m">plan-p-1</span>  <span class="nd bd">pending</span>  <span class="f">by hosty</span></div><div>Splitting this across two areas</div><div class="m">→ redis: write-through cache</div><div class="m">→ schema: invalidate on password change</div></div>
+                  <div id="qlines"></div>
+                  <div class="msg" id="m3" style="display:none"><div><span class="who" style="color:#a99bd1">megan</span> <span class="f">says</span></div><div>can we ship the cache change today?</div></div>
+                  <div class="f" id="notice" style="display:none">  · the host's server is back: waiting messages are being sent</div>
+                </div>
+                <div class="side" id="side"><div class="sec">§ AGENTS</div><div class="ok bd">◐ hosty-codex</div><div class="ok">&nbsp;&nbsp;building redis</div><div class="ok"><span class="bar" id="bar1">░░░░░░░░░░░░</span> <span class="m">1/2</span></div>
+                  <div class="m bd" style="margin-top:6px">○ megan-claude</div><div class="f">&nbsp;&nbsp;idle, 2m</div>
+                  <div class="sec" style="margin-top:12px">§ MEMBERS</div><div><span class="ok">●</span> hosty <span class="f">host you</span></div><div><span class="ok">●</span> megan</div>
+                  <div class="sec" style="margin-top:12px">§ SECURITY</div><div class="stamp">▌SEALED▐</div><div class="ok">✓ 8 read, checked</div><div class="ok">✓ nothing ignored</div></div>
+              </div>
+              <div class="composer" id="composer">› Ask the room to do something…</div>
+              <div class="status" id="status">● waiting on you (1)    a approve · r reject · s skip · ctrl+r rooms</div>
+            </div>
+            <div class="sees" id="sees" style="opacity:0;visibility:hidden">
+              <div class="can"><h4>THE SERVER CAN SEE</h4><ul><li>who is in the room</li><li>the room's title</li><li>when messages are sent, and how big</li><li>who posted each one, and from which device</li></ul></div>
+              <div class="cannot"><h4>THE SERVER CANNOT SEE</h4><ul><li>the messages and plans</li><li>the files and images</li><li>agent and thread names</li><li>the room key</li></ul></div>
+            </div>
+          </div>
+          <!-- D: agents use the control tools -->
+          <div class="layer" id="L-agent">
+            <div class="agents">
+              <div class="pane" id="pane-a">
+                <div class="ptitle"><span class="bd">Claude Code</span><span class="f">council-control · recorded run</span></div>
+                <div class="pbody">
+                  <div class="t-line"><span class="prompt">&gt; </span><span id="ag-c1"></span></div>
+                  <div class="tool" id="ag-ct1"><div><span class="nd">●</span> <span class="bd">council_control_start_room</span></div><div class="f">title "agent-test"</div><div class="ok">→ room-0c44f397 · sealed · interactive</div></div>
+                  <div class="tool" id="ag-ct2"><div><span class="nd">●</span> <span class="bd">council_control_make_invite</span></div><div class="f">room room-0c44f397</div><div class="ok">→ one-time link (not shown) · 24 h</div></div>
+                  <div class="t-line m" id="ag-c2"></div>
+                </div>
+              </div>
+              <div class="pane" id="pane-b">
+                <div class="ptitle"><span class="bd">Codex</span><span class="f">council-control · recorded run</span></div>
+                <div class="pbody">
+                  <div class="t-line"><span class="prompt">&gt; </span><span id="ag-x1"></span></div>
+                  <div class="tool" id="ag-xt1"><div><span class="nd">●</span> <span class="bd">council_control_list_join_requests</span></div><div class="f">room room-2c1f2835</div><div class="ok">→ no one waiting</div></div>
+                  <div class="tool" id="ag-xt2"><div><span class="nd">●</span> <span class="bd">council_control_define_area</span></div><div class="f">docs · docs/** · owner tester</div><div class="ok">→ area docs defined</div></div>
+                  <div class="t-line m" id="ag-x2"></div>
+                </div>
+              </div>
+              <div class="gate" id="ag-gate">
+                <div class="human"><div class="nd bd" style="letter-spacing:.1em">THE HUMAN STEP</div><div class="m" style="margin-top:6px">You compare the four words, then press <b>a</b> to approve or <b>r</b> to reject, in your own terminal.</div><div class="f" style="margin-top:8px">Recorded runs. Only some of each agent's calls are shown, and the invitation link is left out.</div></div>
+                <div><div class="chips"><span>list_rooms</span><span>room_status</span><span>start_room</span><span>make_invite</span><span>list_join_requests</span><span>define_area</span></div>
+                  <div class="f" style="margin:6px 0 2px">NO TOOL FOR</div><div class="chips no"><span>approve</span><span>reject</span><span>remove</span><span>open a tunnel</span><span>keys</span></div></div>
+              </div>
+            </div>
+          </div>
+          <div class="tagline" id="tagline">Your room.<br>Your machine.<br>Sealed.</div>
+        </div>
+      </div>
+    </div>
+    <div class="dots" id="dots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  </div>
+</div>
+
+<section class="after" id="tunnels">
+  <div class="lab">FREE TUNNELS</div>
+  <div class="h2">Everyone gets a free tunnel, and we show you honestly how many are left.</div>
+  <div class="grid150" id="g150"></div>
+  <div class="count" id="count"><span id="cnt">…</span> <span style="color:var(--faint)">/ <span id="tot">150</span></span> <span style="font-size:.28em;color:var(--muted);letter-spacing:0">free slots in use</span></div>
+  <p class="limits"><b>The honest limits.</b> Rooms that reach across the internet are free, from a small shared pool: 150 live rooms at a time, and public rooms can transfer up to 5 GB of files a day. Rooms on your own machine or network (<b>council serve --local</b>) are always available, with no registry and no limit. Only the cross-internet rooms use our free infrastructure.</p>
+  <div class="sponsor">A student developed open source project. Free tunnels stay free with your help: please sponsor <a href="https://github.com/sponsors/ArihantK15">github.com/sponsors/ArihantK15</a></div>
+  <div class="three"><div><h3>Leased, not owned</h3><p>A name is yours while you use it. Leave, and after a grace period it goes to the next person.</p></div><div><h3>Messages are never capped</h3><p>Only file transfers have a daily allowance, so the free tunnels stay fair for everyone.</p></div><div><h3>Or skip the tunnel</h3><p>Run with <b style="color:var(--ink)">--local</b> on your own network, or bring your own tunnel.</p></div></div>
+</section>
+<!-- RELEASE: when Council ships inside the Aletheore package, replace this section with the real install and serve commands -->
+<section class="after" id="install" style="padding-top:40px">
+  <div class="lab">AVAILABILITY</div>
+  <div class="h2">Not released yet.</div>
+  <p class="limits">Council is in testing. It will ship inside the Aletheore Python package, so there is nothing to install from this page yet. It has not had an independent security review, so do not rely on it for anything sensitive.</p>
+</section>
+<footer><span>◆ ALETHEORE COUNCIL · <a href="https://github.com/Aletheore/Aletheore">GitHub</a> · <a href="https://registry.aletheorecouncil.com">Tunnel status</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></span><span>A project by <a href="https://aletheore.com">Aletheore</a> →</span></footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+<script>
+gsap.registerPlugin(ScrollTrigger);
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const camera=$("#camera"), vp=$(".viewport");
+const caps=$$(".cap"), dots=$$("#dots i");
+// the free-tunnel pool: the real count from the registry (through /api/slots). If it cannot be read we say so, we never show a made-up number.
+const g=$("#g150");
+function unreadable(){$("#count").innerHTML='<span style="font-size:.32em;color:var(--muted);letter-spacing:0;font-weight:500">The live count could not be read just now.</span>'}
+ScrollTrigger.create({trigger:"#tunnels",start:"top 70%",once:true,onEnter(){
+  fetch("/api/slots",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(d=>{
+    if(!d||!Number.isInteger(d.in_use)||!Number.isInteger(d.total)||d.total<1||d.total>1000||d.in_use<0||d.in_use>d.total)return unreadable();
+    $("#tot").textContent=d.total;
+    for(let i=0;i<d.total;i++){const c=document.createElement("i");g.appendChild(c)}
+    const cells=$$("#g150 i"),o={n:0};
+    gsap.to(o,{n:d.in_use,duration:1.2,onUpdate:()=>{$("#cnt").textContent=Math.round(o.n);cells.forEach((c,i)=>c.classList.toggle("on",i<Math.round(o.n)))}});
+  }).catch(unreadable);
+}});
+
+function type(el,text,tl,at,dur){const o={n:0};tl.to(o,{n:text.length,duration:dur,ease:"none",onUpdate(){el.textContent=text.slice(0,Math.round(o.n))}},at)}
+function show(el,tl,at,dur=1){tl.fromTo(el,{autoAlpha:0,y:6},{autoAlpha:1,y:0,duration:dur,ease:"power1.out"},at)}
+function rel(el){let x=0,y=0,n=el;while(n&&n!==camera){x+=n.offsetLeft;y+=n.offsetTop;n=n.offsetParent}return {cx:x+el.offsetWidth/2,cy:y+el.offsetHeight/2}}
+const narrow=()=>matchMedia("(max-width:900px)").matches;
+function aim(el,scale){if(narrow())return {scale:1,x:0,y:0};gsap.set(camera,{scale:1,x:0,y:0});const r=rel(el),W=camera.offsetWidth,H=camera.offsetHeight;return {scale,x:-(r.cx-W/2)*scale,y:-(r.cy-H/2)*scale}}
+let tl, plan=[];
+function build(){
+  if(tl){tl.scrollTrigger&&tl.scrollTrigger.kill();tl.kill();tl=null}
+  if(matchMedia("(max-width:900px) and (max-height:619px), (max-height:480px)").matches)return; // too short for the pinned walkthrough: the page shows a note instead
+  gsap.set(camera,{scale:1,x:0,y:0});
+  const layers={shell:$("#L-shell"),join:$("#L-join"),app:$("#L-app"),agent:$("#L-agent")};
+  const P=(at)=>at; // timeline positions are percentages of the whole scroll
+  tl=gsap.timeline({defaults:{ease:"power2.inOut"},scrollTrigger:{trigger:"#stage",start:"top top",end:"+=9500",scrub:.7,pin:true,anticipatePin:1,
+    onUpdate(self){const i=Math.min(7,Math.floor(self.progress*8));dots.forEach((d,k)=>d.classList.toggle("on",k<=i))}}});
+  tl.set({},{},100);
+  // reset text each rebuild
+  ["#ty1","#ty2","#mt1","#mt2","#ag-c1","#ag-c2","#ag-x1","#ag-x2"].forEach(s=>$(s).textContent="");
+  // ---- caption helper
+  const cap=(i,a,b)=>{tl.fromTo(caps[i],{autoAlpha:0,y:24},{autoAlpha:1,y:0,duration:3,ease:"power2.out"},a);tl.to(caps[i],{autoAlpha:0,y:-24,duration:3,ease:"power2.in"},b)};
+  // ---- SCENE 1: serve
+  gsap.set(["#o1","#o2","#o3","#o4","#o5","#o6","#o7","#o8"],{autoAlpha:0});
+  type($("#ty1"),"council serve",tl,2,6);tl.to("#caret1",{autoAlpha:0,duration:.1},8.2);
+  show("#o1",tl,9);show("#o2",tl,10.2);show("#o3",tl,11.4);show("#o4",tl,12.4);
+  cap(0,4,19);
+  tl.to("#addr",{backgroundColor:"rgba(255,255,255,.14)",duration:1.4},13.2);
+  tl.to(camera,{...aim($("#addr"),1.7),duration:5},13.5);
+  tl.to(["#o1","#o2","#o4"],{opacity:.18,duration:1.5},14);
+  // ---- SCENE 2: invite
+  tl.to(camera,{scale:1,x:0,y:0,duration:3},19.5);tl.to(["#o1","#o2","#o4"],{opacity:1,duration:1},19.5);tl.to("#addr",{backgroundColor:"rgba(255,255,255,0)",duration:1},19.5);
+  show("#o5",tl,21);type($("#ty2"),"council invite-link --room cache --me hosty",tl,21,4);
+  show("#o6",tl,25.2);show("#o7",tl,26);show("#o8",tl,26.8);
+  cap(1,23,34);
+  tl.to("#secret",{backgroundColor:"rgba(255,255,255,.16)",duration:1.2},27.6);
+  tl.to(camera,{...aim($("#secret"),1.55),duration:4},28);
+  tl.to(["#o1","#o2","#o3","#o4","#o5","#o6","#o8"],{opacity:.15,duration:1.2},28.4);
+  // ---- SCENE 3: join request
+  tl.to(layers.shell,{autoAlpha:0,duration:2},34.2);tl.to(camera,{scale:1,x:0,y:0,duration:2},34.2);
+  tl.fromTo(layers.join,{autoAlpha:0},{autoAlpha:1,duration:2},34.8);
+  tl.fromTo("#modal",{y:30,scale:.94},{y:0,scale:1,duration:3},34.8);
+  tl.fromTo("#words span",{autoAlpha:0,y:10},{autoAlpha:1,y:0,stagger:.9,duration:1},36.4);
+  tl.fromTo("#guest",{autoAlpha:0,x:60},{autoAlpha:1,x:0,duration:3},39);
+  tl.fromTo("#match",{autoAlpha:0},{autoAlpha:1,duration:1},41.4);
+  cap(2,36,47);
+  tl.to(camera,{...aim($("#words"),1.5),duration:3},41.6);
+  tl.to("#words span",{textShadow:"0 0 18px rgba(255,255,255,.7)",duration:1.5},43);
+  // ---- SCENE 4: the room
+  tl.to(layers.join,{autoAlpha:0,duration:2},47.4);tl.to(camera,{scale:1,x:0,y:0,duration:2},47.4);
+  tl.fromTo(layers.app,{autoAlpha:0},{autoAlpha:1,duration:2},48);
+  gsap.set(["#m1","#m2","#plan"],{autoAlpha:0});
+  show("#m1",tl,49.4);type($("#mt1"),"can we make the session cache write-through?",tl,49.4,3);
+  show("#m2",tl,52.6);type($("#mt2"),"Write-through keeps Redis and Postgres in step. I would do it.",tl,52.6,3.4);
+  cap(3,49,57);
+  tl.to(camera,{...aim($("#sealed"),2.1),duration:3},55);
+  tl.to("#sealed",{textShadow:"0 0 16px rgba(255,255,255,.8)",duration:1},57.4);
+  // ---- SCENE 5: the plan waits for you
+  tl.to(camera,{scale:1,x:0,y:0,duration:2.6},58.2);
+  show("#plan",tl,58.6,2);
+  tl.to("#bar1",{duration:3,onUpdate(){}},59);
+  (function(){const o={n:0};tl.to(o,{n:12,duration:5,ease:"none",onUpdate(){const k=Math.round(o.n/2);$("#bar1").textContent="█".repeat(Math.min(6,k))+"░".repeat(12-Math.min(6,k))}},59)})();
+  cap(4,59.4,66);
+  tl.to(camera,{...aim($("#plan"),1.75),duration:3.4},61);
+  tl.to("#plan",{boxShadow:"0 0 0 1px rgba(227,162,59,.7),0 0 36px rgba(227,162,59,.25)",duration:1.5},62);
+  tl.to(["#rooms","#side"],{opacity:.25,duration:1.5},62);
+  // ---- SCENE 6: offline
+  tl.to(camera,{scale:1,x:0,y:0,duration:2.4},66.4);tl.to(["#rooms","#side"],{opacity:1,duration:1.2},66.4);
+  tl.to("#plan",{boxShadow:"0 0 0 0 rgba(0,0,0,0)",duration:1},66.4);
+  tl.to("#banner",{height:narrow()?52:34,duration:1.2},68.6);tl.to("#live",{color:"#E3A23B",duration:.4},68.6);tl.fromTo("#live",{textContent:"● live"},{duration:.1},68.6);
+  tl.call(()=>{$("#live").textContent="◌ retrying"},null,68.7);
+  cap(5,68.4,79);
+  tl.to(camera,{...aim($("#banner"),1.55),duration:3},69.6);
+  const secs={n:0};tl.to(secs,{n:1,duration:4,onUpdate(){$("#secs").textContent=Math.round(40+secs.n*40);$("#nwait").textContent=secs.n>.5?3:2}},70);
+  tl.call(()=>{ $("#qlines").innerHTML=""},null,69);
+  tl.fromTo("#m3",{autoAlpha:0},{autoAlpha:.55,display:"block",duration:1},72);
+  tl.to(camera,{scale:1,x:0,y:0,duration:2.4},75);
+  tl.to("#banner",{height:0,duration:1},77.4);tl.call(()=>{$("#live").textContent="● live"},null,77.4);tl.to("#live",{color:"#6FA874",duration:.3},77.4);
+  tl.to("#m3",{autoAlpha:1,duration:1},77.6);
+  tl.fromTo("#notice",{autoAlpha:0},{autoAlpha:1,display:"block",duration:1},77.8);
+  // ---- SCENE 7: what the server sees
+  cap(6,80,91);
+  tl.to(["#stream","#rooms","#side"],{opacity:.15,duration:1.5},80.4);
+  tl.to("#sees",{autoAlpha:1,duration:2},81);
+  tl.fromTo("#sees li",{autoAlpha:0,x:-10},{autoAlpha:1,x:0,stagger:.35,duration:.8},82);
+  tl.to(camera,{scale:narrow()?1:1.18,x:0,y:0,duration:5,ease:"none"},82);
+  // ---- SCENE 8: two real agents (recorded runs) use the control tools; the human step stays with the person
+  tl.to("#sees",{autoAlpha:0,duration:1.5},92);tl.to(layers.app,{autoAlpha:0,duration:2},92.4);tl.to(camera,{scale:1,x:0,y:0,duration:2.4},92);
+  tl.fromTo(layers.agent,{autoAlpha:0},{autoAlpha:1,duration:2},93.4);
+  gsap.set(["#ag-ct1","#ag-ct2","#ag-xt1","#ag-xt2","#ag-gate","#pane-b"],{autoAlpha:0});
+  type($("#ag-c1"),"Using only the council-control tools: start a new interactive room titled agent-test in this repo, make a one-time invitation for it, … Never print the invitation link.",tl,95,5);
+  show("#ag-ct1",tl,100.6,1.2);show("#ag-ct2",tl,102.6,1.2);
+  type($("#ag-c2"),"I can't approve a joiner. Only you, the human host, can do that, after comparing the four safety words the guest reads out.",tl,104.4,4.4);
+  cap(7,95,121);
+  show("#pane-b",tl,109.6,1.6);
+  type($("#ag-x1"),"Using only the council-control tools: start a new interactive room titled agent-test in this repo, … list who is waiting to join, define an area named docs … Never print the invitation link.",tl,111.4,2.6);
+  show("#ag-xt1",tl,114.2,1.1);show("#ag-xt2",tl,115.4,1.1);
+  type($("#ag-x2"),"I cannot approve a joiner. The human host must compare the four safety words and approve them.",tl,116.6,3.4);
+  show("#ag-gate",tl,119.6,1.6);
+  tl.to("#ag-gate .human",{boxShadow:"0 0 0 1px rgba(227,162,59,.7),0 0 30px rgba(227,162,59,.22)",duration:1.5},120.6);
+  // ---- outro
+  tl.to(layers.agent,{autoAlpha:.18,duration:1.6},123.4);
+  tl.to("#tagline",{autoAlpha:1,duration:2.4},124);
+  tl.to(camera,{scale:.96,duration:6},124);
+  tl.to({}, {duration:1}, 131);
+  tl.timeScale(1);
+}
+build();
+let rt;addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{build();ScrollTrigger.refresh()},250)});
+// turning a phone sideways or upright changes whether the walkthrough fits: rebuild (or drop it) when that changes
+matchMedia("(max-width:900px) and (max-height:619px), (max-height:480px)").addEventListener("change",()=>{build();ScrollTrigger.refresh()});
+</script>
+</body>
+</html>

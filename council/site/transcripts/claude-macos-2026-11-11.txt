@@ -1,0 +1,19 @@
+> ToolSearch {"query": "select:mcp__council-control__council_control_start_room,mcp__council-control__council_control_make_invite,mcp__council-control__council_control_list_join_requests,mcp__council-control__council_control_define_area,mcp__council-control__council_control_room_status", "max_results": 5}
+<     
+> council_control_start_room {"repo": "/private/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/claude-council-test-wxq9l54w/repo", "title": "agent-test"}
+< {"result":"{\"room_id\": \"room-0c44f397\", \"sealed\": true, \"mode\": \"interactive\", \"next\": \"make an invitation link with council_control_make_invite, then tell your person to compare safety words before approving anyone\"}"}
+> council_control_make_invite {"room_id": "room-0c44f397"}
+< {"result":"{\"link\": \"[link removed] \"expires_in_hours\": 24, \"note\": \"Give this link to one person over a channel you trust; it works once. Nobody gets in on the link alone: the person waiting must read their four safety words to the human host, who compares them and approves in their own terminal. An agent cannot approve.\"}"}
+> council_control_list_join_requests {"room_id": "room-0c44f397"}
+< {"result":"{\"requests\": [], \"note\": \"Ask each person to read their four safety words aloud to the human host. Only the human host can let them in.\"}"}
+> council_control_define_area {"room_id": "room-0c44f397", "name": "docs", "globs": ["docs/**"], "owner": "tester", "agent_id": "tester-claude"}
+< {"result":"{\"area\": \"docs\", \"owner\": \"tester\", \"agent_id\": \"tester-claude\", \"globs\": [\"docs/**\"]}"}
+> council_control_room_status {"room_id": "room-0c44f397"}
+< {"result":"{\"room_id\": \"room-0c44f397\", \"title\": \"agent-test\", \"host\": \"tester\", \"you_are_host\": true, \"mode\": \"interactive\", \"status\": \"open\", \"sealed\": true, \"members\": [\"tester\"], \"last_seq\": 2, \"areas\": [{\"name\": \"docs\", \"owner\": \"tester\", \"agent_id\": \"tester-claude\", \"globs\": [\"docs/**\"]}], \"pending_join_requests\": 0}"}
+- **start_room:** It created room `room-0c44f397` ("agent-test"). The room is interactive and sealed.
+- **make_invite:** It issued a one-time invitation that expires in 24 hours. I've withheld the link, as you asked.
+- **list_join_requests:** No one is waiting to join.
+- **define_area:** It defined the area `docs` with globs `docs/**`, owned by `tester`, with agent `tester-claude`.
+- **room_status:** The room is open and sealed, and you (`tester`) are the host and only member. It has the `docs` area and 0 pending join requests.
+
+I can't approve a joiner. Only you, the human host, can do that, after comparing the four safety words the guest reads out.
