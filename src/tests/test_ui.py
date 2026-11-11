@@ -550,6 +550,8 @@ def test_all_nested_click_commands_are_listed_in_the_picker(monkeypatch):
     for name, command in root.commands.items():
         if not getattr(command, "commands", None):
             continue
+        if name == "council":
+            continue  # it opens its own guided menu, whose "All Council commands" row lists them: tests/council/test_menu.py
         shown = []
         def capture_rows(items, console, **kwargs):
             shown.extend(item.key for item in items if item.key)

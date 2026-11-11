@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Council has its own entry in the home menu, next to Hallbook, with a guided menu for the steps a person takes (set up, start a room, invite, let someone in, join, open), and its commands are listed under **All commands**. `aletheore council --help` and the menu work before the extra is installed and say how to install it.
 - Added Council, a sealed room where people and their coding agents work together, as the optional `council` extra:
   `pip install 'aletheore[council]'`, then `aletheore council --help` (or the `council` command). A room runs on the host's own
   machine; across the internet it goes through a free Cloudflare tunnel (150 at a time), and in a sealed room the messages, plans and

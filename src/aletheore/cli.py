@@ -2252,6 +2252,7 @@ _MAIN_MENU = [
     ("query", "Explore the evidence", "see what you can ask about the code"),
     ("audit", "Audit with an agent", "scan, then a grounded written report"),
     ("skills", "Find a Hallbook skill", "search or browse the skills your agent can use"),
+    ("council", "Council: a room for you and your agents", "sealed rooms; set up, invite, join, open"),
     ("connect", "Connect your coding agent", "Claude Code, Codex, Cursor, Antigravity, ..."),
     ("dashboard", "Open the dashboard", "a live local view"),
     ("account", "Account", "sign in, sign out, status"),
@@ -2294,6 +2295,38 @@ def _click_command(path: list[str]):
     return command
 
 
+def _prompt_and_run(child_path: list[str], child, remembered: dict | None = None) -> bool:
+    """Ask for the values a command needs, then run it. False when the person left a required value blank.
+
+    `remembered` holds earlier answers by parameter name; enter on a prompt reuses the remembered one."""
+    args, options = [], []
+    for parameter in child.params:
+        optional_argument = isinstance(parameter, typer.core.TyperArgument) and parameter.default is None
+        if not parameter.required and not optional_argument:
+            continue
+        suffix = " (leave blank for the default)" if not parameter.required else ""
+        previous = (remembered or {}).get(parameter.name, "")
+        if previous:
+            suffix = f" (enter for {previous})"
+        answer = _ask(f"{parameter.human_readable_name} for {' '.join(child_path)}{suffix}") or previous
+        if remembered is not None and answer:
+            remembered[parameter.name] = answer
+            if parameter.name == "host":
+                remembered.setdefault("me", answer)  # the host handle is who you are for the later steps
+        if not answer:
+            if parameter.required:
+                console.print("[dim]Command cancelled; no value was entered.[/dim]")
+                return False
+            continue
+        if isinstance(parameter, typer.core.TyperOption):
+            options.append(f"{parameter.opts[0]}={answer}")
+        else:
+            args.append(answer)
+    separator = ["--"] if any(arg.startswith("-") for arg in args) else []
+    _run_cli([*child_path, *options, *separator, *args])
+    return True
+
+
 def _command_group_flow(path: list[str], group, kwargs: dict, pause=None) -> bool:
     """Browse and run every nested command exposed by a Click command group."""
     from aletheore import ui
@@ -2330,25 +2363,7 @@ def _command_group_flow(path: list[str], group, kwargs: dict, pause=None) -> boo
             _run_cli([*child_path, "--help"])
             return True
 
-        args, options = [], []
-        for parameter in child.params:
-            optional_argument = isinstance(parameter, typer.core.TyperArgument) and parameter.default is None
-            if not parameter.required and not optional_argument:
-                continue
-            suffix = " (leave blank for the default)" if not parameter.required else ""
-            answer = _ask(f"{parameter.human_readable_name} for {' '.join(child_path)}{suffix}")
-            if not answer:
-                if parameter.required:
-                    console.print("[dim]Command cancelled; no value was entered.[/dim]")
-                    break
-                continue
-            if isinstance(parameter, typer.core.TyperOption):
-                options.append(f"{parameter.opts[0]}={answer}")
-            else:
-                args.append(answer)
-        else:
-            separator = ["--"] if any(arg.startswith("-") for arg in args) else []
-            _run_cli([*child_path, *options, *separator, *args])
+        if _prompt_and_run(child_path, child):
             return True
 
 
@@ -2446,6 +2461,63 @@ def _skills_flow(kwargs: dict) -> None:
     SkillsBrowser(console, read_key=kwargs.get("read_key"), ask=_ask, clear=_clear_screen).run()
 
 
+_COUNCIL_MENU = [
+    ("setup", "Set up this device", "your identity and four safety words"),
+    ("start", "Start a room", "for a project folder; you are the host"),
+    ("rooms", "My rooms", "the rooms you are in"),
+    ("invite-link", "Invite someone", "a one-time link; you approve them before they get in"),
+    ("requests", "Who is waiting to join", "people who used your link"),
+    ("approve-join", "Let someone in", "after you compare the four safety words"),
+    ("join-link", "Join with a link", "ask to join someone's room"),
+    ("view", "Open a room", "the live view"),
+    ("agents", "Which agents can join", "Claude Code, Codex, OpenCode and others on this machine"),
+]
+
+_COUNCIL_AGENT_SETUP = """Council has six tools for coding agents, in an MCP server called council-control. An agent can start a room,
+make an invitation and define an area. It cannot approve anyone, reject anyone or touch keys: only you can let someone in,
+after you compare the four safety words.
+
+Claude Code:  claude mcp add council-control -- council mcp-control --me YOURNAME
+Codex:        in ~/.codex/config.toml add [mcp_servers.council-control] with command = "council"
+              and args = ["mcp-control", "--me", "YOURNAME"]
+Others:       point the agent's MCP settings at: council mcp-control --me YOURNAME"""
+
+
+def _council_flow(kwargs: dict, pause: Callable[[], None]) -> None:
+    """The Council menu: the steps a person takes, in order, each asking only for what it needs."""
+    from aletheore import ui
+
+    group = _click_command(["council"])
+    commands = getattr(group, "commands", None)
+    if not commands:
+        console.print(_COUNCIL_INSTALL_HINT.format(name="the council extra"), markup=False)
+        pause()
+        return
+    rows = [ui.MenuItem(key, label, description) for key, label, description in _COUNCIL_MENU if key in commands]
+    rows += [ui.MenuItem("agent", "Let your agent set rooms up", "the council-control tools, and how to add them"),
+             ui.MenuItem("all", "All Council commands", "everything Council can do"),
+             ui.MenuItem("back", "Back")]
+    start = 0
+    remembered: dict = {}
+    while True:
+        _clear_screen()
+        header = ui.command_header("Council", width=console.width, height=console.height,
+                                   subtitle="sealed rooms for people and their coding agents")
+        picked = ui.choose(rows, console, header=header, start=start, numbers=False,
+                           footer="up/down to move, enter to choose, q to go back", **kwargs)
+        if picked is None or picked.key == "back":
+            return
+        start = [row.key for row in rows].index(picked.key)
+        if picked.key == "all":
+            _command_group_flow(["council"], group, kwargs, pause)
+            continue
+        if picked.key == "agent":
+            console.print(_COUNCIL_AGENT_SETUP, markup=False)
+        elif not _prompt_and_run(["council", picked.key], commands[picked.key], remembered):
+            continue
+        pause()
+
+
 def _meter_flow(kwargs: dict, pause: Callable[[], None]) -> None:
     """Show the branded report with project selection and explicit read-guard actions."""
     from aletheore import read_guard_setup, ui
@@ -2487,6 +2559,9 @@ def _run_command(name: str, kwargs: dict, pause=None) -> bool:
         return _connect_flow(kwargs)
     if name == "query":
         return _query_flow(kwargs)
+    if name == "council":
+        _council_flow(kwargs, _pause if pause is None else pause)
+        return False
     command = _click_command([name])
     if getattr(command, "commands", None):
         return _command_group_flow([name], command, kwargs, pause)
@@ -2566,6 +2641,9 @@ def _run_menu(read_key=None, pause=None) -> None:
             _run_cli(["audit", "."])
         elif picked.key == "skills":
             _skills_flow(kwargs)
+            continue
+        elif picked.key == "council":
+            _council_flow(kwargs, pause)
             continue
         elif picked.key == "connect":
             if not _connect_flow(kwargs):
@@ -3496,28 +3574,79 @@ from aletheore.shield_cli import shield_app  # noqa: E402
 app.add_typer(shield_app, name="shield")
 
 
-@app.command(
-    "council",
-    help="a sealed room where people and their coding agents work together (needs: pip install 'aletheore[council]')",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True, "help_option_names": []},
-)
-def council_command(ctx: typer.Context) -> None:
-    """Hand everything after `council` to Council's own CLI, loaded only when it is used."""
-    try:
-        from aletheore.council.cli import app as council_app
-    except ModuleNotFoundError as exc:
-        if (exc.name or "").split(".")[0] == "aletheore":
-            raise
-        hint = f"Council needs extra packages ({exc.name}). Install them with: pip install 'aletheore[council]'"
-        if ctx.args in ([], ["--help"], ["-h"]):  # asking what it is must work before the extra is installed
-            console.print("Usage: aletheore council [OPTIONS] COMMAND [ARGS]...", markup=False)
-            console.print(hint, markup=False)
-            raise typer.Exit(code=0)
-        console.print(hint, markup=False)
-        raise typer.Exit(code=1)
-    from typer.main import get_command
+_COUNCIL_INSTALL_HINT = "Council needs extra packages ({name}). Install them with: pip install 'aletheore[council]'"
+# What a person does first, in that order; the rest of Council's commands follow in the order Council defines them.
+_COUNCIL_FIRST = ("setup", "start", "rooms", "invite-link", "requests", "approve-join", "reject-join", "join-link", "join", "view",
+                  "say", "ask", "discuss", "agents", "status")
 
-    get_command(council_app).main(args=list(ctx.args), prog_name="aletheore council")
+
+class _CouncilGroup(typer.core.TyperGroup):
+    """`aletheore council ...`: Council's own commands, loaded only when something asks for them.
+
+    Importing Council costs about a second and needs the optional `council` extra, so the real command tree is built on first use.
+    Until then (and without the extra) this group has no subcommands, which the menus and --help handle."""
+
+    _real = None
+
+    def _load(self):
+        if self._real is None:
+            from typer.main import get_command
+
+            from aletheore.council.cli import app as council_app
+
+            self._real = get_command(council_app)
+        return self._real
+
+    @property
+    def commands(self) -> dict:
+        try:
+            real = self._load().commands
+        except ModuleNotFoundError as exc:
+            if (exc.name or "").split(".")[0] == "aletheore":
+                raise
+            return {}
+        first = [name for name in _COUNCIL_FIRST if name in real]
+        return {name: real[name] for name in [*first, *(n for n in real if n not in first)]}
+
+    @commands.setter
+    def commands(self, value) -> None:  # click assigns one while building the group; the real commands come from Council
+        pass
+
+    def list_commands(self, ctx):
+        return list(self.commands)
+
+    def get_command(self, ctx, cmd_name):
+        return self.commands.get(cmd_name)
+
+    def parse_args(self, ctx, args):
+        ctx.args = list(args)  # Council's own parser handles its options, including --help
+        return []
+
+    def invoke(self, ctx):
+        try:
+            real = self._load()
+        except ModuleNotFoundError as exc:
+            if (exc.name or "").split(".")[0] == "aletheore":
+                raise
+            hint = _COUNCIL_INSTALL_HINT.format(name=exc.name)
+            if ctx.args in ([], ["--help"], ["-h"]):  # asking what it is must work before the extra is installed
+                console.print("Usage: aletheore council [OPTIONS] COMMAND [ARGS]...", markup=False)
+                console.print(hint, markup=False)
+                raise typer.Exit(code=0)
+            console.print(hint, markup=False)
+            raise typer.Exit(code=1)
+        return real.main(args=list(ctx.args), prog_name="aletheore council", standalone_mode=False)
+
+
+council_app = typer.Typer(cls=_CouncilGroup, help="a sealed room where people and their coding agents work together")
+
+
+@council_app.callback()
+def _council_callback() -> None:
+    pass
+
+
+app.add_typer(council_app, name="council", help="a sealed room where people and their coding agents work together (needs: pip install 'aletheore[council]')")
 
 
 @config_app.command(
