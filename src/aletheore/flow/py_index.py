@@ -115,8 +115,10 @@ def _collect_imports(file: PyFile) -> None:
 class PyIndex:
     def __init__(self, repo: Path):
         self.repo = repo.resolve()
+        self._resolved: dict[Path, Path] = {}  # raw path -> Path.resolve(), which walks the filesystem
         self._files: dict[Path, PyFile] = {}
         self._suffix: dict[str, list[Path]] | None = None
+        self._modules: dict[tuple, PyFile | None] = {}
         self._parser = Parser(PY_LANGUAGE)
 
     def _build_suffix(self) -> dict[str, list[Path]]:
@@ -138,7 +140,7 @@ class PyIndex:
         return out
 
     def file(self, path: Path) -> PyFile | None:
-        path = path.resolve()
+        path = self._resolved.get(path) or self._resolved.setdefault(path, path.resolve())
         if path in self._files:
             return self._files[path]
         try:
@@ -151,6 +153,13 @@ class PyIndex:
         return pf
 
     def resolve_module(self, dotted: str, level: int, from_file: PyFile) -> PyFile | None:
+        # (the answer depends only on these three, and every import is resolved on every call that uses it)
+        key = (dotted, level, from_file.path)
+        if key not in self._modules:
+            self._modules[key] = self._resolve_module(dotted, level, from_file)
+        return self._modules[key]
+
+    def _resolve_module(self, dotted: str, level: int, from_file: PyFile) -> PyFile | None:
         if level:
             base = from_file.path.parent
             for _ in range(level - 1):

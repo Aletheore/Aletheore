@@ -81,12 +81,13 @@ def _collect(node: Node, f: CsFile) -> None:
 class CsIndex:
     def __init__(self, repo: Path):
         self.repo = repo.resolve()
+        self._resolved: dict[Path, Path] = {}  # raw path -> Path.resolve(), which walks the filesystem
         self._files: dict[Path, CsFile] = {}
         self._names: dict[str, list[Path]] | None = None
         self._parser = Parser(CSHARP_LANGUAGE)
 
     def file(self, path: Path) -> CsFile | None:
-        path = path.resolve()
+        path = self._resolved.get(path) or self._resolved.setdefault(path, path.resolve())
         if path in self._files:
             return self._files[path]
         try:

@@ -120,6 +120,7 @@ def _collect(node: Node, jf: JavaFile, outer: ClassInfo | None, out: list[ClassI
 class JavaIndex:
     def __init__(self, repo: Path):
         self.repo = repo
+        self._resolved: dict[Path, Path] = {}  # raw path -> Path.resolve(), which walks the filesystem
         self._files: dict[Path, JavaFile] = {}
         self._by_name: dict[str, list[Path]] | None = None
         self._derived: dict[str, set[Path]] = {}
@@ -150,7 +151,7 @@ class JavaIndex:
         return names
 
     def file(self, path: Path) -> JavaFile | None:
-        path = path.resolve()
+        path = self._resolved.get(path) or self._resolved.setdefault(path, path.resolve())
         if path in self._files:
             return self._files[path]
         try:

@@ -98,12 +98,13 @@ def _scan(f: GoFile) -> None:
 class GoIndex:
     def __init__(self, repo: Path):
         self.repo = repo.resolve()
+        self._resolved: dict[Path, Path] = {}  # raw path -> Path.resolve(), which walks the filesystem
         self._files: dict[Path, GoFile] = {}
         self._by_dir: dict[Path, list[Path]] | None = None
         self._parser = Parser(GO_LANGUAGE)
 
     def file(self, path: Path) -> GoFile | None:
-        path = path.resolve()
+        path = self._resolved.get(path) or self._resolved.setdefault(path, path.resolve())
         if path in self._files:
             return self._files[path]
         try:

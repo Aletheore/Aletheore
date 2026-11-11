@@ -156,12 +156,13 @@ def _scan(f: JsFile) -> None:
 class JsIndex:
     def __init__(self, repo: Path):
         self.repo = repo.resolve()
+        self._resolved: dict[Path, Path] = {}  # raw path -> Path.resolve(), which walks the filesystem
         self._files: dict[Path, JsFile] = {}
         self._parsers = {".ts": Parser(TS_LANGUAGE), ".tsx": Parser(TSX_LANGUAGE)}
         self._js = Parser(JS_LANGUAGE)
 
     def file(self, path: Path) -> JsFile | None:
-        path = path.resolve()
+        path = self._resolved.get(path) or self._resolved.setdefault(path, path.resolve())
         if path in self._files:
             return self._files[path]
         try:
