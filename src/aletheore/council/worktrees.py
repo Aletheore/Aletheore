@@ -12,7 +12,7 @@ import os
 import time
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 - no shell: argument lists only
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,7 +54,7 @@ def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
     env["GIT_TERMINAL_PROMPT"] = "0"
     argv = [_git_path(), *_GIT_IDENT, "-c", f"core.hooksPath={_no_hooks_dir()}", *args]
     for attempt in range(_LOCK_RETRIES):
-        result = subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+        result = subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)  # nosec B603 - argument list, no shell, no user-controlled program
         # several rooms and workers can use one repository at once; git takes short-lived .lock files, so wait and retry
         if result.returncode != 0 and ".lock" in (result.stderr or "") and attempt < _LOCK_RETRIES - 1:
             time.sleep(_LOCK_RETRY_DELAY_S * (2 ** attempt))

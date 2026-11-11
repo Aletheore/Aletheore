@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
+import subprocess  # nosec B404 - no shell: argument lists only
 import time
 from pathlib import Path
 
@@ -108,7 +108,7 @@ class ControlTools:
         path = Path(repo) if isinstance(repo, str) and repo.strip() else None
         if path is None or not path.is_absolute() or not path.is_dir():
             raise ControlError("repo must be the full path of an existing folder")
-        if subprocess.run(["git", "-C", str(path), "rev-parse", "--verify", "HEAD"], capture_output=True).returncode != 0:
+        if subprocess.run(["git", "-C", str(path), "rev-parse", "--verify", "HEAD"], capture_output=True).returncode != 0:  # nosec B603, B607 - argument list, no shell, no user-controlled program; found on PATH on purpose
             raise ControlError("that folder is not a git repository with at least one commit")
         title = (title or "").strip()
         if len(title) > MAX_TITLE or any(ord(c) < 32 for c in title):

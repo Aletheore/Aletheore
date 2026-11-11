@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 - no shell: argument lists only
 import sys
 import time
 import tempfile
@@ -924,7 +924,7 @@ class CouncilApp(App):
             self.bell()
             if sys.platform == "darwin" and not getattr(self, "app_focus", True):
                 try:
-                    subprocess.Popen(["osascript", "-e", f'display notification "{count} waiting on you" with title "council"'],
+                    subprocess.Popen(["osascript", "-e", f'display notification "{count} waiting on you" with title "council"'],  # nosec B603, B607 - argument list, no shell, no user-controlled program; found on PATH on purpose
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except OSError:
                     pass

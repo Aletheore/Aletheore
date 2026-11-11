@@ -26,7 +26,7 @@ class RemoteRoomStore:
     # localhost broker that holds the store and hands the agent a short-lived token of its own (broker.py).
     supports_agent_tools = False
 
-    def __init__(self, base_url: str, token: str = "", client: httpx.Client | None = None, backoff_s: float = 0.2, timeout_s: float = 30.0) -> None:
+    def __init__(self, base_url: str, token: str = "", client: httpx.Client | None = None, backoff_s: float = 0.2, timeout_s: float = 30.0) -> None:  # nosec B107 - empty means no token configured
         self._client = client or httpx.Client(base_url=base_url, timeout=timeout_s)
         # No token (a device that has not signed in yet: registering, or asking to join) means NO Authorization header. A bare "Bearer " is an
         # illegal header value on a real connection, though a test client lets it through, so this broke every first-time register and join.
@@ -120,7 +120,7 @@ class RemoteRoomStore:
                 last = ConnectionError(f"server error {resp.status_code}")
             if attempt < ATTEMPTS - 1:
                 # full jitter: anywhere from nothing to the (capped) exponential step, so clients that failed together do not retry together
-                time.sleep(random.uniform(0, min(MAX_BACKOFF_S, self._backoff_s * (2 ** attempt))))
+                time.sleep(random.uniform(0, min(MAX_BACKOFF_S, self._backoff_s * (2 ** attempt))))  # nosec B311 - retry jitter, not a secret
         if isinstance(last, ConnectionError) and "rate limited" in str(last):
             raise ConnectionError("the room server's rate limit was reached for this client; slow down and try again shortly") from last
         raise ConnectionError(f"room server unreachable: {last}") from last
@@ -150,7 +150,7 @@ class RemoteRoomStore:
         detail = ""
         try:
             detail = str(resp.json().get("detail", ""))
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # nosec B110 - best effort: a failure here is expected and must not stop this path
             pass
         if code in (401, 403):
             raise PermissionError(detail or "not permitted")

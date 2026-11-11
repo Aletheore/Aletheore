@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
+import subprocess  # nosec B404 - no shell: argument lists only
 import sys
 import threading
 import time

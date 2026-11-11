@@ -50,3 +50,19 @@ def test_council_command_passes_its_arguments_on():
     result = runner.invoke(app, ["council", "--help"])
     assert result.exit_code == 0
     assert "Usage: aletheore council" in result.output
+
+
+def test_council_help_works_before_the_extra_is_installed(monkeypatch):
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.startswith("aletheore.council"):
+            raise ModuleNotFoundError("No module named 'nacl'", name="nacl")
+        return real_import(name, *args, **kwargs)
+
+    for mod in [m for m in sys.modules if m.startswith("aletheore.council")]:
+        monkeypatch.delitem(sys.modules, mod)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    result = runner.invoke(app, ["council", "--help"])
+    assert result.exit_code == 0
+    assert "Usage:" in result.output and "aletheore[council]" in "".join(result.output.split())

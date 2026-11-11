@@ -246,7 +246,7 @@ class PostgresRoomStore:
     def list_rooms(self, participant: str) -> list[RoomInfo]:
         with self._conn() as conn:
             rows = conn.execute(
-                self._INFO_SQL + " WHERE EXISTS (SELECT 1 FROM members m WHERE m.room_id = r.room_id AND m.participant=%s) "
+                self._INFO_SQL + " WHERE EXISTS (SELECT 1 FROM members m WHERE m.room_id = r.room_id AND m.participant=%s) "  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
                 "ORDER BY r.created_n", (participant,)).fetchall()
         return [self._info(r) for r in rows]
 
@@ -257,7 +257,7 @@ class PostgresRoomStore:
             # One lock per room: sequence numbers are allocated and the idempotency check is made while holding it.
             room = conn.execute("SELECT status, last_seq FROM rooms WHERE room_id=%s FOR UPDATE", (draft.room_id,)).fetchone()
             existing = conn.execute(
-                f"SELECT {_EVENT_COLUMNS} FROM events WHERE room_id=%s AND sender_participant=%s AND client_event_id=%s",
+                f"SELECT {_EVENT_COLUMNS} FROM events WHERE room_id=%s AND sender_participant=%s AND client_event_id=%s",  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
                 (draft.room_id, draft.sender_participant, draft.client_event_id)).fetchone()
             if existing is not None:
                 return _row_to_event(existing)
@@ -284,7 +284,7 @@ class PostgresRoomStore:
         horizon = self.horizon(room_id)
         marker = [horizon_marker(room_id, horizon)] if 0 < horizon and after_seq < horizon else []
         with self._conn() as conn:
-            rows = conn.execute(f"SELECT {_EVENT_COLUMNS} FROM events WHERE room_id=%s AND seq>%s ORDER BY seq LIMIT %s",
+            rows = conn.execute(f"SELECT {_EVENT_COLUMNS} FROM events WHERE room_id=%s AND seq>%s ORDER BY seq LIMIT %s",  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
                                 (room_id, max(after_seq, horizon), max(0, limit - len(marker)))).fetchall()
         return marker + [_row_to_event(r) for r in rows]
 
@@ -299,7 +299,7 @@ class PostgresRoomStore:
                 raise KeyError(f"unknown room: {room_id}")
             after = int(row[0])
             while after < seq:
-                rows = conn.execute(f"SELECT {_EVENT_COLUMNS} FROM events WHERE room_id=%s AND seq>%s AND seq<=%s ORDER BY seq LIMIT %s",
+                rows = conn.execute(f"SELECT {_EVENT_COLUMNS} FROM events WHERE room_id=%s AND seq>%s AND seq<=%s ORDER BY seq LIMIT %s",  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
                                     (room_id, after, seq, chunk)).fetchall()
                 if not rows:
                     break

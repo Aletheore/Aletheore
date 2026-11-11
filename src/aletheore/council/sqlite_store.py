@@ -103,7 +103,7 @@ class SqliteRoomStore:
         try:
             conn.execute("ALTER TABLE events RENAME TO events_old")
             conn.execute("CREATE TABLE events (" + _SCHEMA.split("CREATE TABLE IF NOT EXISTS events (", 1)[1].split(");", 1)[0] + ")")
-            conn.execute(f"INSERT INTO events ({_COLUMNS}) SELECT {_COLUMNS} FROM events_old")
+            conn.execute(f"INSERT INTO events ({_COLUMNS}) SELECT {_COLUMNS} FROM events_old")  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
             conn.execute("DROP TABLE events_old")
             conn.execute("COMMIT")
         except BaseException:
@@ -205,7 +205,7 @@ class SqliteRoomStore:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 existing = conn.execute(
-                    f"SELECT {_COLUMNS} FROM events WHERE room_id=? AND sender_participant=? AND client_event_id=?",
+                    f"SELECT {_COLUMNS} FROM events WHERE room_id=? AND sender_participant=? AND client_event_id=?",  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
                     (draft.room_id, draft.sender_participant, draft.client_event_id),
                 ).fetchone()
                 if existing is not None:
@@ -222,7 +222,7 @@ class SqliteRoomStore:
                 event_id = f"evt_{uuid.uuid4().hex}"
                 created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 conn.execute(
-                    f"INSERT INTO events ({_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    f"INSERT INTO events ({_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
                     (
                         draft.room_id, seq, event_id, draft.client_event_id, draft.thread_id,
                         draft.type.value, draft.sender_participant, draft.sender_agent,
@@ -249,7 +249,7 @@ class SqliteRoomStore:
         start = max(after_seq, horizon)
         with closing(self._connect()) as conn:
             rows = conn.execute(
-                f"SELECT {_COLUMNS} FROM events WHERE room_id=? AND seq>? ORDER BY seq ASC LIMIT ?",
+                f"SELECT {_COLUMNS} FROM events WHERE room_id=? AND seq>? ORDER BY seq ASC LIMIT ?",  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
                 (room_id, start, max(0, limit - len(marker))),
             ).fetchall()
         return marker + [_row_to_event(r) for r in rows]
@@ -268,7 +268,7 @@ class SqliteRoomStore:
                 raise KeyError(f"unknown room: {room_id}")
             after = int(done[0])
             while after < seq:
-                rows = conn.execute(f"SELECT {_COLUMNS} FROM events WHERE room_id=? AND seq>? AND seq<=? ORDER BY seq LIMIT ?",
+                rows = conn.execute(f"SELECT {_COLUMNS} FROM events WHERE room_id=? AND seq>? AND seq<=? ORDER BY seq LIMIT ?",  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
                                     (room_id, after, seq, chunk)).fetchall()
                 if not rows:
                     break

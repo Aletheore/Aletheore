@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import struct
-import subprocess
+import subprocess  # nosec B404 - no shell: argument lists only
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -131,7 +131,7 @@ def _check_name(name: str) -> str:
 
 def _restrict_windows(path: Path) -> None:
     user = os.environ.get("USERNAME", "")
-    subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"], check=True, capture_output=True)
+    subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"], check=True, capture_output=True)  # nosec B603, B607 - argument list, no shell, no user-controlled program; found on PATH on purpose
 
 
 def _write_private(path: Path, data: bytes, exclusive: bool = True) -> None:

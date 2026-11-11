@@ -48,6 +48,17 @@ from aletheore.council.store import CRYPTO_MODES, MAX_TITLE, ROOM_MODES, RoomSto
 log = logging.getLogger("council.server")
 
 _SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
+
+
+def _stored_path(base: Path, room_id: str, sha: str, suffix: str) -> Path:
+    """Where a room's stored object lives, checked to be inside the storage folder (ids are validated by the callers too)."""
+    if not ROOM_RE.match(room_id) or room_id in (".", "..") or not _SHA_RE.match(sha):
+        raise HTTPException(status_code=422, detail="not a valid room or object id")
+    root = os.path.realpath(str(base))
+    full = os.path.realpath(os.path.join(root, room_id, sha + suffix))
+    if not full.startswith(root + os.sep):
+        raise HTTPException(status_code=422, detail="not a valid room or object id")
+    return Path(full)
 _EVENT_LIMIT = MAX_BODY_BYTES + 4096
 MAX_GRANTS = 64 * 1024
 MAX_WRAPPED = 8192
@@ -264,7 +275,7 @@ def create_app(
     def bundle_path(room_id: str, sha: str) -> Path:
         if not _SHA_RE.match(sha):
             raise HTTPException(status_code=422, detail="bundle id must be a lowercase sha-256")
-        return bundle_dir / room_id / f"{sha}.bundle"
+        return _stored_path(bundle_dir, room_id, sha, ".bundle")
 
     if accounts is not None:
         async def json_body(request: Request, limit: int = 8192) -> dict:
@@ -873,7 +884,7 @@ def create_app(
                     raise HTTPException(status_code=422, detail="image does not match its sha-256")
                 if sniff_image(data) is None:
                     raise HTTPException(status_code=422, detail="not a supported image (png, jpg, gif or webp)")
-            path = bundle_dir / room_id / f"{sha}.blob"
+            path = _stored_path(bundle_dir, room_id, sha, ".blob")
             path.parent.mkdir(parents=True, exist_ok=True)
             if not path.exists():
                 existing = list(path.parent.glob("*.blob"))
@@ -897,7 +908,7 @@ def create_app(
         room_for(room_id, who(request))
         if not _SHA_RE.match(sha):
             raise HTTPException(status_code=422, detail="image id must be a lowercase sha-256")
-        path = bundle_dir / room_id / f"{sha}.blob"
+        path = _stored_path(bundle_dir, room_id, sha, ".blob")
         try:
             fresh = path.stat().st_mtime >= clock() - retention_days * 86400
         except OSError:

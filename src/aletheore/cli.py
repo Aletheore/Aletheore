@@ -2278,7 +2278,7 @@ _COMMAND_PROMPTS = {
     "dependents": ["File to find dependents of"],
     "tests-for": ["File to find candidate tests for"],
 }
-_COMMAND_HELP = ("mcp",)
+_COMMAND_HELP = ("mcp", "council")
 
 
 def _click_command(path: list[str]):
@@ -3508,7 +3508,12 @@ def council_command(ctx: typer.Context) -> None:
     except ModuleNotFoundError as exc:
         if (exc.name or "").split(".")[0] == "aletheore":
             raise
-        console.print(f"Council needs extra packages ({exc.name}). Install them with: pip install 'aletheore[council]'", markup=False)
+        hint = f"Council needs extra packages ({exc.name}). Install them with: pip install 'aletheore[council]'"
+        if ctx.args in ([], ["--help"], ["-h"]):  # asking what it is must work before the extra is installed
+            console.print("Usage: aletheore council [OPTIONS] COMMAND [ARGS]...", markup=False)
+            console.print(hint, markup=False)
+            raise typer.Exit(code=0)
+        console.print(hint, markup=False)
         raise typer.Exit(code=1)
     from typer.main import get_command
 

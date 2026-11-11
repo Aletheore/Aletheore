@@ -261,7 +261,7 @@ def serve(
         from aletheore.council.sqlite_store import SqliteRoomStore
 
         announce_returned(SqliteRoomStore(db_path))  # anyone who was waiting for this host sees that it is back
-    except Exception:  # noqa: BLE001 - a first run has no rooms yet, and the notice must never stop the server
+    except Exception:  # noqa: BLE001 - a first run has no rooms yet, and the notice must never stop the server  # nosec B110 - best effort: a failure here is expected and must not stop this path
         pass
     cleanup, public = _start_public_access(local, host, port, no_wake_lock)
     if public and settings.file_transfer_cap_mb_per_day == 0:
@@ -312,12 +312,12 @@ def _start_public_access(local: bool, host: str, port: int, no_wake_lock: bool):
             from aletheore.council.sqlite_store import SqliteRoomStore
 
             host_runtime.announce_leaving(SqliteRoomStore(db_path), "", note)  # everyone connected sees it before the tunnel closes
-        except Exception:  # noqa: BLE001 - shutting down must finish even if the notice cannot be written
+        except Exception:  # noqa: BLE001 - shutting down must finish even if the notice cannot be written  # nosec B110 - best effort: a failure here is expected and must not stop this path
             pass
         for stop in stops:
             try:
                 stop()
-            except Exception:
+            except Exception:  # nosec B110 - best effort: a failure here is expected and must not stop this path
                 pass
 
     return cleanup, public

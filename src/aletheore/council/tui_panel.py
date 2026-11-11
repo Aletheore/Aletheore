@@ -101,7 +101,7 @@ def security_facts(store) -> dict:
     try:
         latest = store._keyring.latest()  # noqa: SLF001 - read-only peek; there is no public accessor
         epoch = latest[0] if latest else None
-    except Exception:
+    except Exception:  # nosec B110 - best effort: a failure here is expected and must not stop this path
         pass
     return {"epoch": epoch, "rejected": store.rejected, "unreadable": store.unreadable, "gaps": len(store.gaps)}
 

@@ -457,7 +457,7 @@ class SqliteAccountBackend:
                 raise AccountError("this device already belongs to an account", 409)
             c.execute("UPDATE reg_codes SET used=1 WHERE code_hash=?", (code_hash,))
             c.execute("INSERT INTO accounts (handle, can_host, created_at) VALUES (?,?,?)", (handle, row[1], now))
-            c.execute(f"INSERT INTO devices ({_DEVICE_COLS}) VALUES (?,?,?,?,?,NULL)",
+            c.execute(f"INSERT INTO devices ({_DEVICE_COLS}) VALUES (?,?,?,?,?,NULL)",  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
                       (device["device_id"], handle, device["sign_vk"], device["box_pk"], device["created_at"]))
             return bool(row[1])
 
@@ -469,12 +469,12 @@ class SqliteAccountBackend:
         return None if row is None else bool(row[0])
 
     def get_device(self, device_id):
-        row = self._one(f"SELECT {_DEVICE_COLS} FROM devices WHERE device_id=?", (device_id,))
+        row = self._one(f"SELECT {_DEVICE_COLS} FROM devices WHERE device_id=?", (device_id,))  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
         return _device_from(row) if row else None
 
     def list_devices(self, handle):
         with closing(sqlite3.connect(self._path, timeout=30)) as conn:
-            return [_device_from(r) for r in conn.execute(f"SELECT {_DEVICE_COLS} FROM devices WHERE handle=? ORDER BY created_at, device_id", (handle,))]
+            return [_device_from(r) for r in conn.execute(f"SELECT {_DEVICE_COLS} FROM devices WHERE handle=? ORDER BY created_at, device_id", (handle,))]  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
 
     def revoke_device(self, device_id, now):
         with self._tx() as c:
@@ -552,7 +552,7 @@ class SqliteAccountBackend:
             if c.execute("SELECT 1 FROM devices WHERE device_id=?", (row[1],)).fetchone():
                 raise AccountError("this device already belongs to an account", 409)
             c.execute("UPDATE link_requests SET status='approved', grants=? WHERE request_id=?", (grants, request_id))
-            c.execute(f"INSERT INTO devices ({_DEVICE_COLS}) VALUES (?,?,?,?,?,NULL)", (row[1], row[0], row[2], row[3], now))
+            c.execute(f"INSERT INTO devices ({_DEVICE_COLS}) VALUES (?,?,?,?,?,NULL)", (row[1], row[0], row[2], row[3], now))  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
         return Device(row[1], row[0], bytes.fromhex(row[2]), bytes.fromhex(row[3]), now)
 
     def put_invite(self, invite, max_open, now):
@@ -583,17 +583,17 @@ class SqliteAccountBackend:
                                                       d["sign_vk"], d["box_pk"], request["words"], request["created_at"]))
 
     def get_join_request(self, request_id):
-        row = self._one(f"SELECT {_JOIN_COLS} FROM join_requests WHERE request_id=?", (request_id,))
+        row = self._one(f"SELECT {_JOIN_COLS} FROM join_requests WHERE request_id=?", (request_id,))  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
         return _join_from(row) if row else None
 
     def list_join_requests(self, room_id):
         with closing(sqlite3.connect(self._path, timeout=30)) as conn:
             return [_join_from(r) for r in conn.execute(
-                f"SELECT {_JOIN_COLS} FROM join_requests WHERE room_id=? AND status='pending' ORDER BY created_at, request_id", (room_id,))]
+                f"SELECT {_JOIN_COLS} FROM join_requests WHERE room_id=? AND status='pending' ORDER BY created_at, request_id", (room_id,))]  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
 
     def decide_join(self, room_id, request_id, approve, now):
         with self._tx() as c:
-            row = c.execute(f"SELECT {_JOIN_COLS}, sign_vk, box_pk FROM join_requests WHERE request_id=?", (request_id,)).fetchone()
+            row = c.execute(f"SELECT {_JOIN_COLS}, sign_vk, box_pk FROM join_requests WHERE request_id=?", (request_id,)).fetchone()  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
             if row is None or row[2] != room_id:
                 raise AccountError("no such join request for this room", 404)
             req = _join_from(row[:8])
@@ -610,7 +610,7 @@ class SqliteAccountBackend:
                     if c.execute("SELECT 1 FROM accounts WHERE handle=?", (req.handle,)).fetchone():
                         raise AccountError("that handle was taken in the meantime; ask the guest to pick another", 409)
                     c.execute("INSERT INTO accounts (handle, can_host, created_at) VALUES (?,0,?)", (req.handle, now))
-                    c.execute(f"INSERT INTO devices ({_DEVICE_COLS}) VALUES (?,?,?,?,?,NULL)", (req.device_id, req.handle, row[8], row[9], now))
+                    c.execute(f"INSERT INTO devices ({_DEVICE_COLS}) VALUES (?,?,?,?,?,NULL)", (req.device_id, req.handle, row[8], row[9], now))  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
             c.execute("UPDATE join_requests SET status=? WHERE request_id=?", ("approved" if approve else "rejected", request_id))
             return JoinRequest(req.request_id, req.invite_id, req.room_id, req.handle, req.device_id, req.words,
                                "approved" if approve else "rejected", req.created_at)
@@ -657,7 +657,7 @@ class PostgresAccountBackend:
                 raise AccountError("this device already belongs to an account", 409)
             c.execute("UPDATE reg_codes SET used=true WHERE code_hash=%s", (code_hash,))
             c.execute("INSERT INTO accounts (handle, can_host, created_at) VALUES (%s,%s,%s)", (handle, row[1], now))
-            c.execute(f"INSERT INTO devices ({_DEVICE_COLS}) VALUES (%s,%s,%s,%s,%s,NULL)",
+            c.execute(f"INSERT INTO devices ({_DEVICE_COLS}) VALUES (%s,%s,%s,%s,%s,NULL)",  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
                       (device["device_id"], handle, device["sign_vk"], device["box_pk"], device["created_at"]))
             return bool(row[1])
 
@@ -669,11 +669,11 @@ class PostgresAccountBackend:
         return None if row is None else bool(row[0])
 
     def get_device(self, device_id):
-        row = self._q(f"SELECT {_DEVICE_COLS} FROM devices WHERE device_id=%s", (device_id,))
+        row = self._q(f"SELECT {_DEVICE_COLS} FROM devices WHERE device_id=%s", (device_id,))  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
         return _device_from(row) if row else None
 
     def list_devices(self, handle):
-        rows = self._q(f"SELECT {_DEVICE_COLS} FROM devices WHERE handle=%s ORDER BY created_at, device_id", (handle,), many=True)
+        rows = self._q(f"SELECT {_DEVICE_COLS} FROM devices WHERE handle=%s ORDER BY created_at, device_id", (handle,), many=True)  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
         return [_device_from(r) for r in rows]
 
     def revoke_device(self, device_id, now):
@@ -747,7 +747,7 @@ class PostgresAccountBackend:
             if c.execute("SELECT 1 FROM devices WHERE device_id=%s", (row[1],)).fetchone():
                 raise AccountError("this device already belongs to an account", 409)
             c.execute("UPDATE link_requests SET status='approved', grants=%s WHERE request_id=%s", (grants, request_id))
-            c.execute(f"INSERT INTO devices ({_DEVICE_COLS}) VALUES (%s,%s,%s,%s,%s,NULL)", (row[1], row[0], row[2], row[3], now))
+            c.execute(f"INSERT INTO devices ({_DEVICE_COLS}) VALUES (%s,%s,%s,%s,%s,NULL)", (row[1], row[0], row[2], row[3], now))  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
         return Device(row[1], row[0], bytes.fromhex(row[2]), bytes.fromhex(row[3]), now)
 
     def put_invite(self, invite, max_open, now):
@@ -778,17 +778,17 @@ class PostgresAccountBackend:
                                                       d["sign_vk"], d["box_pk"], request["words"], request["created_at"]))
 
     def get_join_request(self, request_id):
-        row = self._q(f"SELECT {_JOIN_COLS} FROM join_requests WHERE request_id=%s", (request_id,))
+        row = self._q(f"SELECT {_JOIN_COLS} FROM join_requests WHERE request_id=%s", (request_id,))  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
         return _join_from(row) if row else None
 
     def list_join_requests(self, room_id):
-        rows = self._q(f"SELECT {_JOIN_COLS} FROM join_requests WHERE room_id=%s AND status='pending' ORDER BY created_at, request_id",
+        rows = self._q(f"SELECT {_JOIN_COLS} FROM join_requests WHERE room_id=%s AND status='pending' ORDER BY created_at, request_id",  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
                        (room_id,), many=True)
         return [_join_from(r) for r in rows]
 
     def decide_join(self, room_id, request_id, approve, now):
         with self._store._conn(tx=True) as c:  # noqa: SLF001
-            row = c.execute(f"SELECT {_JOIN_COLS}, sign_vk, box_pk FROM join_requests WHERE request_id=%s FOR UPDATE", (request_id,)).fetchone()
+            row = c.execute(f"SELECT {_JOIN_COLS}, sign_vk, box_pk FROM join_requests WHERE request_id=%s FOR UPDATE", (request_id,)).fetchone()  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
             if row is None or row[2] != room_id:
                 raise AccountError("no such join request for this room", 404)
             req = _join_from(row[:8])
@@ -805,7 +805,7 @@ class PostgresAccountBackend:
                     if c.execute("SELECT 1 FROM accounts WHERE handle=%s", (req.handle,)).fetchone():
                         raise AccountError("that handle was taken in the meantime; ask the guest to pick another", 409)
                     c.execute("INSERT INTO accounts (handle, can_host, created_at) VALUES (%s,false,%s)", (req.handle, now))
-                    c.execute(f"INSERT INTO devices ({_DEVICE_COLS}) VALUES (%s,%s,%s,%s,%s,NULL)", (req.device_id, req.handle, row[8], row[9], now))
+                    c.execute(f"INSERT INTO devices ({_DEVICE_COLS}) VALUES (%s,%s,%s,%s,%s,NULL)", (req.device_id, req.handle, row[8], row[9], now))  # nosec B608 - SQL text comes only from module constants; every value is a bound parameter
             c.execute("UPDATE join_requests SET status=%s WHERE request_id=%s", ("approved" if approve else "rejected", request_id))
             return JoinRequest(req.request_id, req.invite_id, req.room_id, req.handle, req.device_id, req.words,
                                "approved" if approve else "rejected", req.created_at)

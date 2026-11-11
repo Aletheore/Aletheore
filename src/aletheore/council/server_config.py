@@ -57,7 +57,7 @@ _ENV = {
     "COUNCIL_RATE_EVENTS_PER_MIN": "rate_limit_events_per_min", "COUNCIL_RATE_EVENTS_BURST": "rate_limit_events_burst",
     "COUNCIL_RATE_IP_PER_MIN": "rate_limit_ip_per_min", "COUNCIL_RATE_IP_BURST": "rate_limit_ip_burst",
     "COUNCIL_AUTH_FAIL_PER_MIN": "auth_fail_per_min", "COUNCIL_AUTH_FAIL_BURST": "auth_fail_burst",
-    "COUNCIL_MAX_ROOMS_PER_HOST": "max_rooms_per_host", "COUNCIL_ADMIN_TOKEN_HASH": "admin_token_hash",
+    "COUNCIL_MAX_ROOMS_PER_HOST": "max_rooms_per_host", "COUNCIL_ADMIN_TOKEN_HASH": "admin_token_hash",  # nosec B105 - the name of a setting, not a secret
     "COUNCIL_FILE_CAP_MB_PER_DAY": "file_transfer_cap_mb_per_day", "COUNCIL_CLOSED_ROOM_RETENTION_DAYS": "closed_room_retention_days",
     "COUNCIL_SWEEP_INTERVAL_S": "sweep_interval_s", "COUNCIL_MAX_CONNECTIONS": "max_connections", "COUNCIL_ARCHIVE_KEEP_EVENTS": "archive_keep_events", "COUNCIL_ARCHIVE_MIN_AGE_DAYS": "archive_min_age_days", "COUNCIL_MAX_MEMBERS_PER_ROOM": "max_members_per_room", "COUNCIL_THREADS": "threads", "COUNCIL_LOG_REQUESTS": "log_requests",
 }

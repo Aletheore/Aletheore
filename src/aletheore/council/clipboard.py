@@ -7,7 +7,7 @@ is not a supported image. A missing tool or an empty clipboard simply means "no 
 
 from __future__ import annotations
 
-import subprocess
+import subprocess  # nosec B404 - no shell: argument lists only
 import sys
 import time
 import uuid
@@ -70,7 +70,7 @@ def open_in_viewer(path: Path) -> None:
     import os
 
     if sys.platform == "win32":
-        os.startfile(str(path))  # type: ignore[attr-defined]
+        os.startfile(str(path))  # type: ignore[attr-defined]  # nosec B606 - opens a file Council created, no shell
     else:
-        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(path)],
+        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(path)],  # nosec B603 - argument list, no shell, no user-controlled program
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

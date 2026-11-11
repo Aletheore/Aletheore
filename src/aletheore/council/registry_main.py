@@ -111,7 +111,7 @@ def main(environ=os.environ) -> int:
     if slots > 0:
         threading.Thread(target=grow_pool, args=(registry, slots, stop), daemon=True, name="registry-pool").start()
     app = create_registry_app(registry, admin_token=admin, trusted_proxies=trusted)
-    uvicorn.run(app, host=environ.get("COUNCIL_REGISTRY_HOST", "0.0.0.0"), port=int(environ.get("COUNCIL_REGISTRY_PORT", "18700")),
+    uvicorn.run(app, host=environ.get("COUNCIL_REGISTRY_HOST", "0.0.0.0"), port=int(environ.get("COUNCIL_REGISTRY_PORT", "18700")),  # nosec B104 - runs in a container behind a tunnel
                 log_level="warning", access_log=False, proxy_headers=False, server_header=False, timeout_graceful_shutdown=20)
     stop.set()
     return 0

@@ -13,7 +13,7 @@ import json
 import os
 import shutil
 import signal
-import subprocess
+import subprocess  # nosec B404 - no shell: argument lists only
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -72,7 +72,7 @@ def build_child_env(identity_env: dict[str, str]) -> dict[str, str]:
 
 def kill_process_tree(pid: int) -> None:
     if sys.platform == "win32":
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)  # nosec B603, B607 - argument list, no shell, no user-controlled program; found on PATH on purpose
         return
     try:
         os.killpg(os.getpgid(pid), signal.SIGKILL)
@@ -118,7 +118,7 @@ def _run_process(argv: list[str], cwd: Path, env: dict[str, str], timeout_s: int
     else:
         kwargs["start_new_session"] = True
     try:
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # nosec B603 - argument list, no shell, no user-controlled program
             argv, cwd=str(cwd), env=env, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **kwargs,
         )

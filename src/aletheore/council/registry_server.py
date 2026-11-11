@@ -24,7 +24,7 @@ def signing_message(method: str, path: str, stamp: str, nonce: str, body: bytes)
     return f"council-registry-request-v1\n{method}\n{path}\n{stamp}\n{nonce}\n{hashlib.sha256(body).hexdigest()}".encode()
 
 
-def create_registry_app(registry: Registry, clock: Callable[[], float] = time.time, admin_token: str = "",
+def create_registry_app(registry: Registry, clock: Callable[[], float] = time.time, admin_token: str = "",  # nosec B107 - empty means no token configured
                         trusted_proxies: list[str] | None = None) -> FastAPI:
     app = FastAPI(title="Aletheore Council tunnel registry", docs_url=None, redoc_url=None, openapi_url=None)
     claims = RateLimiter(6, 6, clock)  # per host device: a host asking for a slot more than this is looping

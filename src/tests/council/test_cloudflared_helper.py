@@ -22,7 +22,7 @@ def release(asset: str, payload: bytes, digest: str | None = None):
     digest = digest if digest is not None else "sha256:" + hashlib.sha256(payload).hexdigest()
 
     def handler(req):
-        if "api.github.com" in str(req.url):
+        if req.url.host == "api.github.com":
             return httpx.Response(200, json={"assets": [{"name": asset, "digest": digest, "browser_download_url": "https://example.test/dl"}]})
         return httpx.Response(200, content=payload)
 
