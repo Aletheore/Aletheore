@@ -227,3 +227,30 @@ def test_d39_xml_namespace_is_matched_by_qualified_name(tmp_path):
                       "alpha/UserMapper.xml": '<mapper namespace="alpha.UserMapper"><select id="search">SELECT * FROM u ORDER BY ${sort}</select></mapper>',
                       "beta/UserMapper.xml": '<mapper namespace="beta.UserMapper"><select id="search">SELECT * FROM u WHERE id = #{sort}</select></mapper>'})
     assert _sqli(tmp_path) == ["alpha/Controller.java"]
+
+
+def _two_mappers() -> dict[str, str]:
+    return {"alpha/UserMapper.java": UNSAFE_MAPPER.format(pkg="alpha"), "beta/UserMapper.java": SAFE_MAPPER.format(pkg="beta")}
+
+
+def _qual(pkg: str, fqn: str) -> str:
+    return (f'package {pkg};\nimport javax.servlet.http.HttpServletRequest;\n'
+            f'class Q {{ {fqn} m;\n Object s(HttpServletRequest r) {{ return m.search(r.getParameter("sort")); }}\n}}\n')
+
+
+def test_d40_fully_qualified_safe_field_is_quiet(tmp_path):
+    _write(tmp_path, {**_two_mappers(), "web/Q.java": _qual("web", "beta.UserMapper")})
+    assert _sqli(tmp_path) == []
+
+
+def test_d40_fully_qualified_unsafe_field_is_reported(tmp_path):
+    _write(tmp_path, {**_two_mappers(), "web/Q.java": _qual("web", "alpha.UserMapper")})
+    assert _sqli(tmp_path) == ["web/Q.java"]
+
+
+def test_d40_fully_qualified_local_and_parameter(tmp_path):
+    src = ('package web;\nimport javax.servlet.http.HttpServletRequest;\nclass Q {\n'
+           ' Object a(HttpServletRequest r, beta.UserMapper m) { return m.search(r.getParameter("sort")); }\n'
+           ' Object b(HttpServletRequest r, alpha.UserMapper m) { return m.search(r.getParameter("sort")); }\n}\n')
+    _write(tmp_path, {**_two_mappers(), "web/Q.java": src})
+    assert sorted(f["line"] for f in discover_repo(tmp_path) if f["rule_id"].endswith("sql-injection")) == [5]

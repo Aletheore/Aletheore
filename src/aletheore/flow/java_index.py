@@ -34,7 +34,22 @@ def simple_type_name(node_or_text) -> str:
     """The last identifier of a possibly qualified or generic type: java.util.List<String> -> List."""
     text = node_or_text if isinstance(node_or_text, str) else _text(node_or_text)
     text = text.split("<", 1)[0].strip().rstrip("[]").strip()
-    return text.rsplit(".", 1)[-1]
+    short = text.rsplit(".", 1)[-1]
+    if "." in text and text.replace(".", "").replace("_", "").replace("$", "").isalnum():
+        return TypeName(short, text)  # remember how it was written: `beta.UserMapper` is not `alpha.UserMapper`
+    return short
+
+
+class TypeName(str):
+    """A simple type name that also carries the qualified spelling it was declared with (`.full`). It compares and
+    hashes as the simple name, so every existing lookup is unchanged."""
+
+    full: str
+
+    def __new__(cls, short: str, full: str):
+        obj = super().__new__(cls, short)
+        obj.full = full
+        return obj
 
 
 @dataclass(eq=False)

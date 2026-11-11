@@ -277,6 +277,7 @@ def positions(table: dict[str, dict[str, list[int]]], name: str, recv_type: str 
     mappers with one simple name in different packages are told apart by its package and imports."""
     every = table.get("*methods*", {})
     if recv_type:
+        recv_type = getattr(recv_type, "full", recv_type)  # the spelling it was declared with, when qualified
         simple = recv_type.rsplit(".", 1)[-1]
         cands = table.get("*simple*", {}).get(simple, set())
         hit: set[int] = set()
