@@ -81,5 +81,6 @@ benchmarks/pr-review-benchmark/results/
 # Council: the real server settings and backups never go in git
 council/deploy/council.env
 council/deploy/council_tokens.json
+council/deploy/registry.env
 council/deploy/secrets/
 council/deploy/backups/
