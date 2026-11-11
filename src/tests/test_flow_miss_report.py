@@ -171,3 +171,30 @@ def test_ts_esm_js_extension_does_not_override_a_real_js_file(tmp_path):
     _write(tmp_path, {"logic.js": safe, "logic.ts": ts, "reg.ts": reg})
     # the real logic.js exists, so that is the file the import names; its run() runs no command
     assert _rules(tmp_path, "command-injection") == []
+
+
+# ---- Ruby: the Rack env is a request source
+
+def test_rack_env_path_info_reaches_a_file_read(tmp_path):
+    src = ('class App\n  def call(env)\n    path = env["PATH_INFO"]\n    File.read(File.join("/srv", path))\n  end\nend\n')
+    _write(tmp_path, {"app.rb": src})
+    assert _rules(tmp_path, "path-traversal") == [("path-traversal", 4)]
+
+
+def test_rack_env_with_a_constant_key(tmp_path):
+    src = ('PATH_INFO = "PATH_INFO"\nclass App\n  def call(env)\n    path = env[PATH_INFO]\n    File.read(File.join("/srv", path))\n  end\nend\n'
+           'module Rack\n  class Other\n    def get(env)\n      p = Rack::Utils.unescape_path(env[Rack::PATH_INFO])\n      File.read(File.join("/srv", p))\n    end\n  end\nend\n')
+    _write(tmp_path, {"app.rb": src})
+    assert _rules(tmp_path, "path-traversal") == [("path-traversal", 5), ("path-traversal", 12)]
+
+
+def test_rack_env_keys_that_are_not_request_data_stay_quiet(tmp_path):
+    src = ('class App\n  def call(env)\n    path = env["rack.errors"]\n    File.read(File.join("/srv", path.to_s))\n  end\nend\n')
+    _write(tmp_path, {"app.rb": src})
+    assert _rules(tmp_path, "path-traversal") == []
+
+
+def test_a_hash_that_is_not_named_env_stays_quiet(tmp_path):
+    src = ('class Config\n  def load(settings)\n    name = settings["PATH_INFO"]\n    File.read(File.join("/srv", name))\n  end\nend\n')
+    _write(tmp_path, {"cfg.rb": src})
+    assert _rules(tmp_path, "path-traversal") == []

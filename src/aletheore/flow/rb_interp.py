@@ -34,6 +34,9 @@ class BudgetExceeded(Exception):
     pass
 
 
+RACK_REQUEST_KEYS = {"PATH_INFO", "QUERY_STRING", "REQUEST_URI", "REQUEST_PATH", "PATH_TRANSLATED", "ORIGINAL_FULLPATH"}
+
+
 @dataclass(eq=False)
 class RFrame:
     file: RbFile
@@ -367,7 +370,9 @@ class RbInterp:
                 return Tainted("request[...]")
             if base.kind == "request_env":
                 key = str(idx.value) if isinstance(idx, Const) else ""
-                return Tainted("request.env") if key.startswith("HTTP_") or "origin" in key or "referer" in key.lower() else UNKNOWN
+                if not key and idx_n is not None and idx_n.type in ("constant", "scope_resolution"):
+                    key = _t(idx_n).split("::")[-1]  # env[PATH_INFO] / env[Rack::PATH_INFO]: Rack's constants hold their own names
+                return Tainted("request.env") if key.startswith("HTTP_") or "origin" in key or "referer" in key.lower() or key in RACK_REQUEST_KEYS else UNKNOWN
             return UNKNOWN
         if isinstance(base, ListV):
             if isinstance(idx, Const) and isinstance(idx.value, int) and not isinstance(idx.value, bool) and not base.dirty and not base.opaque and -len(base.items) <= idx.value < len(base.items):
@@ -1065,6 +1070,9 @@ class RbInterp:
         for c in (p.named_children if p is not None else []):
             nm = c if c.type == "identifier" else next((x for x in c.named_children if x.type == "identifier"), None) if c.type in ("optional_parameter", "keyword_parameter", "splat_parameter") else None
             if nm is not None:
+                if _t(nm) == "env":  # a Rack app's `call(env)`: PATH_INFO, QUERY_STRING and the HTTP_* headers are the request
+                    fr.env["env"] = Obj(kind="request_env", type_name="RequestEnv")
+                    continue
                 fr.env[_t(nm)] = UNKNOWN if not action else Tainted("route-param")
 
     # ------------------------------------------------------------------ statements
