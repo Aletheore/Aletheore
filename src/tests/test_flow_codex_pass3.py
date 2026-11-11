@@ -254,3 +254,71 @@ def test_d40_fully_qualified_local_and_parameter(tmp_path):
            ' Object b(HttpServletRequest r, alpha.UserMapper m) { return m.search(r.getParameter("sort")); }\n}\n')
     _write(tmp_path, {**_two_mappers(), "web/Q.java": src})
     assert sorted(f["line"] for f in discover_repo(tmp_path) if f["rule_id"].endswith("sql-injection")) == [5]
+
+
+# D-41: a mapper interface that extends another inherits its statements
+
+_BASE_UNSAFE = ('package alpha;\nimport org.apache.ibatis.annotations.*;\n'
+                'public interface BaseMapper {{ @Select("SELECT * FROM u ORDER BY ${{sort}}") Object search(@Param("sort") String sort); }}\n')
+_BASE_SAFE = _BASE_UNSAFE.replace("${{sort}}", "#{{sort}}")
+_CALLER = ('package web;\nimport javax.servlet.http.HttpServletRequest;\n'
+           'class {name} {{ {typ} m; Object s(HttpServletRequest r) {{ return m.search(r.getParameter("sort")); }} }}\n')
+
+
+def _inh(tmp_path, files, callers):
+    d = {f"alpha/{k}.java": v for k, v in files.items()}
+    d.update({f"web/{n}.java": _CALLER.format(name=n, typ=t) for n, t in callers.items()})
+    _write(tmp_path, d)
+    return _sqli(tmp_path)
+
+
+def test_d41_inherited_sink_is_reported(tmp_path):
+    out = _inh(tmp_path, {"BaseMapper": _BASE_UNSAFE.format(), "UserMapper": "package alpha;\npublic interface UserMapper extends BaseMapper {}\n"},
+               {"Direct": "alpha.BaseMapper", "Inherited": "alpha.UserMapper"})
+    assert out == ["web/Direct.java", "web/Inherited.java"]
+
+
+def test_d41_grandparent_and_generic_parent(tmp_path):
+    out = _inh(tmp_path, {"BaseMapper": _BASE_UNSAFE.format(),
+                          "MidMapper": "package alpha;\npublic interface MidMapper<T> extends BaseMapper {}\n",
+                          "UserMapper": "package alpha;\npublic interface UserMapper extends MidMapper<String> {}\n"},
+               {"Inherited": "alpha.UserMapper"})
+    assert out == ["web/Inherited.java"]
+
+
+def test_d41_parent_in_another_package_via_import(tmp_path):
+    _write(tmp_path, {"alpha/BaseMapper.java": _BASE_UNSAFE.format(),
+                      "beta/UserMapper.java": "package beta;\nimport alpha.BaseMapper;\npublic interface UserMapper extends BaseMapper {}\n",
+                      "web/C.java": _CALLER.format(name="C", typ="beta.UserMapper")})
+    assert _sqli(tmp_path) == ["web/C.java"]
+
+
+def test_d41_child_redeclaring_the_method_safely_is_quiet(tmp_path):
+    safe = 'package alpha;\nimport org.apache.ibatis.annotations.*;\npublic interface UserMapper extends BaseMapper {\n  @Select("SELECT 1 WHERE x = #{sort}") Object search(@Param("sort") String sort);\n}\n'
+    assert _inh(tmp_path, {"BaseMapper": _BASE_UNSAFE.format(), "UserMapper": safe}, {"Inherited": "alpha.UserMapper"}) == []
+
+
+def test_d41_overload_with_another_parameter_count_still_inherits(tmp_path):
+    over = 'package alpha;\npublic interface UserMapper extends BaseMapper { Object search(String a, String b); }\n'
+    assert _inh(tmp_path, {"BaseMapper": _BASE_UNSAFE.format(), "UserMapper": over}, {"Inherited": "alpha.UserMapper"}) == ["web/Inherited.java"]
+
+
+def test_d41_safe_parent_stays_quiet(tmp_path):
+    out = _inh(tmp_path, {"BaseMapper": _BASE_SAFE.format(), "UserMapper": "package alpha;\npublic interface UserMapper extends BaseMapper {}\n"},
+               {"Inherited": "alpha.UserMapper"})
+    assert out == []
+
+
+def test_d41_nearer_safe_redeclaration_hides_the_grandparent_sink(tmp_path):
+    mid = 'package alpha;\nimport org.apache.ibatis.annotations.*;\npublic interface MidMapper extends BaseMapper {\n  @Select("SELECT 1 WHERE x = #{sort}") Object search(@Param("sort") String sort);\n}\n'
+    out = _inh(tmp_path, {"BaseMapper": _BASE_UNSAFE.format(), "MidMapper": mid,
+                          "UserMapper": "package alpha;\npublic interface UserMapper extends MidMapper {}\n"},
+               {"Inherited": "alpha.UserMapper"})
+    assert out == []
+
+
+def test_d41_inheritance_cycle_terminates(tmp_path):
+    out = _inh(tmp_path, {"BaseMapper": _BASE_UNSAFE.format().replace("interface BaseMapper", "interface BaseMapper extends UserMapper"),
+                          "UserMapper": "package alpha;\npublic interface UserMapper extends BaseMapper {}\n"},
+               {"Inherited": "alpha.UserMapper"})
+    assert out == ["web/Inherited.java"]

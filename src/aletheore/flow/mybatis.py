@@ -70,6 +70,8 @@ def _annotation_sql(method: Node) -> str | None:
 def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
     out: dict[str, dict[str, list[int]]] = {}
     ifaces: dict[str, dict[str, Node]] = {}
+    declared: dict[str, set[tuple[str, int]]] = {}  # (method name, parameter count) each interface declares itself
+    parents: dict[str, tuple[list[str], object, object]] = {}
     for p in repo.rglob("*.java"):
         if _SKIP.intersection(p.relative_to(repo).parts):
             continue
@@ -77,7 +79,8 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
             data = p.read_bytes()
         except OSError:
             continue
-        if b"interface" not in data or not (b"ibatis" in data or b"@Mapper" in data or b"${" in data):
+        # (an interface with no MyBatis marker of its own may still extend a mapper that has one)
+        if b"interface" not in data or not (b"ibatis" in data or b"@Mapper" in data or b"${" in data or b"extends" in data):
             continue
         jf = index.file(p)
         if jf is None:
@@ -88,6 +91,8 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
                 continue
             fqn = _fqn(cls, pkg)
             ifaces[fqn] = {nm: ms[0] for nm, ms in cls.methods.items() if ms}
+            declared[fqn] = {(nm, len(_params(m))) for nm, ms in cls.methods.items() for m in ms}
+            parents[fqn] = (_extended(cls.node), jf, cls)
             for nm, ms in cls.methods.items():
                 for m in ms:
                     sql = _annotation_sql(m)
@@ -137,11 +142,12 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
             if mid and names:
                 meth = ifaces.get(iface, {}).get(mid.group(1))
                 out.setdefault(iface, {})[mid.group(1)] = _positions(names, _params(meth) if meth is not None else None)
+    inherited = _inherit(out, ifaces, declared, parents)
     if out:
         # every mapper method, safe ones too, so a name shared with a safe mapper is never matched by name alone
         out["*methods*"] = {}
         for iface, methods in ifaces.items():
-            for m in methods:
+            for m in set(methods) | inherited.get(iface, set()):
                 out["*methods*"].setdefault(m, set()).add(iface)
         # simple name -> qualified names, so a receiver typed `UserMapper` is resolved against the caller's package
         out["*simple*"] = {}
@@ -150,6 +156,73 @@ def mybatis_sinks(repo: Path, index) -> dict[str, dict[str, list[int]]]:
         for fqn in known:
             out["*simple*"].setdefault(fqn.rsplit(".", 1)[-1], set()).add(fqn)
     return out
+
+
+def _extended(node: Node) -> list[str]:
+    """Names in an interface's `extends` list, without type arguments."""
+    names: list[str] = []
+    for c in node.children:
+        if c.type == "extends_interfaces":
+            for t in c.named_children:
+                for n in (t.named_children if t.type == "type_list" else [t]):
+                    names.append(re.sub(r"<.*", "", re.sub(r"\s+", "", _t(n)), flags=re.S))
+    return names
+
+
+def _inherit(out: dict, ifaces: dict, declared: dict, parents: dict) -> dict[str, set[str]]:
+    """MyBatis lets a mapper interface extend another: the parent's statements are the child's too. Copies each
+    ancestor's sinks onto a child that does not redeclare that method (same name and parameter count). Returns the
+    inherited method names per interface, so the safe ones are known as that mapper's methods as well."""
+    known = set(ifaces)
+    simple: dict[str, set[str]] = {}
+    for fqn in known:
+        simple.setdefault(fqn.rsplit(".", 1)[-1], set()).add(fqn)
+
+    def resolve(raw: str, fqn: str) -> set[str]:
+        _, jf, cls = parents[fqn]
+        if raw in known:
+            return {raw}
+        cands = simple.get(raw.rsplit(".", 1)[-1], set())
+        if not cands:
+            return set()
+        outer = cls.outer
+        if outer is not None and "." not in raw:  # a member interface of the enclosing type
+            nested = f"{_fqn(outer, _scope(jf)[0])}.{raw}"
+            if nested in cands:
+                return {nested}
+        return _resolve_type(raw, cands, jf)
+
+    direct = {fqn: set().union(*(resolve(r, fqn) for r in raws), set()) - {fqn} for fqn, (raws, _, _) in parents.items()}
+
+    def ancestors(fqn: str) -> list[str]:  # nearest first, each once, cycles cut
+        seen: list[str] = []
+        queue = list(direct.get(fqn, ()))
+        while queue:
+            a = queue.pop(0)
+            if a in seen or a == fqn:
+                continue
+            seen.append(a)
+            queue.extend(sorted(direct.get(a, ())))
+        return seen
+
+    inherited: dict[str, set[str]] = {}
+    snapshot = {k: dict(v) for k, v in out.items()}
+    for fqn in parents:
+        own = set(declared.get(fqn, set()))  # grows with each nearer ancestor: a redeclaration there hides farther ones
+        for a in ancestors(fqn):
+            for nm in ifaces.get(a, {}):
+                inherited.setdefault(fqn, set()).add(nm)
+            for nm, pos in snapshot.get(a, {}).items():
+                if nm in out.get(fqn, {}):
+                    continue
+                # the parent's parameter count, to tell an override from an overload (unknown count: assume inherited)
+                m = ifaces[a].get(nm) if a in ifaces else None
+                count = len(_params(m)) if m is not None else None
+                if count is not None and (nm, count) in own:
+                    continue
+                out.setdefault(fqn, {})[nm] = pos
+            own |= declared.get(a, set())
+    return inherited
 
 
 def _fqn(cls, pkg: str) -> str:
