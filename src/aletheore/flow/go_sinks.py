@@ -10,6 +10,16 @@ REQUEST_METHODS = {"FormValue", "PostFormValue", "Cookie", "Cookies", "Referer",
                    "ShouldBind", "ShouldBindJSON", "ShouldBindQuery", "Bind", "BindJSON", "BindQuery", "QueryParam", "QueryParams", "QueryString",
                    "FormParams", "Header", "Body", "URL", "RequestURI", "Host", "RemoteAddr", "Form", "PostForm", "MultipartForm", "Trailer", "Path",
                    "Get", "Cookie", "Query"}
+# Methods that parse the request body or query into the value they are handed (`c.ShouldBindJSON(&req)`):
+# the pointed-to variable then holds request data.
+BINDERS = {"Bind", "BindJSON", "BindQuery", "BindXML", "BindYAML", "BindForm", "BindUri", "BindHeader", "BindWith",
+           "ShouldBind", "ShouldBindJSON", "ShouldBindQuery", "ShouldBindXML", "ShouldBindYAML", "ShouldBindUri",
+           "ShouldBindHeader", "ShouldBindWith", "ShouldBindBodyWith", "BodyParser", "QueryParser", "ParamsParser",
+           "ReqHeaderParser", "ReadJSON", "ReadQuery", "ReadForm", "ReadBody", "ReadURL", "Decode"}
+# Packages whose Unmarshal(data, &v) fills v from data.
+UNMARSHAL_PKGS = {"json", "xml", "yaml", "toml", "msgpack", "jsoniter", "sonic", "easyjson", "proto", "protojson", "ini", "hcl"}
+# A struct that holds one of these is the framework's per-request context.
+REQUEST_HOLDERS = ("http.Request", "gin.Context", "echo.Context", "fiber.Ctx", "fasthttp.RequestCtx", "iris.Context")
 REQUEST_FIELDS = {"Form", "PostForm", "MultipartForm", "Header", "Body", "URL", "RequestURI", "Host", "Referer", "RemoteAddr", "Trailer", "Cookies", "Params"}
 
 SANITIZERS: dict[int, set[str]] = {

@@ -15,7 +15,7 @@ from aletheore.flow import extra_sinks as _X
 from aletheore.flow import guards as G
 from aletheore.flow.go_index import GoFile, GoIndex
 from aletheore.flow.go_sinks import (
-    PURE_PKGS, REQUEST_FIELDS, REQUEST_METHODS, REQUEST_PARAM_TYPES, RESPONSE_PARAM_TYPES, SAFE_FUNCS, SANITIZERS,
+    BINDERS, PURE_PKGS, UNMARSHAL_PKGS, REQUEST_FIELDS, REQUEST_METHODS, REQUEST_PARAM_TYPES, RESPONSE_PARAM_TYPES, SAFE_FUNCS, SANITIZERS,
 )
 from aletheore.flow.values import add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all
 
@@ -367,14 +367,15 @@ class GoInterp:
             ttext = _t(type_n).replace(" ", "")
             for nm in names:
                 if entry or not pos:
-                    inner.env[_t(nm)] = self._typed_param(ttext)
+                    inner.env[_t(nm)] = self._typed_param(ttext, inner.file)
                 else:
                     inner.env[_t(nm)] = pos.pop(0)
 
-    @staticmethod
-    def _typed_param(ttext: str) -> Val:
+    def _typed_param(self, ttext: str, file: GoFile | None = None) -> Val:
         if ttext in REQUEST_PARAM_TYPES or ttext.endswith(".Request") or ttext.endswith(".Context") and ttext != "context.Context":
             return Obj(kind="request", type_name="Request")
+        if file is not None and self.index.is_request_type(ttext, file):
+            return Obj(kind="request", type_name="Request")  # the repository's own per-request context type
         if ttext in RESPONSE_PARAM_TYPES:
             return Obj(type_name="ResponseWriter")
         return UNKNOWN
@@ -470,6 +471,9 @@ class GoInterp:
         return self._opaque(None, args)
 
     def _pkg_call(self, pkg: str, name: str, n: Node, args: list[Val], fr: GFrame) -> Val:
+        if pkg in UNMARSHAL_PKGS and name in ("Unmarshal", "UnmarshalStrict") and len(args) >= 2 and classify(args[0]) == "tainted":
+            self._taint_pointees(n, fr, "request.body")
+            return UNKNOWN
         if pkg == "fmt" and name in ("Sprintf", "Sprint", "Sprintln", "Errorf"):
             if name == "Sprintf" and args and isinstance(args[0], Const) and isinstance(args[0].value, str) and all(isinstance(a, Const) for a in args[1:]):
                 out = _go_format(args[0].value, [a.value for a in args[1:]])
@@ -505,11 +509,25 @@ class GoInterp:
             return self._combine(*args)
         return self._opaque(None, args)
 
+    @staticmethod
+    def _taint_pointees(call: Node, fr: GFrame, why: str) -> None:
+        """A binder (`c.ShouldBindJSON(&req)`, `json.NewDecoder(r.Body).Decode(&req)`, `json.Unmarshal(body, &req)`) fills the
+        value it is handed with request data: the variable then holds it."""
+        args_n = call.child_by_field_name("arguments")
+        for a in (args_n.named_children if args_n is not None else []):
+            if a.type == "unary_expression" and _t(a.child_by_field_name("operator")) == "&":
+                a = a.child_by_field_name("operand")
+            if a is not None and a.type == "identifier" and _t(a) != "_":
+                fr.env[_t(a)] = Tainted(why)
+
     def _method(self, recv: Val, name: str, args: list[Val], fr: GFrame, recv_text: str, node: Node) -> Val:
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, fr, recv_text, node) for a in recv.alts)
         if isinstance(recv, Obj):
             if recv.kind == "request":
+                if name in BINDERS and args:
+                    self._taint_pointees(node, fr, "request.body")
+                    return UNKNOWN  # the error result
                 return Tainted("request." + name) if name in REQUEST_METHODS else UNKNOWN
             if recv.type_name == "TarReader" and name == "Next":
                 return _archive_entry()
@@ -546,6 +564,9 @@ class GoInterp:
             return self._opaque(recv, args)
         if isinstance(recv, Tainted) and recv.why == "through-call":
             return UNKNOWN  # an object returned by an unmodeled call (a database record): its methods are not known to return the input
+        if name == "Decode" and args and classify(recv) == "tainted":
+            self._taint_pointees(node, fr, "request.body")  # json.NewDecoder(r.Body).Decode(&v)
+            return UNKNOWN
         if classify(recv) == "tainted":
             return Tainted("derived")
         if isinstance(recv, MapV) and name == "Get" and args and isinstance(args[0], Const) and not recv.dirty and not recv.opaque:

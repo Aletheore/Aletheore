@@ -22,6 +22,8 @@ MAX_FILES = 20000
 def _t(n: Node | None) -> str:
     return n.text.decode("utf-8", "replace") if n is not None else ""
 
+from aletheore.flow.go_sinks import REQUEST_HOLDERS
+
 
 @dataclass(eq=False)
 class GoFile:
@@ -32,6 +34,7 @@ class GoFile:
     functions: dict[str, Node] = field(default_factory=dict)
     methods: dict[tuple[str, str], Node] = field(default_factory=dict)  # (receiver type, name) -> node
     types: set[str] = field(default_factory=set)
+    request_types: set[str] = field(default_factory=set)  # struct types that hold the *http.Request (or a framework context)
     assigned: set[str] = field(default_factory=set)               # names that are assigned after their declaration somewhere in this file
     values: dict[str, Node] = field(default_factory=dict)       # package-level const/var name -> initializer expression
 
@@ -63,6 +66,9 @@ def _scan(f: GoFile) -> None:
             f.methods[(_recv_type(n), _t(n.child_by_field_name("name")))] = n
         elif t == "type_spec":
             f.types.add(_t(n.child_by_field_name("name")))
+            body = n.child_by_field_name("type")
+            if body is not None and body.type == "struct_type" and any(h in _t(body) for h in REQUEST_HOLDERS):
+                f.request_types.add(_t(n.child_by_field_name("name")))
         elif t in ("const_spec", "var_spec") and _top_level(n):
             names = [c for c in n.named_children if c.type == "identifier"]
             val_n = n.child_by_field_name("value")
@@ -149,6 +155,19 @@ class GoIndex:
     def method(self, recv_type: str, name: str, from_file: GoFile):
         hits = [(f, f.methods[(recv_type, name)]) for f in self.package_files(from_file.path.parent) if (recv_type, name) in f.methods]
         return hits[0] if len(hits) == 1 else None
+
+    def is_request_type(self, ttext: str, from_file: GoFile) -> bool:
+        """`*server.Ctx` / `Ctx`: a struct of this repository that holds the request, so a handler taking it is an entry point."""
+        name = ttext.lstrip("*").replace(" ", "")
+        if "." in name:
+            alias, name = name.split(".", 1)
+            imp = from_file.imports.get(alias)
+            directory = self._resolve_import(imp) if imp else None
+        else:
+            directory = from_file.path.parent
+        if directory is None or "." in name or "[" in name:
+            return False
+        return any(name in f.request_types for f in self.package_files(directory))
 
     def package_function(self, alias: str, name: str, from_file: GoFile):
         """`pkg.F`: resolve the alias through the imports to a directory inside the repository."""
