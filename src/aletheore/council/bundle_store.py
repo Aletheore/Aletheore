@@ -12,8 +12,8 @@ from typing import Protocol
 
 from aletheore.council.protocol import MAX_BUNDLE_BYTES
 
-ROOM_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+ROOM_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
+SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 OBJECT_MAGIC = b"CNCLOBJ1"  # the first bytes of an object an encrypted room's client sealed
 OBJECT_SLACK = 64 * 1024  # framing and per-chunk overhead a sealed object adds to the plaintext size
 OBJECT_MIN = 8 + 4 + 24  # magic, epoch, stream header

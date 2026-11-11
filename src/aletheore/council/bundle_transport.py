@@ -17,9 +17,9 @@ from pathlib import Path
 from aletheore.council.protocol import MAX_BUNDLE_BYTES
 from aletheore.council.worktrees import GitError, _git, integration_branch
 
-_BRANCH_RE = re.compile(r"^council/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
-_PARTICIPANT_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-_SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
+_BRANCH_RE = re.compile(r"^council/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\Z")
+_PARTICIPANT_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
+_SHA_RE = re.compile(r"^[0-9a-f]{40,64}\Z")
 
 
 class TransportError(RuntimeError):

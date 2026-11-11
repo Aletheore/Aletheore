@@ -47,7 +47,7 @@ from aletheore.council.store import CRYPTO_MODES, MAX_TITLE, ROOM_MODES, RoomSto
 
 log = logging.getLogger("council.server")
 
-_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+_SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 _EVENT_LIMIT = MAX_BODY_BYTES + 4096
 MAX_GRANTS = 64 * 1024
 MAX_WRAPPED = 8192

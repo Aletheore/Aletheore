@@ -129,7 +129,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.coverage.run]
 # Council has its own test job (.github/workflows/council.yml); the main jobs do not install its extra.
-omit = ["aletheore/council/*"]
+omit = ["*/aletheore/council/*"]
 
 [tool.setuptools.packages.find]
 include = ["aletheore*"]

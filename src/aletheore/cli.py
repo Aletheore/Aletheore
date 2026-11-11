@@ -449,6 +449,7 @@ _COMMAND_SUMMARIES = [
     ("hook", "commands for coding-agent hooks (read guard)"),
     ("tokens", "measure and reduce the tokens a coding agent re-reads every turn"),
     ("shield", "the local safety net for AI-written changes: setup, status, undo, off, check"),
+    ("council", "a sealed room where people and their coding agents work together (pip install 'aletheore[council]')"),
     ("login", "authenticate and save a managed-audit API token"),
     ("logout", "clear the locally saved managed-audit and Hallbook tokens"),
     ("status", "installed version, update availability, and login state"),
@@ -469,7 +470,7 @@ _COMMAND_GROUPS = [
         "Scan and explore",
         ["scan", "demo", "index", "query", "locate", "usages", "dependents", "tests-for", "cycles", "diff", "verify", "healthcheck"],
     ),
-    ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook", "skill-hub", "hook", "tokens", "shield"]),
+    ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook", "skill-hub", "hook", "tokens", "shield", "council"]),
     ("Dashboard and watch", ["dashboard", "watch", "init"]),
     ("Account", ["login", "logout", "status", "config"]),
 ]
@@ -3507,11 +3508,11 @@ def council_command(ctx: typer.Context) -> None:
     except ModuleNotFoundError as exc:
         if (exc.name or "").split(".")[0] == "aletheore":
             raise
-        console.print(f"Council needs extra packages ({exc.name}). Install them with: pip install 'aletheore[council]'")
+        console.print(f"Council needs extra packages ({exc.name}). Install them with: pip install 'aletheore[council]'", markup=False)
         raise typer.Exit(code=1)
-    import typer.main
+    from typer.main import get_command
 
-    typer.main.get_command(council_app).main(args=list(ctx.args), prog_name="aletheore council")
+    get_command(council_app).main(args=list(ctx.args), prog_name="aletheore council")
 
 
 @config_app.command(
