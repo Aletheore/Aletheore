@@ -7,7 +7,72 @@ finding be dropped.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+
+# Every change to a mutable value (a container's contents, its `opaque` flag, a rebound field) bumps one global epoch.
+# `classify` remembers its answer on a value together with the epoch it was computed at, so an answer is reused
+# exactly as long as nothing anywhere has changed. The tracking is automatic (below), so an interpreter cannot
+# forget to invalidate: it mutates a TList/TDict or sets an attribute, and the epoch moves.
+_EPOCH = [0]
+_CHECK = bool(os.environ.get("ALETHEORE_FLOW_CHECK_CLASSIFY"))  # tests/diagnostics: assert cache == recomputation
+
+
+def _bump() -> None:
+    _EPOCH[0] += 1
+
+
+def _tracked(base, names):
+    def make(name):
+        orig = getattr(base, name)
+
+        def method(self, *a, **k):
+            _EPOCH[0] += 1
+            return orig(self, *a, **k)
+
+        method.__name__ = name
+        return method
+
+    return {n: make(n) for n in names if hasattr(base, n)}
+
+
+TList = type("TList", (list,), _tracked(list, (
+    "append", "extend", "insert", "pop", "remove", "clear", "sort", "reverse", "__setitem__", "__delitem__",
+    "__iadd__", "__imul__")))
+_MISSING = object()
+
+
+def _dict_setitem(self, key, value):
+    old = dict.get(self, key, _MISSING)
+    if old is not value and (old is _MISSING or old != value):  # writing back what is already there changes nothing
+        _EPOCH[0] += 1
+    dict.__setitem__(self, key, value)
+
+
+TDict = type("TDict", (dict,), {**_tracked(dict, (
+    "__delitem__", "pop", "popitem", "update", "setdefault", "clear", "__ior__")), "__setitem__": _dict_setitem})
+
+_WATCHED = {"items": TList, "parts": TList, "entries": TDict, "fields": TDict, "opaque": None}
+
+
+class _Tracked:
+    """Mixin for the mutable values: rebinding a watched attribute bumps the epoch and wraps plain lists/dicts."""
+
+    def __setattr__(self, name, value):
+        if name in _WATCHED:
+            kind = _WATCHED[name]
+            if kind is not None and type(value) is not kind and isinstance(value, kind.__mro__[1]):
+                value = kind(value)
+            old = self.__dict__.get(name, _MISSING)
+            # (the first assignment builds the value: nothing else can reach it yet, so no answer can be stale)
+            if old is not _MISSING and old is not value and old != value:
+                _EPOCH[0] += 1
+        object.__setattr__(self, name, value)
+
+    def __post_init__(self):
+        for name, kind in _WATCHED.items():
+            if kind is not None and hasattr(self, name):
+                self.__setattr__(name, getattr(self, name))
 
 
 class Val:
@@ -68,7 +133,7 @@ class Choice(Val):
 
 
 @dataclass(eq=False)
-class ListV(Val):
+class ListV(_Tracked, Val):
     items: list
     birth_depth: int = 0
     dirty: bool = False
@@ -76,7 +141,7 @@ class ListV(Val):
 
 
 @dataclass(eq=False)
-class MapV(Val):
+class MapV(_Tracked, Val):
     entries: dict
     birth_depth: int = 0
     dirty: bool = False
@@ -84,7 +149,7 @@ class MapV(Val):
 
 
 @dataclass(eq=False)
-class BuilderV(Val):
+class BuilderV(_Tracked, Val):
     """A StringBuilder or StringBuffer: the parts appended so far."""
 
     parts: list
@@ -94,7 +159,7 @@ class BuilderV(Val):
 
 
 @dataclass(eq=False)
-class Obj(Val):
+class Obj(_Tracked, Val):
     cls: object = None  # a ClassInfo for user classes, else None
     fields: dict = field(default_factory=dict)
     kind: str | None = None  # "request" for an HttpServletRequest-like object
@@ -131,8 +196,88 @@ def _has_taint(v: Val) -> bool:
 _RANK = {"safe": 0, "unknown": 1, "tainted": 2}
 
 
-def classify(v: Val, _depth: int = 0) -> str:
-    """"safe", "unknown" or "tainted". Containers are judged by what they hold."""
+def classify(v: Val, _depth: int = 0, _memo: dict | None = None) -> str:
+    """"safe", "unknown" or "tainted". Containers are judged by what they hold.
+
+    The answer for a value depends only on the value and the depth it is reached at. A mutable value keeps its
+    answers for as long as the global epoch has not moved (nothing anywhere changed), and a walk keeps a per-call
+    memo for values that share sub-structure, so a densely linked object graph is not walked again and again.
+    "tainted" outranks everything, so a walk stops at the first tainted part."""
+    if _depth > 6:
+        return "unknown"
+    t = type(v)
+    if t is Unknown:  # leaves first: most of what a container holds
+        return "unknown"
+    if t is Const or t is Safe:
+        return "safe"
+    if t is Tainted:
+        return "tainted"
+    if _memo is None:
+        _memo = {}
+    if isinstance(v, _Tracked):
+        cache = v.__dict__.get("_cls")
+        if cache is None or cache[0] != _EPOCH[0]:
+            cache = (_EPOCH[0], {})
+            object.__setattr__(v, "_cls", cache)
+        got = cache[1].get(_depth)
+        if got is not None:
+            if _CHECK:
+                assert got == classify_reference(v, _depth), "stale classify cache"
+            return got
+        out = _classify_node(v, _depth, _memo)
+        if cache[0] == _EPOCH[0]:  # (a classify never mutates, but never store an answer from another epoch)
+            cache[1][_depth] = out
+        return out
+    return _classify_node(v, _depth, _memo)
+
+
+def _classify_node(v: Val, _depth: int, _memo: dict) -> str:
+    key = (id(v), _depth)
+    hit = _memo.get(key)
+    if hit is not None:
+        return hit
+    if isinstance(v, Choice):
+        worst, parts = None, v.alts
+    elif isinstance(v, ListV):
+        worst, parts = ("unknown" if v.opaque else "safe"), v.items
+    elif isinstance(v, MapV):
+        worst, parts = ("unknown" if v.opaque else "safe"), v.entries.values()
+    elif isinstance(v, BuilderV):
+        worst, parts = ("unknown" if v.opaque else "safe"), v.parts
+    elif isinstance(v, Obj):
+        # A request object is the source container: handing it to code that is not analyzed proves
+        # nothing about what that code does with it, so it is never "safe".
+        out = "unknown"
+        for item in v.fields.values():
+            if classify(item, _depth + 1, _memo) == "tainted":
+                out = "tainted"
+                break
+        _memo[key] = out
+        return out
+    else:
+        return "unknown"
+    rank = _RANK
+    cur = -1 if worst is None else rank[worst]
+    at_limit = _depth >= 6  # one level further is past the depth limit, where every part counts as "unknown"
+    for item in parts:
+        t = type(item)
+        if at_limit or t is Unknown:
+            r = 1
+        elif t is Const or t is Safe:
+            continue  # "safe" is the lowest rank: it cannot raise the worst
+        else:
+            r = rank[classify(item, _depth + 1, _memo)]
+        if r > cur:
+            cur = r
+            if r == 2:
+                break
+    worst = "safe" if cur <= 0 else "unknown" if cur == 1 else "tainted"
+    _memo[key] = worst
+    return worst
+
+
+def classify_reference(v: Val, _depth: int = 0) -> str:
+    """The plain recursive definition of `classify`, with no caching. Tests compare against it."""
     if _depth > 6:
         return "unknown"
     if isinstance(v, (Const, Safe)):
@@ -140,32 +285,15 @@ def classify(v: Val, _depth: int = 0) -> str:
     if isinstance(v, Tainted):
         return "tainted"
     if isinstance(v, Choice):
-        return max((classify(a, _depth + 1) for a in v.alts), key=_RANK.get)
-    if isinstance(v, ListV):
+        return max((classify_reference(a, _depth + 1) for a in v.alts), key=_RANK.get)
+    if isinstance(v, (ListV, MapV, BuilderV)):
+        parts = v.items if isinstance(v, ListV) else v.entries.values() if isinstance(v, MapV) else v.parts
         worst = "unknown" if v.opaque else "safe"
-        for item in v.items:
-            c = classify(item, _depth + 1)
-            worst = max(worst, c, key=_RANK.get)
-        return worst
-    if isinstance(v, MapV):
-        worst = "unknown" if v.opaque else "safe"
-        for item in v.entries.values():
-            worst = max(worst, classify(item, _depth + 1), key=_RANK.get)
-        return worst
-    if isinstance(v, BuilderV):
-        worst = "unknown" if v.opaque else "safe"
-        for item in v.parts:
-            worst = max(worst, classify(item, _depth + 1), key=_RANK.get)
+        for item in parts:
+            worst = max(worst, classify_reference(item, _depth + 1), key=_RANK.get)
         return worst
     if isinstance(v, Obj):
-        # A request object is the source container: handing it to code that is not analyzed proves
-        # nothing about what that code does with it, so it is never "safe".
-        worst = "unknown"
-        if v.fields:
-            for item in v.fields.values():
-                if classify(item, _depth + 1) == "tainted":
-                    return "tainted"
-        return worst
+        return "tainted" if any(classify_reference(i, _depth + 1) == "tainted" for i in v.fields.values()) else "unknown"
     return "unknown"
 
 
