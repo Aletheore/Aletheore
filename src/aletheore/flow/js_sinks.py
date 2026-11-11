@@ -75,6 +75,8 @@ def sink_args(cwe: int, name: str, recv: str, argc: int, kw_keys: set[str] | Non
             return [0, 1]
         if name in ("sendFile", "download", "sendfile") and argc >= 1:
             return [0]
+        if name == "@send" and argc >= 2:  # send(req, path, opts): serves the file at `path`
+            return [1]
         return None
     if cwe == 79:
         if name in ("send", "write", "end") and argc >= 1 and (base in ("res", "response", "reply", "ctx") or root in ("res", "response", "reply", "ctx") or recv.endswith(".res")):

@@ -198,3 +198,33 @@ def test_a_hash_that_is_not_named_env_stays_quiet(tmp_path):
     src = ('class Config\n  def load(settings)\n    name = settings["PATH_INFO"]\n    File.read(File.join("/srv", name))\n  end\nend\n')
     _write(tmp_path, {"cfg.rb": src})
     assert _rules(tmp_path, "path-traversal") == []
+
+
+def test_send_package_path_is_a_traversal_sink(tmp_path):
+    (tmp_path / "a.js").write_text(
+        "const send = require('send')\n"
+        "const app = require('express')()\n"
+        "app.get('/', (req, res) => {\n"
+        "  send(req, req.url).pipe(res)\n"
+        "})\n")
+    assert _rules(tmp_path, "path-traversal") == [("path-traversal", 4)]
+
+
+def test_send_package_constant_path_is_quiet(tmp_path):
+    (tmp_path / "a.js").write_text(
+        "const send = require('send')\n"
+        "const app = require('express')()\n"
+        "app.get('/', (req, res) => {\n"
+        "  send(req, '/static/index.html').pipe(res)\n"
+        "})\n")
+    assert _rules(tmp_path, "path-traversal") == []
+
+
+def test_unrelated_send_function_is_not_a_sink(tmp_path):
+    (tmp_path / "a.js").write_text(
+        "function send(a, b) { return a + b }\n"
+        "const app = require('express')()\n"
+        "app.get('/', (req, res) => {\n"
+        "  send(req, req.url)\n"
+        "})\n")
+    assert _rules(tmp_path, "path-traversal") == []

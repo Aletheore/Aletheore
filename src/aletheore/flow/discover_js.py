@@ -22,7 +22,7 @@ from aletheore.scanner.detect import IGNORED_DIRS
 _SINK_WORDS = {
     89: (b"query(", b"execute(", b"raw(", b".run(", b".all(", b".get(", b"prepare("),
     78: (b"exec", b"spawn", b"fork(", b"child_process"),
-    22: (b"fs.", b"fs\n", b"readFile", b"createReadStream", b"sendFile", b"download(", b"promises"),
+    22: (b"fs.", b"fs\n", b"readFile", b"createReadStream", b"sendFile", b"download(", b"promises", b"send("),
     79: (b"res.send", b"res.write", b"res.end", b"response.send", b"reply.send", b"ctx.body", b").send(", b").end(", b").write("),
     94: (b"eval(", b"Function(", b"runInNewContext", b"setTimeout(", b"setInterval("),
     601: (b"redirect(",),
@@ -284,6 +284,8 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                         if isinstance(mod, str) and mod.removeprefix("node:").split("/")[0] in ("fs", "fs-extra", "child_process"):
                             recv_text = "fs" if mod.removeprefix("node:").startswith("fs") else "child_process"
                             name = orig if orig and orig != "default" else name
+                        elif mod == "send":  # the `send` file-serving package: send(req, path)
+                            name = "@send"
                     positions = sink_args(_cwe, name, recv_text, len(args))
                     ext = False
                     if not positions:  # the shared catalogue, for a string built from request data
