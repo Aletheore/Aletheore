@@ -45,6 +45,7 @@ class PyFile:
     # module-level container name -> contributions: (kind, key node, value node, def node, env)
     # kind "value": evaluate `value`; "func": the function `def`; env maps registrar parameter -> argument node
     registry: dict[str, list] = field(default_factory=dict)
+    registrars: dict | None = None  # name -> specs, computed on first use
 
 
 def _decorated(node: Node) -> Node:
@@ -123,6 +124,7 @@ class PyIndex:
         self._files: dict[Path, PyFile] = {}
         self._suffix: dict[str, list[Path]] | None = None
         self._modules: dict[tuple, PyFile | None] = {}
+        self._xreg: dict[Path, dict] = {}
         self._parser = Parser(PY_LANGUAGE)
 
     def _build_suffix(self) -> dict[str, list[Path]]:
@@ -155,6 +157,51 @@ class PyIndex:
         _scan(pf)
         self._files[path] = pf
         return pf
+
+    def cross_registry(self, file: PyFile) -> dict[str, list]:
+        """Registrations other modules make through this file's registrars: `from registry import on` and then `@on('go')` elsewhere."""
+        got = self._xreg.get(file.path)
+        if got is not None:
+            return got
+        out: dict[str, list] = {}
+        self._xreg[file.path] = out
+        table = _registrar_table(file)
+        if not table:
+            return out
+        needles = [n.encode() for n in table]
+        if self._suffix is None:
+            self._suffix = self._build_suffix()
+        paths = sorted({p for ps in self._suffix.values() for p in ps})
+        for p in paths:
+            if p == file.path:
+                continue
+            try:
+                data = p.read_bytes()
+            except OSError:
+                continue
+            if not any(nd in data for nd in needles):
+                continue
+            pf = self.file(p)
+            if pf is None:
+                continue
+
+            def lookup(callee, pf=pf):
+                if callee is None:
+                    return None
+                if callee.type == "identifier":
+                    imp = pf.imports.get(_t(callee))
+                    if imp and imp[1] and imp[1] in table and self.resolve_module(imp[0], imp[2], pf) is file:
+                        return file, imp[1]
+                elif callee.type == "attribute":
+                    obj, nm = callee.child_by_field_name("object"), _t(callee.child_by_field_name("attribute"))
+                    imp = pf.imports.get(_t(obj)) if obj is not None and obj.type == "identifier" else None
+                    if imp and not imp[1] and nm in table and self.resolve_module(imp[0], imp[2], pf) is file:
+                        return file, nm
+                return None
+
+            for container, entry in sites(pf, lookup):
+                out.setdefault(container, []).append(entry)
+        return out
 
     def resolve_module(self, dotted: str, level: int, from_file: PyFile) -> PyFile | None:
         # (the answer depends only on these three, and every import is resolved on every call that uses it)
@@ -306,67 +353,81 @@ def _args_env(call: Node | None, params: list[str]) -> dict[str, Node]:
     return env
 
 
+def _registrar_table(file: PyFile) -> dict[str, list]:
+    """name -> specs for every module-level function in the file that fills a module-level container."""
+    if file.registrars is None:
+        file.registrars = {n: sp for n in file.functions if (sp := _registrar_specs(file, n))}
+    return file.registrars
+
+
 def _collect_registry(file: PyFile) -> None:
     """Module-level statements that fill a module-level list or dict: `REG.append(f)`, `TABLE['k'] = f`,
-    `register(f)` and `@register` / `@on('k')` on a function."""
-    cache: dict[str, list] = {}
+    `register(f)` and `@register` / `@on('k')` on a function (the registrar defined in this file)."""
+    def lookup(callee: Node):
+        if callee is not None and callee.type == "identifier" and _t(callee) in file.functions:
+            return file, _t(callee)
+        return None
 
-    def specs(name: str) -> list:
-        if name not in cache:
-            cache[name] = _registrar_specs(file, name)
-        return cache[name]
-
-    def add(container: str, entry: tuple) -> None:
+    for container, entry in sites(file, lookup):
         file.registry.setdefault(container, []).append(entry)
+    for c in file.root.named_children:
+        if c.type != "expression_statement":
+            continue
+        for a in c.named_children:
+            if a.type == "call":
+                f = a.child_by_field_name("function")
+                args = a.child_by_field_name("arguments")
+                if f is not None and f.type == "attribute" and args is not None and args.named_children:
+                    obj = f.child_by_field_name("object")
+                    if obj is not None and obj.type == "identifier" and _t(f.child_by_field_name("attribute")) in ("append", "add"):
+                        file.registry.setdefault(_t(obj), []).append(("value", None, args.named_children[0], None, {}, file))
+            elif a.type == "assignment":
+                left, right = a.child_by_field_name("left"), a.child_by_field_name("right")
+                if left is not None and left.type == "subscript" and right is not None:
+                    base = left.child_by_field_name("value")
+                    idx = left.children_by_field_name("subscript")
+                    if base is not None and base.type == "identifier" and idx:
+                        file.registry.setdefault(_t(base), []).append(("value", idx[0], right, None, {}, file))
 
-    def call_site(call: Node, defn: Node | None, bare: bool) -> None:
-        f = call if bare else call.child_by_field_name("function")
-        if f is None or f.type != "identifier":
+
+def sites(site_file: PyFile, lookup) -> list[tuple[str, tuple]]:
+    """(container, entry) for every `register(f)` call and `@register` / `@on(k)` decorator in site_file whose callee `lookup` maps to a
+    registrar (reg_file, name). An entry is (kind, key, value node, def node, argument environment, the file the nodes belong to)."""
+    out: list[tuple[str, tuple]] = []
+
+    def call_site(callee: Node, call: Node, defn: Node | None, bare: bool) -> None:
+        hit = lookup(callee)
+        if hit is None:
             return
-        reg = _t(f)
-        fn = file.functions.get(reg)
-        if fn is None:
-            return
-        outer = _params(fn)
-        for container, key, vparam, owner in specs(reg):
+        reg_file, reg = hit
+        outer = _params(reg_file.functions[reg])
+        for container, key, vparam, owner in _registrar_table(reg_file).get(reg, []):
             if defn is None:
                 if owner != "outer":
                     continue
                 env = _args_env(call, outer)
                 if vparam in env:
-                    add(container, ("value", key, env[vparam], None, env))
-            else:
-                if bare and owner == "outer":
-                    add(container, ("func", key, None, defn, {vparam: None}))
-                elif not bare and owner == "inner":
-                    add(container, ("func", key, None, defn, _args_env(call, outer)))
+                    out.append((container, ("value", key, env[vparam], None, env, site_file)))
+            elif bare and owner == "outer":
+                out.append((container, ("func", key, None, defn, {vparam: None}, site_file)))
+            elif not bare and owner == "inner":
+                out.append((container, ("func", key, None, defn, _args_env(call, outer), site_file)))
 
-    for c in file.root.named_children:
+    for c in site_file.root.named_children:
         d = _decorated(c)
         if c.type == "decorated_definition" and d is not None and d.type == "function_definition":
             for dec in c.named_children:
                 if dec.type != "decorator" or not dec.named_children:
                     continue
                 e = dec.named_children[0]
-                if e.type == "identifier":
-                    call_site(e, d, True)
+                if e.type in ("identifier", "attribute"):
+                    call_site(e, e, d, True)
                 elif e.type == "call":
-                    call_site(e, d, False)
+                    call_site(e.child_by_field_name("function"), e, d, False)
         elif c.type == "expression_statement":
             for a in c.named_children:
                 if a.type == "call":
                     f = a.child_by_field_name("function")
-                    args = a.child_by_field_name("arguments")
-                    if f is not None and f.type == "attribute" and args is not None and args.named_children:
-                        obj = f.child_by_field_name("object")
-                        if obj is not None and obj.type == "identifier" and _t(f.child_by_field_name("attribute")) in ("append", "add"):
-                            add(_t(obj), ("value", None, args.named_children[0], None, {}))
-                    elif f is not None and f.type == "identifier":
-                        call_site(a, None, False)
-                elif a.type == "assignment":
-                    left, right = a.child_by_field_name("left"), a.child_by_field_name("right")
-                    if left is not None and left.type == "subscript" and right is not None:
-                        base = left.child_by_field_name("value")
-                        idx = left.children_by_field_name("subscript")
-                        if base is not None and base.type == "identifier" and idx:
-                            add(_t(base), ("value", idx[0], right, None, {}))
+                    if f is not None and f.type in ("identifier", "attribute"):
+                        call_site(f, a, None, False)
+    return out

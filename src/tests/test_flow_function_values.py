@@ -397,3 +397,39 @@ def test_cs_collection_initializers(tmp_path):
 def test_cs_collection_initializer_of_safe_values_stays_quiet(tmp_path):
     body = '    var m = new Dictionary<string, string>{{"a", "1"}};\n    Sink(m["a"]);\n    new List<string>{"k"}.ForEach(s => Sink(s));\n'
     assert _cmd(tmp_path, "A.cs", CS_HEAD + body + CS_TAIL) == []
+
+
+XREG = "HANDLERS = {}\ndef on(name):\n    def deco(f):\n        HANDLERS[name] = f\n        return f\n    return deco\n"
+XROUTE = ("from flask import Flask, request\nfrom registry import HANDLERS\napp = Flask(__name__)\n@app.route('/a')\ndef a():\n"
+          "    HANDLERS['go'](request.args.get('x'))\n")
+
+
+def _two_files(tmp_path, files):
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+    return sorted(f["line"] for f in discover_repo(tmp_path) if f["rule_id"].endswith("command-injection"))
+
+
+def test_py_decorator_registry_filled_from_another_module(tmp_path):
+    files = {"registry.py": XREG, "app.py": XROUTE,
+             "handlers.py": "import os\nfrom registry import on\n\n@on('go')\ndef go(x):\n    os.system('echo ' + x)\n"}
+    assert _two_files(tmp_path, files) == [6]
+
+
+def test_py_registry_filled_through_a_module_attribute(tmp_path):
+    files = {"registry.py": XREG, "app.py": XROUTE,
+             "handlers.py": "import os\nimport registry as r\n\n@r.on('go')\ndef go(x):\n    os.system('echo ' + x)\n"}
+    assert _two_files(tmp_path, files) == [6]
+
+
+def test_py_cross_module_registry_other_key_stays_quiet(tmp_path):
+    files = {"registry.py": XREG, "app.py": XROUTE,
+             "handlers.py": "import os\nfrom registry import on\n\n@on('go')\ndef safe(x):\n    pass\n\n@on('other')\ndef bad(x):\n    os.system('echo ' + x)\n"}
+    assert _two_files(tmp_path, files) == []
+
+
+def test_py_cross_module_register_call(tmp_path):
+    reg = "REG = []\ndef register(f):\n    REG.append(f)\n    return f\n"
+    route = "from flask import Flask, request\nfrom registry import REG\napp = Flask(__name__)\n@app.route('/a')\ndef a():\n    for f in REG:\n        f(request.args.get('x'))\n"
+    hand = "import os\nfrom registry import register\n\ndef sink(x):\n    os.system('echo ' + x)\n\nregister(sink)\n"
+    assert _two_files(tmp_path, {"registry.py": reg, "app.py": route, "handlers.py": hand}) == [5]

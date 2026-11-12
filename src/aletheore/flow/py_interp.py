@@ -275,13 +275,13 @@ class PyInterp:
     def _with_registry(self, v: Val, name: str, file: PyFile, depth: int) -> Val:
         """Add what module-level `register(f)`, `NAME.append(f)`, `NAME[k] = f` and decorators put into the
         container `name`. A fresh container is built on every read, so this mutates it in place."""
-        sites = file.registry.get(name)
+        sites = list(file.registry.get(name, ())) + list(self.index.cross_registry(file).get(name, ()))
         if not sites or not isinstance(v, (ListV, MapV)) or depth > self.MAX_DEPTH:
             return v
-        mod = PFrame(file, None, None, depth + 1)
-        for kind, key, val_n, defn, env in sites:
+        for kind, key, val_n, defn, env, src in sites:
+            mod = PFrame(src, None, None, depth + 1)
             if kind == "func":
-                item: Val = FuncV(defn, file, name=_t(defn.child_by_field_name("name")))
+                item: Val = FuncV(defn, src, name=_t(defn.child_by_field_name("name")))
             else:
                 item = self.eval(val_n, mod)
             if isinstance(v, ListV):
