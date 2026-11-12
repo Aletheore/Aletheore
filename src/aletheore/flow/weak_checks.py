@@ -33,6 +33,53 @@ _LITERAL = re.compile(r"""^\s*(["']).*\1\s*$""")
 _SKIP = set(IGNORED_DIRS) | {".worktrees", ".repowise", "site-packages", "migrations"} | set(_lib.SKIP_DIRS) | {"tasks", "rakelib", "script", "bin", "build-logic", "buildSrc"}
 MAX_FILES = 6000
 
+# Archive extraction: an entry name from the archive is joined to the destination and written without any containment check in the file
+# ("Zip Slip": an entry named ../../etc/x leaves the directory). The file must use an archive library, join an entry name into a path, and contain
+# no containment guard anywhere; a guard anywhere in the file is enough to stay quiet, which keeps this to the plainly unguarded extractors.
+_ARCHIVE = {
+    "java": (re.compile(r"ZipEntry|ZipInputStream|ZipFile|ArchiveEntry|TarEntry|TarInputStream|TarArchive"),
+             re.compile(r"new\s+File\(([^;]*?,\s*)?[\w.()]*?(entry|e|ze|zipEntry|tarEntry|item)\w*\.getName\(\)|(Paths\.get|resolve)\([^;]*(entry|ze|zipEntry|tarEntry|item)\w*\.getName\(\)|File\([^;]*(entry|ze)\w*\.getName\(\)", re.I),
+             re.compile(r"getCanonical|normalize\(|startsWith|toRealPath|isInside|\.\.|ZipSlip|zip.?slip|isSubPath|SecureJoin|sanitiz|validat", re.I)),
+    "kotlin": (re.compile(r"ZipEntry|ZipInputStream|ZipFile|ArchiveEntry|TarEntry|TarArchive"),
+               re.compile(r"File\([^\n]*(entry|ze|zipEntry|tarEntry|item)\w*\.(name|getName\(\))|resolve\([^\n]*(entry|ze|item)\w*\.name", re.I),
+               re.compile(r"canonical|normalize\(|startsWith|toRealPath|\.\.|zip.?slip|sanitiz|validat", re.I)),
+    "python": (re.compile(r"\btarfile\b|\bzipfile\b"),
+               re.compile(r"os\.path\.join\([^)]*\b(member|entry|info|item|zinfo|tarinfo|zi|ti|m)\w*\.(name|filename)\b"),
+               re.compile(r"realpath|abspath|commonpath|is_relative_to|relative_to|filter\s*=|data_filter|tar_filter|startswith|\.\.|safe|sanitiz|is_within|secure_filename", re.I)),
+    "go": (re.compile(r"zip\.(NewReader|OpenReader)|tar\.NewReader|archiver\.|\.Extract\("),
+           re.compile(r"filepath\.Join\([^)]*\b(f|file|hdr|header|entry|zf)\w*\.Name\b"),
+           re.compile(r"HasPrefix|filepath\.Rel\b|IsLocal|SecureJoin|ZipSlip|Contains\([^)]*\"\.\.\"|sanitiz|ValidPath|validat|illegal file path", re.I)),
+    "javascript": (re.compile(r"unzipper|yauzl|adm-zip|AdmZip|tar-stream|node-stream-zip|extract-zip|decompress|jszip|\"tar\""),
+                   re.compile(r"path\.(join|resolve)\([^)]*\b(entry|header|zipEntry)\w*\.(path|fileName|entryName|name)\b"),
+                   re.compile(r"startsWith|path\.relative|\.\.|isInside|sanitiz|zip.?slip|normalize|realpath|validat", re.I)),
+    "csharp": (re.compile(r"ZipArchive|ZipFile|ZipEntry|TarEntry|TarReader"),
+               re.compile(r"Path\.Combine\([^;]*\b(entry|zipEntry|archiveEntry|zae|ze)\w*\.(FullName|Name)\b"),
+               re.compile(r"GetFullPath|StartsWith|IsPathRooted|\.\.|zip.?slip|sanitiz|IsSubPath|ValidatePath", re.I)),
+    "ruby": (re.compile(r"Zip::File|Zip::InputStream|TarReader|Minitar"),
+             re.compile(r"File\.join\([^)]*\b(entry|f|file|e)\w*\.(name|full_name)\b"),
+             re.compile(r"start_with|expand_path|\.\.|realpath|sanitiz|safe|within|inside", re.I)),
+}
+
+
+_WRITES = re.compile(r"(FileOutputStream|Files\.(copy|write|newOutputStream|createDirectories)|mkdirs?\b|createNewFile|os\.(Create|OpenFile|MkdirAll)|WriteFile|(?-i:\bopen\()|createWriteStream|writeFile|mkdir|File\.Create|FileStream|CreateDirectory|ExtractToFile|File\.(open|write|binwrite)|FileUtils|copy_stream|mkdir_p|\.extract\(|extractall|copyTo|CopyTo|outputStream|\.write\()", re.I)
+
+
+def _archive(lang: str, text: str, lines: list[str], rel: str) -> list[dict]:
+    marker, join, guard = _ARCHIVE[lang]
+    if not marker.search(text) or guard.search(text):
+        return []
+    tar_extract = re.compile(r"\b(tar|tf|archive|t|tarball|tar_file|tar_obj|tfile)\w*\.extractall\((?![^)]*(filter\s*=|members\s*=))[^\n]*\)") if lang == "python" and "tarfile" in text else None
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith(("#", "//", "*", "/*")):
+            continue
+        if (join.search(line) or (tar_extract is not None and tar_extract.search(line))) and _WRITES.search("\n".join(lines[max(0, i - 8): i + 12])):
+            return [{"tool": "aletheore-flow", "rule_id": f"flow.{lang}.archive-path", "severity": "minor", "type": "vulnerability", "path": rel, "line": i + 1,
+                     "cwe": ["CWE-22"], "message": "An archive entry name is joined into an output path and nothing in this file checks that the result stays inside "
+                                                  "the destination, so an entry named ../../x writes outside it (Zip Slip). Resolve the path and check it starts with "
+                                                  "the destination plus a separator."}]
+    return []
+
 
 def _balanced(line: str, open_at: int) -> str:
     """The text between the parenthesis at open_at and its match (the whole argument list of the call)."""
@@ -91,6 +138,9 @@ def scan(repo: Path) -> list[dict]:
             raw = p.read_bytes()
         except OSError:
             continue
+        if len(raw) <= 600_000 and lang in _ARCHIVE:
+            text0 = raw.decode("utf-8", "replace")
+            out.extend(_archive(lang, text0, text0.splitlines(), str(p.relative_to(repo_r)) if p.is_relative_to(repo_r) else str(p)))
         if len(raw) > 600_000 or (b"start_with?" not in raw and b"startswith" not in raw and b"HasPrefix" not in raw and b"startsWith" not in raw
                                   and b"StartsWith" not in raw and b"strpos" not in raw and b"str_starts_with" not in raw
                                   and b"end_with?" not in raw and b"endswith" not in raw and b"HasSuffix" not in raw and b"endsWith" not in raw
