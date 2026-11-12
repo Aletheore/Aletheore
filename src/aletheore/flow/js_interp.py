@@ -596,7 +596,9 @@ class JsInterp:
         for i, name in enumerate(names):
             if not name:
                 continue
-            if route == "mcp":
+            if route == "lib":  # an exported function of a library: its caller chooses the arguments
+                fr.env[name] = Tainted("library parameter")
+            elif route == "mcp":
                 fr.env[name] = Tainted("request.mcp") if i == 0 else UNKNOWN  # the tool's arguments; the second is the call context
             elif route == "next" and i == 1:  # App Router context: `params` holds the dynamic path segments
                 fr.env[name] = Obj(kind="request", type_name="NextContext")

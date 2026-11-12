@@ -84,6 +84,97 @@ def _tainted_string(v) -> bool:
     return one(v) or (isinstance(v, Choice) and any(one(a) for a in v.alts))
 
 
+_WEB_DEPS = {"express", "koa", "fastify", "hapi", "@hapi/hapi", "next", "restify", "connect", "sails", "@nestjs/core", "@nestjs/common", "nuxt",
+             "hono", "polka", "micro", "feathers", "@feathersjs/feathers", "loopback", "meteor-node-stubs", "apollo-server", "apollo-server-express",
+             "@remix-run/node", "@sveltejs/kit", "astro", "react-scripts", "gatsby", "electron"}
+
+
+_OTHER_MANIFESTS = ("Gemfile", "go.mod", "pom.xml", "build.gradle", "build.gradle.kts", "composer.json", "Cargo.toml", "requirements.txt",
+                    "pyproject.toml", "setup.py", "manage.py", "mix.exs", "Package.swift")
+
+
+def is_library(repo: Path) -> bool:
+    """A package that others import (it has a package.json and no web framework among its dependencies): its exported functions
+    are called with whatever the importing program passes, which can be request data. A web application is analysed through its
+    routes alone."""
+    import json
+
+    try:
+        pkg = json.loads((repo / "package.json").read_text(errors="replace"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(pkg, dict) or pkg.get("private") is True:
+        return False  # an unpublished package is an application (or a monorepo root), not something others import
+    if not any(k in pkg for k in ("main", "exports", "module", "bin", "browser")):
+        return False  # nothing says what the package exposes
+    if any((repo / m).exists() for m in _OTHER_MANIFESTS):
+        return False  # a Ruby / Go / Java / Python / PHP / Rust application with some JavaScript in it
+    deps: set = set()
+    for k in ("dependencies", "devDependencies", "peerDependencies"):
+        v = pkg.get(k)
+        if isinstance(v, dict):
+            deps |= set(v)
+    return not (deps & _WEB_DEPS)
+
+
+def _exported_functions(jf: JsFile):
+    """Functions a module exports: module.exports = fn / name / { a, b: fn }, exports.x = fn, export function f, export default fn,
+    export const f = () => ..., export { a, b }."""
+    def text(n):
+        return n.text.decode("utf-8", "replace")
+
+    def fn_of(v):
+        if v is None:
+            return None
+        if v.type in FN_TYPES:
+            return v
+        if v.type == "identifier":
+            return jf.functions.get(text(v))
+        return None
+
+    stack = [jf.root]
+    while stack:
+        n = stack.pop()
+        if n.type == "assignment_expression":
+            left, right = n.child_by_field_name("left"), n.child_by_field_name("right")
+            lt = text(left) if left is not None else ""
+            if lt == "module.exports" or lt == "exports" or lt.startswith(("module.exports.", "exports.")):
+                if right is not None and right.type == "object" and lt in ("module.exports", "exports"):
+                    for c in right.named_children:
+                        v = c.child_by_field_name("value") if c.type == "pair" else (c if c.type == "method_definition" else None)
+                        f = fn_of(v) if v is not None and c.type == "pair" else (c if c.type == "method_definition" else None)
+                        if f is None and c.type == "shorthand_property_identifier":
+                            f = jf.functions.get(text(c))
+                        if f is not None:
+                            yield f
+                else:
+                    f = fn_of(right)
+                    if f is not None:
+                        yield f
+        elif n.type == "export_statement":
+            for d in n.named_children:
+                if d.type in ("function_declaration", "generator_function_declaration"):
+                    yield d
+                elif d.type in FN_TYPES:
+                    yield d
+                elif d.type == "identifier" and n.text.decode("utf-8", "replace").startswith("export default"):
+                    f = jf.functions.get(text(d))
+                    if f is not None:
+                        yield f
+                elif d.type in ("lexical_declaration", "variable_declaration"):
+                    for v in d.named_children:
+                        f = fn_of(v.child_by_field_name("value")) if v.type == "variable_declarator" else None
+                        if f is not None:
+                            yield f
+                elif d.type == "export_clause":
+                    for sp in d.named_children:
+                        nm = sp.child_by_field_name("name")
+                        f = jf.functions.get(text(nm)) if nm is not None else None
+                        if f is not None:
+                            yield f
+        stack.extend(n.children)
+
+
 def _route_handlers(jf: JsFile):
     """Function nodes registered as route handlers: app.get('/x', (req, res) => ..., or by name)."""
     stack = [jf.root]
@@ -205,6 +296,7 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
     found: dict[tuple, dict] = {}
     files = _js_files(repo)
     present = classes_present(files, _SINK_WORDS)
+    library = is_library(repo)
     core_budget = budget_seconds
     # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
     # bounded extra slice, so a large repository never loses a core finding to the time the added classes take.
@@ -232,6 +324,10 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
             mcps = [h for h in _mcp_handlers(jf) if id(h) not in handler_ids]
             entries = [(None, False)] + [(h, True) for h in handlers] + [(h, "next") for h in nexts] + [(h, "mcp") for h in mcps]
             handler_ids |= {id(h) for h in mcps}
+            if library:
+                libs = [h for h in _exported_functions(jf) if id(h) not in handler_ids]
+                entries += [(h, "lib") for h in libs]
+                handler_ids |= {id(h) for h in libs}
             seen_entries = set(handler_ids)
             # Enclosing functions (a handler factory or constructor) build the scope their handlers close over.
             for fn in list(jf.functions.values()):
@@ -247,6 +343,7 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                     if id(m) not in seen_entries:
                         seen_entries.add(id(m))
                         entries.append((m, False))
+            route_now = [None]  # the kind of entry point being run (read by `record`)
             for cwe in cwes:
                 slug, label = CWE_NAMES_JS[cwe]
 
@@ -254,10 +351,13 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                     rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
                     line = node.start_point[0] + 1
                     found.setdefault((rel, line, _cwe), {
-                        "tool": "aletheore-flow", "rule_id": f"flow.javascript.{_slug}", "severity": SEVERITY_JS[_cwe],
+                        "tool": "aletheore-flow", "rule_id": f"flow.javascript.{_slug}",
+                        "severity": "minor" if route_now[0] == "lib" else SEVERITY_JS[_cwe],  # whoever calls the function chooses its arguments: less certain
                         "type": "vulnerability", "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                                   "Found by following the value through the code, including calls into other functions and modules.",
+                        "message": (f"A parameter of an exported function reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Whoever calls the function controls it. Found by following the value through the code." if route_now[0] == "lib" else
+                                    f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Found by following the value through the code, including calls into other functions and modules."),
                     })
 
                 def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
@@ -338,6 +438,7 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                     interp = JsInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                     fr = JFrame(jf, None, Obj(type_name="module"), 0, route=route)
+                    route_now[0] = route
                     try:
                         if fn is None:
                             interp.exec(jf.root, fr)
