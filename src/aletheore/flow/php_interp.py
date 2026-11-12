@@ -20,7 +20,7 @@ from aletheore.flow.php_index import PhpClass, PhpFile, PhpIndex
 from aletheore.flow.php_sinks import (
     CAST_SAFE, INCLUDE_KINDS, NAME_SANITIZERS, SAFE_FUNCS, SANITIZERS, SERVER_TAINTED_PREFIXES, SUPERGLOBALS,
 )
-from aletheore.flow.values import ClosureV, add_prefix, SAFE, UNKNOWN, Choice, Const, MapV, Obj, Tainted, Val, classify, join, join_all
+from aletheore.flow.values import ClosureV, FuncV, add_prefix, SAFE, UNKNOWN, Choice, Const, MapV, Obj, Tainted, Val, classify, join, join_all
 
 PROPAGATING = {
     "str_replace", "str_ireplace", "preg_replace", "substr", "mb_substr", "trim", "rtrim", "ltrim", "chop", "strtolower", "strtoupper",
@@ -35,6 +35,7 @@ ARRAY_FUNCS = {"array_merge", "array_values", "array_unique", "array_slice", "ar
 SOURCE_FUNCS = {"getallheaders", "apache_request_headers", "filter_input", "filter_input_array", "readline", "fgets", "fgetc", "stream_get_contents",
                 "http_get_request_body", "get_headers_x"}
 TERMINATORS = {"die", "exit"}
+CALLBACK_BUILTINS = {"call_user_func", "call_user_func_array", "array_map", "array_walk", "array_filter", "usort", "uasort", "uksort"}
 SAFE_REGEX = re.compile(r"^/\^?\[([^\]]+)\][+*]?\$?/[a-zA-Z]*$|^/\^\\(?:d|w)[+*]?\$/[a-zA-Z]*$")
 SAFE_CLASS_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_- ")
 
@@ -584,15 +585,21 @@ class PhpInterp:
         args_n = n.child_by_field_name("arguments")
         if fn_n is None:
             return UNKNOWN
+        first_class = args_n is not None and any(c.type == "variadic_placeholder" for c in args_n.children)  # strlen(...)
         if fn_n.type not in ("name", "qualified_name"):
             callee = self.eval(fn_n, fr)
+            if first_class:
+                return callee
             args = self._args(args_n, fr)
-            if isinstance(callee, ClosureV):
-                return self._call_closure(callee, args, fr)
-            return self._opaque(None, args)
+            return self._call_value(callee, args, fr, n)
         name = _t(fn_n).split("\\")[-1]
-        low = name.lower()
+        if first_class:
+            return self._function_value(name, fr)
         args = self._args(args_n, fr)
+        return self._call_by_name(name, n, args_n, args, fr)
+
+    def _call_by_name(self, name: str, n: Node, args_n: Node | None, args: list[Val], fr: PFrame) -> Val:
+        low = name.lower()
         self._hook(n, name, "", args, None, fr)
         if low in TERMINATORS:
             return UNKNOWN
@@ -600,9 +607,59 @@ class PhpInterp:
             return SAFE
         hit = self.index.function(name, fr.file)
         if hit is not None:
-            self._outs = self._ref_args(args_n)
+            self._outs = self._ref_args(args_n) if args_n is not None else None
             return self._run_function(hit[0], hit[1], None, None, args, fr)
+        if n is not None and low in CALLBACK_BUILTINS:
+            return self._callback_builtin(low, args, fr, n)
         return self._builtin(low, n, args, fr)
+
+    def _function_value(self, name: str, fr: PFrame) -> Val:
+        hit = self.index.function(name, fr.file)
+        return FuncV(hit[1], hit[0], name=name) if hit is not None else UNKNOWN
+
+    def _call_value(self, callee: Val, args: list[Val], fr: PFrame, n: Node | None = None) -> Val:
+        """Call a value as PHP does: a closure, a first-class callable, a function name in a string, or [object, 'method']."""
+        alts = callee.alts if isinstance(callee, Choice) else [callee]
+        outs = []
+        for a in alts:
+            if isinstance(a, ClosureV):
+                outs.append(self._call_closure(a, args, fr))
+            elif isinstance(a, FuncV):
+                outs.append(self._run_function(a.file, a.node, a.cls, a.self_obj, list(a.bound) + list(args), fr))
+            elif isinstance(a, Const) and isinstance(a.value, str) and a.value and n is not None and "::" not in a.value:
+                outs.append(self._call_by_name(a.value.split("\\")[-1], n, None, args, fr))
+            elif isinstance(a, MapV) and not a.dirty and set(a.entries) == {0, 1} and isinstance(a.entries[1], Const) and isinstance(a.entries[1].value, str):
+                target, meth = a.entries[0], a.entries[1].value
+                if isinstance(target, Obj) and target.cls is not None:
+                    m = self._find_method(target.cls, meth)
+                    outs.append(self._run_function(m[0].file, m[1], m[0], target, args, fr) if m else self._opaque(None, args))
+                else:
+                    outs.append(self._opaque(None, args))
+            else:
+                outs.append(self._opaque(None, args))
+        return join_all(outs)
+
+    def _callback_builtin(self, low: str, args: list[Val], fr: PFrame, n: Node) -> Val:
+        """call_user_func(cb, ...), call_user_func_array(cb, [...]), array_map(cb, arr), array_walk(arr, cb), array_filter(arr, cb)."""
+        if low == "call_user_func" and args:
+            return self._call_value(args[0], args[1:], fr, n)
+        if low == "call_user_func_array" and len(args) >= 2:
+            spread = list(args[1].entries.values()) if isinstance(args[1], MapV) else [Tainted("derived") if classify(args[1]) == "tainted" else UNKNOWN]
+            return self._call_value(args[0], spread, fr, n)
+        if low == "array_map" and len(args) >= 2:
+            held = self._element_of(args[1])
+            self._call_value(args[0], [held], fr, n)
+            return MapV({0: held}, birth_depth=fr.branch, dirty=True)
+        if low in ("array_walk", "array_filter", "usort", "uasort", "uksort") and len(args) >= 2:
+            held = self._element_of(args[0])
+            self._call_value(args[1], [held], fr, n)
+        return self._builtin(low, n, args, fr)
+
+    @staticmethod
+    def _element_of(v: Val) -> Val:
+        if isinstance(v, MapV) and v.entries:
+            return join_all(list(v.entries.values()))
+        return Tainted("element") if classify(v) == "tainted" else UNKNOWN
 
     @staticmethod
     def _ref_args(args_n: Node | None) -> list | None:

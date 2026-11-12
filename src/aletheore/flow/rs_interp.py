@@ -19,7 +19,7 @@ from aletheore.flow.rs_sinks import (
     EXTRACTORS, PASS_METHODS, REQUEST_BENIGN, REQUEST_TYPES, SAFE_METHODS, SAFE_PARAM_TYPES, SANITIZERS,
 )
 from aletheore.flow.values import (
-    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, ClosureV, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, ClosureV, FuncV, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 from aletheore.scanner.graph import RUST_LANGUAGE
 
@@ -275,7 +275,26 @@ class RsInterp:
             return self._const(c, name, fr)
         if fr.file.main is not None and name in fr.file.main.consts:
             return self._const(fr.file.main, name, fr)
+        hit = self.index.free_fn(name, fr.file)
+        if hit is not None:  # a function used as a value: `let f: fn(&str) = sink;`, `run(sink, x)`, `.for_each(sink)`
+            return FuncV(hit[1], hit[0].file, hit[0], None, name=name)
         return UNKNOWN
+
+    @staticmethod
+    def _callable_part(v) -> bool:
+        return isinstance(v, FuncV) or (isinstance(v, Choice) and any(isinstance(a, (FuncV, ClosureV)) for a in v.alts))
+
+    def _call_value(self, target: Val, args: list[Val], fr: SFrame) -> Val:
+        alts = target.alts if isinstance(target, Choice) else [target]
+        outs = []
+        for a in alts:
+            if isinstance(a, FuncV):
+                outs.append(self._run_fn(a.cls, a.node, a.self_obj, list(a.bound) + list(args), fr))
+            elif isinstance(a, ClosureV):
+                outs.append(self._invoke(a, args, fr))
+            else:
+                outs.append(self._opaque(None, args))
+        return join_all(outs)
 
     def _const(self, cls: RsType, name: str, fr: SFrame) -> Val:
         init = cls.consts.get(name)
@@ -529,6 +548,8 @@ class RsInterp:
             self._hook(n, name, "", args, None, fr)
             if isinstance(fr.env.get(name), ClosureV):
                 return self._invoke(fr.env[name], args, fr)
+            if self._callable_part(fr.env.get(name)):
+                return self._call_value(fr.env[name], args, fr)
             self._outs = self._mut_refs(n)
             try:
                 return self._unqualified(name, args, fr)
@@ -549,8 +570,11 @@ class RsInterp:
             recv = self.eval(recv_n, fr)
             self._hook(n, name, recv_text, [a for a in args if a is not None], recv, fr)
             return self._method(recv, name, args, fr, recv_n, n, turbofish)
-        self.eval(fn, fr)
-        return self._opaque(None, self._args(n, fr))
+        target = self.eval(fn, fr)  # table["go"](x), (self.handler)(x)
+        args = self._args(n, fr)
+        if self._callable_part(target):
+            return self._call_value(target, args, fr)
+        return self._opaque(None, args)
 
     def _args_with_closures(self, call: Node, fr: SFrame) -> list[Val]:
         return self._args(call, fr)
@@ -610,6 +634,11 @@ class RsInterp:
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, fr, recv_n, call, turbofish) for a in recv.alts)
         closure = next((c for c in (call.child_by_field_name("arguments").named_children if call.child_by_field_name("arguments") is not None else []) if c.type == "closure_expression"), None)
+        if name in ITER_METHODS and args and isinstance(args[-1], FuncV):
+            # .for_each(sink), .map(sink): the function receives what the receiver holds
+            held = join_all(recv.items) if isinstance(recv, ListV) and recv.items else (Tainted("element") if classify(recv) == "tainted" else None)
+            if held is not None:
+                self._call_value(args[-1], [held], fr)
         # zip / tar crates: an entry's name is chosen by whoever made the archive (zip slip). mangled_name() and
         # enclosed_name() are the crate's own safe forms and stay unmodelled.
         if name in ("by_index", "by_name", "by_index_raw", "by_index_decrypt"):

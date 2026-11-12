@@ -79,6 +79,11 @@ class Val:
     """Base class for abstract values."""
 
 
+@dataclass(eq=False)
+class CallableV(Val):
+    """Base of the function values: a reference to a function is benign data, so it classifies as \"safe\"."""
+
+
 class Char(str):
     """A Java char constant, kept distinct from a one-character String only for display."""
 
@@ -236,6 +241,8 @@ def _classify_node(v: Val, _depth: int, _memo: dict) -> str:
     hit = _memo.get(key)
     if hit is not None:
         return hit
+    if isinstance(v, CallableV):
+        return "safe"
     if isinstance(v, Choice):
         worst, parts = None, v.alts
     elif isinstance(v, ListV):
@@ -280,7 +287,7 @@ def classify_reference(v: Val, _depth: int = 0) -> str:
     """The plain recursive definition of `classify`, with no caching. Tests compare against it."""
     if _depth > 6:
         return "unknown"
-    if isinstance(v, (Const, Safe)):
+    if isinstance(v, (Const, Safe, CallableV)):
         return "safe"
     if isinstance(v, Tainted):
         return "tainted"
@@ -337,12 +344,27 @@ def host_is_fixed(v: Val) -> bool:
 
 
 @dataclass(eq=False)
-class ClosureV(Val):
+class ClosureV(CallableV):
     """A lambda value with the variables it was created with, so calling it later sees what it captured."""
 
     node: object
     file: object
     env: dict
+
+
+@dataclass(eq=False)
+class FuncV(CallableV):
+    """A named function (or a method bound to its object) used as a value: assigned to a name, stored in a table or a field,
+    or passed as an argument. A function reference is not attacker-controlled data, so it classifies as "safe"; calling it runs
+    the function with the arguments of the call."""
+
+    node: object
+    file: object
+    cls: object = None
+    self_obj: object = None
+    closure: object = None  # the frame that defines a nested function
+    name: str = ""
+    bound: tuple = ()  # arguments fixed in advance (functools.partial)
 
 
 _LOCAL_PATH = _re.compile(r"^/[^/\\]")

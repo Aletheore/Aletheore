@@ -16,7 +16,7 @@ from aletheore.flow import guards as G
 from aletheore.flow.cs_index import CsClass, CsFile, CsIndex
 from aletheore.flow.cs_sinks import PURE_TYPES, REQUEST_PROPS, SAFE_METHODS, SANITIZERS
 from aletheore.flow.values import (
-    ClosureV, add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    ClosureV, FuncV, add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 
 STRING_PURE = {"ToLower", "ToUpper", "ToLowerInvariant", "ToUpperInvariant", "Trim", "TrimStart", "TrimEnd", "Replace", "Substring", "PadLeft", "PadRight",
@@ -250,7 +250,38 @@ class CsInterp:
             return Obj(kind="request", type_name="Request")
         if name in ("HttpContext", "Context"):
             return Obj(type_name="HttpContext")
+        if fr.cls is not None:  # a method group: Action<string> f = Sink;
+            hit = self._find_method_any(fr.cls, name)
+            if hit is not None:
+                return FuncV(hit[1], hit[0].file, hit[0], fr.this_obj, name=name)
         return UNKNOWN
+
+    def _find_method_any(self, cls: CsClass, name: str):
+        seen: set[int] = set()
+        cur: CsClass | None = cls
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            if cur.methods.get(name):
+                return cur, cur.methods[name][0]
+            cur = self.index.cls(cur.bases[0], cur.file) if cur.bases else None
+        return None
+
+    @staticmethod
+    def _callable_part(v) -> bool:
+        return isinstance(v, FuncV) or (isinstance(v, Choice) and any(isinstance(a, (FuncV, ClosureV)) for a in v.alts))
+
+    def _call_value(self, target: Val, args: list[Val], fr: CFrame) -> Val:
+        alts = target.alts if isinstance(target, Choice) else [target]
+        outs = []
+        for a in alts:
+            if isinstance(a, FuncV):
+                m = next((x for x in a.cls.methods.get(a.name, []) if self._arity(x) == len(args)), a.node)
+                outs.append(self._run_method(a.cls, m, a.self_obj, list(args), fr))
+            elif isinstance(a, ClosureV):
+                outs.append(self._call_closure(a, args, fr))
+            else:
+                outs.append(self._opaque(None, args))
+        return join_all(outs)
 
     def _const_value(self, cls: CsClass, name: str, fr: CFrame) -> Val:
         init = cls.consts.get(name)
@@ -284,6 +315,10 @@ class CsInterp:
                 return Obj(kind="request", type_name="Request")
             if name in base.fields:
                 return base.fields[name]
+            if base.cls is not None:
+                hit = self._find_method_any(base.cls, name)
+                if hit is not None:
+                    return FuncV(hit[1], hit[0].file, hit[0], base, name=name)
             return UNKNOWN
         if classify(base) == "tainted":
             return Tainted("derived")
@@ -440,6 +475,8 @@ class CsInterp:
             held = fr.env.get(name)
             if isinstance(held, ClosureV):
                 return self._call_closure(held, args, fr)
+            if self._callable_part(held):
+                return self._call_value(held, args, fr)
             self._outs = outs or None
             try:
                 return self._call_unqualified(name, args, fr)
@@ -474,8 +511,11 @@ class CsInterp:
             args = self._args(args_n, fr)
             self._hook(n, name, "", args, None, fr)
             return self._call_unqualified(name, args, fr)
-        self.eval(func, fr)
-        return self._opaque(None, self._args(args_n, fr))
+        target = self.eval(func, fr)  # table["go"](x)
+        args = self._args(args_n, fr)
+        if self._callable_part(target):
+            return self._call_value(target, args, fr)
+        return self._opaque(None, args)
 
     def _call_closure(self, c: ClosureV, args: list[Val], fr: CFrame) -> Val:
         if fr.depth + 1 > self.MAX_DEPTH or id(c.node) in self._active:
@@ -553,6 +593,13 @@ class CsInterp:
     def _method(self, recv: Val, name: str, args: list[Val], fr: CFrame, recv_text: str) -> Val:
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, fr, recv_text) for a in recv.alts)
+        if name == "Invoke" and isinstance(recv, (ClosureV, FuncV)):
+            return self._call_value(recv, args, fr)
+        if name in ("ForEach", "Select", "Where", "SelectMany", "Any", "All", "First", "FirstOrDefault", "Count") and args \
+                and isinstance(args[-1], (ClosureV, FuncV)):
+            held = join_all(recv.items) if isinstance(recv, ListV) and recv.items else (Tainted("element") if classify(recv) == "tainted" else None)
+            if held is not None:
+                self._call_value(args[-1], [held], fr)
         if isinstance(recv, Obj):
             if recv.kind == "request":
                 return Tainted("request." + name)

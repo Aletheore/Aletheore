@@ -19,7 +19,7 @@ from aletheore.flow.go_index import GoFile, GoIndex
 from aletheore.flow.go_sinks import (
     BINDERS, PURE_PKGS, UNMARSHAL_PKGS, REQUEST_FIELDS, REQUEST_METHODS, REQUEST_PARAM_TYPES, RESPONSE_PARAM_TYPES, SAFE_FUNCS, SANITIZERS,
 )
-from aletheore.flow.values import add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all
+from aletheore.flow.values import CallableV, add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all
 
 
 class BudgetExceeded(Exception):
@@ -27,10 +27,12 @@ class BudgetExceeded(Exception):
 
 
 @dataclass(eq=False)
-class FnV(Val):
+class FnV(CallableV):
     node: Node
     file: GoFile
     env: dict
+    this_obj: object = None  # a method taken as a value keeps the object it was read from
+    lexical: bool = False  # True: the body sees only the scope it was created in, not the caller's variables
 
 
 @dataclass(eq=False)
@@ -198,7 +200,12 @@ class GoInterp:
             name = _t(n)
             if name in fr.env:
                 return fr.env[name]
-            return self._package_value(name, fr)
+            v = self._package_value(name, fr)
+            if v is UNKNOWN:
+                hit = self.index.function(name, fr.file)
+                if hit is not None:
+                    return FnV(hit[1], hit[0], {}, lexical=True)  # a declared function used as a value
+            return v
         if t == "parenthesized_expression":
             return self.eval(n.named_children[0], fr) if n.named_children else UNKNOWN
         if t == "selector_expression":
@@ -258,7 +265,14 @@ class GoInterp:
                 return Tainted("request." + field_name) if field_name in REQUEST_FIELDS else UNKNOWN
             if field_name in base.fields:
                 return base.fields[field_name]
+            hit = self.index.method(base.type_name or "", field_name, fr.file) if base.type_name else None
+            if hit is not None:
+                return FnV(hit[1], hit[0], {}, this_obj=base, lexical=True)  # a method value: recv.Method
             return UNKNOWN
+        if op_n.type == "identifier" and _t(op_n) not in fr.env:
+            hit = self.index.package_function(_t(op_n), field_name, fr.file)
+            if hit is not None:
+                return FnV(hit[1], hit[0], {}, lexical=True)
         if isinstance(base, MapV) and field_name in base.entries:
             return base.entries[field_name]
         if classify(base) == "tainted":
@@ -354,7 +368,7 @@ class GoInterp:
         for c in (args_n.named_children if args_n is not None else []):
             if c.type == "func_literal":
                 self._callback(c, fr)
-                out.append(UNKNOWN)
+                out.append(FnV(c, fr.file, dict(fr.env), lexical=True))
             else:
                 out.append(self.eval(c.named_children[0] if c.type == "variadic_argument" and c.named_children else c, fr))
         return out
@@ -446,14 +460,36 @@ class GoInterp:
                 self._outs = None
         if t == "func_literal":
             return self._run_function(fr.file, func, None, self._args(args_n, fr), fr, closure=fr.env)
+        if t in ("index_expression", "call_expression", "parenthesized_expression"):
+            target = self.eval(func, fr)  # table[key](x), makeHandler()(x)
+            if self._callable_part(target):
+                return self._call_value(target, self._args(args_n, fr), fr)
         # a type conversion such as []byte(x) or string(x) written with a composite type
         args = self._args(args_n, fr)
         return args[0] if len(args) == 1 else self._opaque(None, args)
 
+    @staticmethod
+    def _callable_part(v) -> bool:
+        if isinstance(v, FnV):
+            return True
+        return isinstance(v, Choice) and any(isinstance(a, FnV) for a in v.alts)
+
+    def _call_fn(self, fv: FnV, args: list[Val], fr: GFrame) -> Val:
+        closure = fv.env if fv.lexical else {**fv.env, **fr.env}
+        return self._run_function(fv.file, fv.node, fv.this_obj, args, fr, closure=closure)
+
+    def _call_value(self, target: Val, args: list[Val], fr: GFrame) -> Val:
+        """Call whatever a value may be: each function it can be runs with these arguments; an alternative that is not known to
+        be a function is an unanalysed call."""
+        alts = target.alts if isinstance(target, Choice) else [target]
+        return join_all([self._call_fn(a, args, fr) if isinstance(a, FnV) else self._opaque(None, args) for a in alts])
+
     def _call_name(self, name: str, n: Node, args: list[Val], fr: GFrame) -> Val:
         v = fr.env.get(name)
-        if isinstance(v, FnV):
+        if isinstance(v, FnV) and not v.lexical:
             return self._run_function(v.file, v.node, None, args, fr, closure={**v.env, **fr.env})
+        if self._callable_part(v):
+            return self._call_value(v, args, fr)
         hit = self.index.function(name, fr.file)
         if hit is not None:
             return self._run_function(hit[0], hit[1], None, args, fr)
@@ -547,8 +583,10 @@ class GoInterp:
             if hit is not None:
                 return self._run_function(hit[0], hit[1], recv, args, fr)
             held = recv.fields.get(name)
-            if isinstance(held, FnV):
+            if isinstance(held, FnV) and not held.lexical:
                 return self._run_function(held.file, held.node, recv, args, fr, closure={**held.env, **fr.env})
+            if self._callable_part(held):
+                return self._call_value(held, args, fr)
             return self._opaque(recv, args)
         if isinstance(recv, FnV):
             return self._run_function(recv.file, recv.node, None, args, fr, closure={**recv.env, **fr.env})

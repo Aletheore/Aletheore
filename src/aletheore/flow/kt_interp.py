@@ -19,7 +19,7 @@ from aletheore.flow.kt_sinks import (
     PARAM_ANNOTATIONS, PURE_TYPES, REQUEST_TYPES, SAFE_METHODS, SAFE_PARAM_TYPES, SANITIZERS, SERVLET_BENIGN,
 )
 from aletheore.flow.values import (
-    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, ClosureV, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    add_prefix, SAFE, UNKNOWN, BuilderV, Choice, ClosureV, FuncV, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 
 def _zip_entry() -> Obj:
@@ -174,6 +174,11 @@ class KtInterp:
             return fr.this_obj or UNKNOWN
         if t == "parenthesized_expression":
             return self.eval(n.named_children[0], fr) if n.named_children else UNKNOWN
+        if t == "callable_reference":
+            ids = [c for c in n.children if c.type == "identifier"]
+            return self._fn_ref(None, _t(ids[-1]) if ids else "", fr)
+        if t == "navigation_expression" and any(c.type == "::" for c in n.children):
+            return self._fn_ref(n.children[0], _t(n.children[-1]), fr)  # this::name, obj::name, Type::name
         if t == "navigation_expression":
             return self._member(n, fr)
         if t == "index_expression":
@@ -504,8 +509,46 @@ class KtInterp:
             recv = self.eval(recv_n, fr)
             self._hook(n, name, recv_text, args, recv, fr)
             return self._method(recv, name, args, fr, recv_n, lam)
-        self.eval(callee, fr)
+        target = self.eval(callee, fr)  # table[key]!!(x), makeHandler()(x)
+        if self._callable_part(target):
+            return self._call_value(target, self._args(n, fr), fr)
         return self._opaque(None, self._args(n, fr))
+
+    def _fn_ref(self, recv_n: Node | None, name: str, fr: KFrame) -> Val:
+        """::name, this::name, obj::name as a value that runs the function when called."""
+        cls, obj = fr.cls, fr.this_obj
+        if recv_n is not None and recv_n.type != "this_expression":
+            v = self.eval(recv_n, fr)
+            if isinstance(v, Obj) and v.cls is not None:
+                cls, obj = v.cls, v
+            else:
+                cls = self.index.cls(_t(recv_n), fr.file) if _t(recv_n)[:1].isupper() else None
+                obj = None
+                if cls is None:
+                    return UNKNOWN
+        if cls is not None:
+            hit = self._find_fn(cls, name)
+            if hit is not None:
+                return FuncV(hit[1], hit[0].file, hit[0], obj, name=name)
+        if recv_n is None and fr.file.main is not None and fr.file.main.funcs.get(name):
+            return FuncV(fr.file.main.funcs[name][0], fr.file.main.file, fr.file.main, None, name=name)
+        return UNKNOWN
+
+    @staticmethod
+    def _callable_part(v) -> bool:
+        return isinstance(v, FuncV) or (isinstance(v, Choice) and any(isinstance(a, (FuncV, ClosureV)) for a in v.alts))
+
+    def _call_value(self, target: Val, args: list[Val], fr: KFrame) -> Val:
+        alts = target.alts if isinstance(target, Choice) else [target]
+        outs = []
+        for a in alts:
+            if isinstance(a, FuncV):
+                outs.append(self._run_fn(a.cls, a.node, a.self_obj, list(a.bound) + list(args), fr))
+            elif isinstance(a, ClosureV):
+                outs.append(self._invoke(a, args, fr))
+            else:
+                outs.append(self._opaque(None, args))
+        return join_all(outs)
 
     def _find_fn(self, cls: KtClass, name: str):
         seen: set[int] = set()
@@ -520,6 +563,8 @@ class KtInterp:
     def _unqualified(self, name: str, args: list[Val], fr: KFrame, lam: Node | None, node: Node) -> Val:
         if isinstance(fr.env.get(name), ClosureV):
             return self._invoke(fr.env[name], args, fr)
+        if self._callable_part(fr.env.get(name)):
+            return self._call_value(fr.env[name], args, fr)
         if fr.cls is not None:
             hit = self._find_fn(fr.cls, name)
             if hit is not None:
@@ -621,6 +666,12 @@ class KtInterp:
             return ListV([_zip_entry()], birth_depth=fr.branch)
         if isinstance(recv, ClosureV) and name == "invoke":
             return self._invoke(recv, args, fr)
+        if isinstance(recv, FuncV) and name == "invoke":
+            return self._call_value(recv, args, fr)
+        if name in LOOP_FUNS and args and isinstance(args[-1], FuncV):
+            held = join_all(recv.items) if isinstance(recv, ListV) and recv.items else (Tainted("element") if classify(recv) == "tainted" else recv if name in ("let", "also", "run", "apply") and not isinstance(recv, (ListV, MapV)) else None)
+            if held is not None:
+                self._call_value(args[-1], [held], fr)
         if isinstance(recv, Obj):
             if recv.kind == "request":
                 return SAFE if name in SERVLET_BENIGN else Tainted("request." + name)

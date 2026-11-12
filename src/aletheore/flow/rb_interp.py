@@ -19,7 +19,7 @@ from aletheore.flow.rb_sinks import (
     DB_FINDERS, PURE_RECEIVERS, REQUEST_NAMES, REQUEST_OBJ_NAMES, SAFE_METHODS, SANITIZERS, SINATRA_VERBS,
 )
 from aletheore.flow.values import (
-    ClosureV, add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    ClosureV, FuncV, add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 
 BENIGN_REQ = {"host", "host_with_port", "base_url", "protocol", "scheme", "port", "remote_ip", "ip", "ssl?", "get?", "post?", "put?", "delete?", "xhr?", "xml_http_request?", "local?", "request_method", "method", "request_id", "format_x"}
@@ -368,6 +368,8 @@ class RbInterp:
         idx = self.eval(idx_n, fr) if idx_n is not None else UNKNOWN
         if isinstance(base, ClosureV):
             return self._call_closure(base, [idx], fr)
+        if isinstance(base, FuncV):
+            return self._call_func(base, [idx], fr)
         if isinstance(base, Obj):
             if base.kind == "request":
                 return Tainted("request[...]")
@@ -619,6 +621,8 @@ class RbInterp:
                 recv = self.eval(recv_n, fr)
                 if isinstance(recv, ClosureV):
                     return self._call_closure(recv, self._args(args_n, fr), fr)
+                if isinstance(recv, FuncV):
+                    return self._call_func(recv, self._args(args_n, fr), fr)
             return UNKNOWN
         if recv_n is None:
             args = self._args(args_n, fr)
@@ -659,7 +663,28 @@ class RbInterp:
             cur = self._base(cur)
         return None
 
+    def _method_value(self, name: str, fr: RFrame) -> Val:
+        """method(:name): the method as a value that runs when called."""
+        if fr.cls is not None:
+            hit = self._find_method(fr.cls, name, 0, singleton=fr.singleton) or (self._find_method(fr.cls, name, 0) if fr.singleton else None)
+            if hit is not None:
+                return FuncV(hit[1], hit[0].file, hit[0], fr.this_obj, name=name)
+        if fr.file.main is not None:
+            hit = self._find_method(fr.file.main, name, 0)
+            if hit is not None:
+                return FuncV(hit[1], hit[0].file, hit[0], None, name=name)
+        return UNKNOWN
+
+    def _call_func(self, f: FuncV, args: list[Val], fr: RFrame) -> Val:
+        if f.bound:
+            args = list(f.bound) + list(args)
+        return self._run_method(f.cls, f.node, f.self_obj, args, fr)
+
     def _call_unqualified(self, name: str, args: list[Val], fr: RFrame, node: Node | None = None, block: Node | None = None) -> Val:
+        if name == "method" and len(args) == 1 and isinstance(args[0], Const) and isinstance(args[0].value, str):
+            return self._method_value(args[0].value, fr)
+        if name in ("send", "public_send", "__send__") and args and isinstance(args[0], Const) and isinstance(args[0].value, str):
+            return self._call_unqualified(args[0].value, args[1:], fr, node, block)
         if fr.cls is not None:
             hit = self._find_method(fr.cls, name, len(args), singleton=fr.singleton)
             if hit is None and fr.singleton:
@@ -779,6 +804,23 @@ class RbInterp:
     def _method(self, recv: Val, name: str, args: list[Val], fr: RFrame, recv_n: Node | None, block: Node | None) -> Val:
         if isinstance(recv, ClosureV) and name in ("call", "()", "yield", "[]", "curry", "==="):
             return self._call_closure(recv, args, fr)
+        if isinstance(recv, FuncV) and name in ("call", "()", "yield", "[]", "===", "to_proc"):
+            return self._call_func(recv, args, fr) if name != "to_proc" else recv
+        if name in ("send", "public_send", "__send__") and args and isinstance(args[0], Const) and isinstance(args[0].value, str) \
+                and isinstance(recv, Obj) and recv.cls is not None:
+            return self._method(recv, args[0].value, args[1:], fr, recv_n, block)
+        if name == "method" and len(args) == 1 and isinstance(args[0], Const) and isinstance(args[0].value, str) \
+                and isinstance(recv, Obj) and recv.cls is not None:
+            m = self._find_method(recv.cls, args[0].value, 0)
+            if m is not None:
+                return FuncV(m[1], m[0].file, m[0], recv, name=args[0].value)
+        if name in ("each", "map", "each_with_index", "select", "filter", "flat_map", "collect", "detect", "find", "reject", "any?", "all?", "then") \
+                and args and isinstance(args[-1], (FuncV, ClosureV)):
+            # each(&method(:name)): the function receives what the receiver holds
+            held = join_all(recv.items) if isinstance(recv, ListV) and recv.items else (Tainted("element") if classify(recv) == "tainted" else None)
+            if held is not None:
+                fn = args[-1]
+                (self._call_func(fn, [held], fr) if isinstance(fn, FuncV) else self._call_closure(fn, [held], fr))
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, fr, recv_n, block) for a in recv.alts)
         if isinstance(recv, Obj) and recv.type_name == "Archive":

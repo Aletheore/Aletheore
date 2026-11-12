@@ -17,7 +17,7 @@ from aletheore.flow import extra_sinks as _X
 from aletheore.flow import guards as G
 from aletheore.flow.js_index import FN_TYPES, JsClass, JsFile, JsIndex
 from aletheore.flow.js_sinks import KOA_ROOT, REQ_NAMES, REQUEST_METHODS, REQUEST_PROPS, SAFE_RESULT, SANITIZERS
-from aletheore.flow.values import add_prefix, SAFE, UNKNOWN, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all
+from aletheore.flow.values import CallableV, add_prefix, SAFE, UNKNOWN, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all
 
 BENIGN = {"includes", "startsWith", "endsWith", "indexOf", "lastIndexOf", "test", "match", "has", "hasOwnProperty",
           "isArray", "isInteger", "isNaN", "isFinite", "localeCompare", "charCodeAt", "codePointAt"}
@@ -33,12 +33,20 @@ class BudgetExceeded(Exception):
 
 
 @dataclass(eq=False)
-class FnV(Val):
+class FnV(CallableV):
     """A function value with the scope it was created in."""
 
     node: Node
     file: JsFile
     env: dict
+    cls: object = None  # a method taken as a value keeps the class and the object it was read from
+    this_obj: object = None
+    bound: tuple = ()  # arguments fixed in advance (fn.bind(this, a, b))
+    inline: bool = False  # written at the call site: it already ran as a callback when the arguments were evaluated
+    lexical: bool = False  # True: the body sees only the scope it was created in, not the caller's variables
+
+
+_ELEMENT_CALLBACKS = frozenset(("forEach", "map", "filter", "some", "every", "find", "findIndex", "flatMap", "then"))
 
 
 def request_like(fn: Node) -> bool:
@@ -259,7 +267,14 @@ class JsInterp:
         req = fr.file.requires.get(name)
         if req and isinstance(req[0], str) and req[0].removeprefix("node:").startswith("path") and req[1] in ("sep", "delimiter"):
             return SAFE  # `const { sep } = require("path")`
-        return fr.env.get(name, UNKNOWN)
+        if name in fr.env:
+            return fr.env[name]
+        if name in fr.funcs:
+            return FnV(fr.funcs[name], fr.file, dict(fr.env), lexical=True)
+        hit = self.index.lookup(name, fr.file) if name not in fr.file.requires else None
+        if hit is not None and hit[0] == "function":
+            return FnV(hit[1], hit[2], {}, lexical=True)
+        return UNKNOWN
 
     def _member(self, n: Node, fr: JFrame) -> Val:
         obj_n, prop = n.child_by_field_name("object"), _t(n.child_by_field_name("property"))
@@ -279,6 +294,10 @@ class JsInterp:
                 return UNKNOWN
             if prop in base.fields:
                 return base.fields[prop]
+            if base.cls is not None:
+                m = self._find_method(base.cls, prop)
+                if m is not None:
+                    return FnV(m[1], m[0].file, {}, cls=m[0], this_obj=base, lexical=True)
             return UNKNOWN
         if isinstance(base, MapV):
             if not base.dirty and not base.opaque:
@@ -376,7 +395,7 @@ class JsInterp:
                 if value_n is not None and value_n.type in FN_TYPES:
                     if request_like(value_n):
                         self._callback(value_n, fr)
-                    val = UNKNOWN
+                    val = FnV(value_n, fr.file, dict(fr.env), lexical=True)
                 else:
                     val = self.eval(value_n, fr)
                 if key is not None:
@@ -390,7 +409,7 @@ class JsInterp:
                 m.entries[("*", id(c))] = self.eval(c, fr)
                 m.dirty = True
             elif c.type == "method_definition":
-                m.entries[_t(c.child_by_field_name("name"))] = UNKNOWN
+                m.entries[_t(c.child_by_field_name("name"))] = FnV(c, fr.file, dict(fr.env), lexical=True)
                 if request_like(c):
                     self._callback(c, fr)
         return m
@@ -500,7 +519,7 @@ class JsInterp:
         for c in (args_n.named_children if args_n is not None else []):
             if c.type in FN_TYPES:
                 self._callback(c, fr, cb_params)
-                out.append(UNKNOWN)
+                out.append(FnV(c, fr.file, dict(fr.env), inline=True, lexical=True))
             else:
                 out.append(self.eval(c, fr))
         return out
@@ -604,10 +623,15 @@ class JsInterp:
         if func.type == "member_expression":
             obj_n, name = func.child_by_field_name("object"), _t(func.child_by_field_name("property"))
             recv_text = _t(obj_n)
+            recv_pre = None
             first = args_n.named_children[0] if args_n is not None and args_n.named_children else None
             if (name == "on" and first is not None and first.type == "string" and _t(first).strip("'\"`") == "entry") \
                     or (name in ("forEach", "map", "filter", "some", "every") and recv_text.endswith("getEntries()")):
                 args = self._args(args_n, fr, cb_params=[_archive_entry()])  # yauzl / unzipper / tar-stream / adm-zip entries
+            elif name in _ELEMENT_CALLBACKS and first is not None and obj_n is not None:
+                # arr.forEach(item => ...), promise.then(value => ...): the callback receives what the receiver holds
+                recv_pre = self.eval(obj_n, fr)
+                args = self._args(args_n, fr, cb_params=self._element_params(recv_pre, name))
             else:
                 args = self._args(args_n, fr)
             if self._sanitizer(name, recv_text):
@@ -619,22 +643,51 @@ class JsInterp:
                 if hit is not None:
                     self._hook(n, name, recv_text, args, None, fr)
                     return self._run_symbol(hit, args, fr)
-            recv = self.eval(obj_n, fr)
+            recv = recv_pre if recv_pre is not None else self.eval(obj_n, fr)
             self._hook(n, name, recv_text, args, recv, fr)
             return self._method(recv, name, args, fr, recv_text, n)
         # IIFE and other call-of-expression forms
         if func.type in FN_TYPES:
             args = self._args(args_n, fr)
             return self._run_function(fr.file, func, None, None, args, fr)
-        self.eval(func, fr)
-        return self._opaque(None, self._args(args_n, fr))
+        target = self.eval(func, fr)
+        args = self._args(args_n, fr)
+        if self._callable_part(target):
+            return self._call_value(target, args, fr)
+        return self._opaque(None, args)
+
+    @staticmethod
+    def _element_params(recv: Val, name: str) -> list[Val] | None:
+        """What a callback's first parameter holds when it is handed an element of `recv` (or, for then, the resolved value)."""
+        if isinstance(recv, ListV) and name != "then":
+            return [join_all(recv.items)] if recv.items else None
+        if classify(recv) == "tainted":
+            return [Tainted("element" if name != "then" else "derived")]
+        return None
+
+    @staticmethod
+    def _callable_part(v) -> bool:
+        if isinstance(v, FnV):
+            return True
+        return isinstance(v, Choice) and any(isinstance(a, FnV) for a in v.alts)
+
+    def _call_fn(self, fv: FnV, args: list[Val], fr: JFrame) -> Val:
+        if fv.bound:
+            args = list(fv.bound) + list(args)
+        closure = fv.env if fv.lexical else {**fv.env, **fr.env}
+        return self._run_function(fv.file, fv.node, fv.cls, fv.this_obj, args, fr, closure=closure)
+
+    def _call_value(self, target: Val, args: list[Val], fr: JFrame) -> Val:
+        """Call whatever a value may be: each function it can be runs with these arguments; an alternative that is not known to
+        be a function is an unanalysed call."""
+        alts = target.alts if isinstance(target, Choice) else [target]
+        return join_all([self._call_fn(a, args, fr) if isinstance(a, FnV) else self._opaque(None, args) for a in alts])
 
     def _call_name(self, name: str, n: Node, args: list[Val], fr: JFrame) -> Val:
         if self._sanitizer(name):
             return SAFE
-        if isinstance(fr.env.get(name), FnV):
-            fv = fr.env[name]
-            return self._run_function(fv.file, fv.node, None, None, args, fr, closure={**fv.env, **fr.env})
+        if self._callable_part(fr.env.get(name)):
+            return self._call_value(fr.env[name], args, fr)
         if name in fr.funcs:
             return self._run_function(fr.file, fr.funcs[name], None, None, args, fr, closure=fr.env)
         hit = self.index.lookup(name, fr.file)
@@ -711,6 +764,11 @@ class JsInterp:
     def _method(self, recv: Val, name: str, args: list[Val], fr: JFrame, recv_text: str, node: Node) -> Val:
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, fr, recv_text, node) for a in recv.alts)
+        if name in _ELEMENT_CALLBACKS and args and isinstance(args[0], FnV) and not args[0].inline:
+            # a named function handed to forEach / then: it receives what the receiver holds
+            params = self._element_params(recv, name)
+            if params is not None:
+                self._call_fn(args[0], params, fr)
         if name == "getEntries" and not args:
             return ListV([_archive_entry()], birth_depth=fr.branch)  # adm-zip
         if isinstance(recv, Obj):
@@ -725,6 +783,8 @@ class JsInterp:
             held = recv.fields.get(name)
             if isinstance(held, FnV):
                 return self._run_function(held.file, held.node, None, recv, args, fr, closure={**held.env, **fr.env})
+            if self._callable_part(held):
+                return self._call_value(held, args, fr)
             if recv.type_name == "Response":
                 self._note_content_type(recv, name, args)
                 return UNKNOWN
@@ -734,7 +794,18 @@ class JsInterp:
         if isinstance(recv, ListV):
             return self._list_method(recv, name, args, fr)
         if isinstance(recv, MapV):
+            held = recv.entries.get(name)
+            if held is not None and self._callable_part(held):
+                return self._call_value(held, args, fr)
             return self._map_method(recv, name, args, fr)
+        if isinstance(recv, FnV) and name in ("call", "apply", "bind"):
+            if name == "bind":
+                return FnV(recv.node, recv.file, recv.env, recv.cls, recv.this_obj if recv.this_obj is not None else None,
+                           tuple(recv.bound) + tuple(args[1:]), False, recv.lexical)
+            if name == "call":
+                return self._call_fn(recv, args[1:], fr)
+            spread = args[1].items if len(args) > 1 and isinstance(args[1], ListV) else [UNKNOWN]
+            return self._call_fn(recv, list(spread), fr)
         if isinstance(recv, Const) and isinstance(recv.value, str):
             return self._str_method(recv, name, args)
         if name in BENIGN or name in SAFE_RESULT:

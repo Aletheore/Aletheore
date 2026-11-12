@@ -21,7 +21,7 @@ from aletheore.flow.py_index import PyClass, PyFile, PyIndex
 from aletheore.flow.py_sinks import REQUEST_ATTRS_SAFE, SAFE_RESULT_CALLS, SANITIZERS
 from aletheore.flow import guards as G
 from aletheore.flow.values import (
-    ClosureV, add_prefix, SAFE, UNKNOWN, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
+    ClosureV, FuncV, add_prefix, SAFE, UNKNOWN, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all,
 )
 
 BENIGN_METHODS = {"startswith", "endswith", "isdigit", "isalpha", "isalnum", "isnumeric", "isdecimal", "isspace", "islower",
@@ -239,6 +239,8 @@ class PyInterp:
             return fr.env[name]
         if fr.self_obj is not None and name == "self":
             return fr.self_obj
+        if name in fr.local_funcs:
+            return FuncV(fr.local_funcs[name], fr.file, closure=fr, name=name)
         if name == "request" and "request" not in fr.file.constants and "request" not in fr.file.functions:
             return Obj(kind="request", type_name="Request")
         const = fr.file.constants.get(name)
@@ -260,6 +262,9 @@ class PyInterp:
                 finally:
                     self._active.discard(id(node))
                 return v if classify(v) == "safe" else UNKNOWN
+        hit = self.index.lookup(name, fr.file) if name not in fr.file.constants else None
+        if hit is not None and hit[0] == "function":
+            return FuncV(hit[1], hit[2], name=name)
         return UNKNOWN
 
     def _attr(self, n: Node, fr: PFrame) -> Val:
@@ -270,9 +275,17 @@ class PyInterp:
                 return SAFE if attr in REQUEST_ATTRS_SAFE else Tainted("request." + attr)
             if attr in base.fields:
                 return base.fields[attr]
+            if base.cls is not None:
+                m = self._find_method(base.cls, attr)
+                if m is not None:
+                    return FuncV(m[1], m[0].file, cls=m[0], self_obj=base, name=attr)
             return UNKNOWN
         if classify(base) == "tainted":
             return Tainted("through-attr")
+        if obj_n is not None and obj_n.type == "identifier" and _t(obj_n) not in fr.env:
+            hit = self.index.module_attr(_t(obj_n), attr, fr.file)
+            if hit is not None and hit[0] == "function":
+                return FuncV(hit[1], hit[2], name=attr)
         return UNKNOWN
 
     def _subscript(self, n: Node, fr: PFrame) -> Val:
@@ -551,6 +564,9 @@ class PyInterp:
             return UNKNOWN
         if func.type == "identifier":
             name = _t(func)
+            built = self._function_builtin(name, "", args)
+            if built is not None:
+                return built
             self._hook(n, name, "", args, kw, None, fr)
             imp = fr.file.imports.get(name)
             if imp is not None and imp[1] and imp[0] and name not in fr.file.functions and name not in fr.file.classes:
@@ -560,6 +576,10 @@ class PyInterp:
         if func.type == "attribute":
             obj_n, name = func.child_by_field_name("object"), _t(func.child_by_field_name("attribute"))
             recv_text = _t(obj_n)
+            if recv_text == "functools":
+                built = self._function_builtin(name, recv_text, args)
+                if built is not None:
+                    return built
             if self._sanitizer(name, recv_text):
                 self.eval(obj_n, fr)
                 return SAFE
@@ -572,9 +592,54 @@ class PyInterp:
             recv = self.eval(obj_n, fr)
             self._hook(n, name, recv_text, args, kw, recv, fr)
             return self._method(recv, name, args, kw, fr, recv_text)
-        # calling a call result, subscript, etc.
-        self.eval(func, fr)
+        # calling a call result, subscript, etc.: a table of functions, a function returned by another
+        target = self.eval(func, fr)
+        if self._callable_part(target):
+            return self._call_value(target, args, kw, fr)
         return self._opaque(None, args)
+
+    def _function_builtin(self, name: str, recv_text: str, args: list[Val]) -> Val | None:
+        """getattr(obj, "method") and functools.partial(f, ...) build function values."""
+        if name == "getattr" and not recv_text and len(args) >= 2:
+            obj, attr = args[0], args[1]
+            if isinstance(obj, Obj) and obj.cls is not None and isinstance(attr, Const) and isinstance(attr.value, str):
+                if attr.value in obj.fields:
+                    return obj.fields[attr.value]
+                m = self._find_method(obj.cls, attr.value)
+                if m is not None:
+                    return FuncV(m[1], m[0].file, cls=m[0], self_obj=obj, name=attr.value)
+            return None
+        if name == "partial" and recv_text in ("", "functools") and args and isinstance(args[0], FuncV):
+            f = args[0]
+            return FuncV(f.node, f.file, f.cls, f.self_obj, f.closure, f.name, tuple(f.bound) + tuple(args[1:]))
+        return None
+
+    @staticmethod
+    def _callable_part(v: Val) -> bool:
+        if isinstance(v, (FuncV, ClosureV)):
+            return True
+        return isinstance(v, Choice) and any(isinstance(a, (FuncV, ClosureV)) for a in v.alts)
+
+    def _call_value(self, target: Val, args: list[Val], kw: dict, fr: PFrame) -> Val:
+        """Call whatever a value may be: each function it can be runs with these arguments; an alternative that is not known to be
+        a function is an unanalysed call."""
+        alts = target.alts if isinstance(target, Choice) else [target]
+        outs = []
+        for a in alts:
+            if isinstance(a, FuncV):
+                outs.append(self._call_func(a, args, kw, fr))
+            elif isinstance(a, ClosureV):
+                outs.append(self._call_closure(a, args, kw, fr))
+            else:
+                outs.append(self._opaque(None, args + list(kw.values())))
+        return join_all(outs)
+
+    def _call_func(self, f: FuncV, args: list[Val], kw: dict, fr: PFrame) -> Val:
+        if f.name and self._sanitizer(f.name):
+            return SAFE
+        if f.bound:
+            args = list(f.bound) + list(args)
+        return self._run_function(f.file, f.node, f.cls, f.self_obj, args, kw, fr, closure=f.closure)
 
     def _call_closure(self, c: ClosureV, args: list[Val], kw: dict, fr: PFrame) -> Val:
         if fr.depth + 1 > self.MAX_DEPTH or id(c.node) in self._active:
@@ -598,6 +663,8 @@ class PyInterp:
         held = fr.env.get(name)
         if isinstance(held, ClosureV):
             return self._call_closure(held, args, kw, fr)
+        if self._callable_part(held):
+            return self._call_value(held, args, kw, fr)
         if self._sanitizer(name):
             return SAFE
         if name in fr.local_funcs:
@@ -769,6 +836,9 @@ class PyInterp:
         if isinstance(recv, Obj):
             if recv.kind == "request":
                 return Tainted("request." + name) if name not in REQUEST_ATTRS_SAFE else SAFE
+            held = recv.fields.get(name)
+            if held is not None and self._callable_part(held):
+                return self._call_value(held, args, kw, fr)
             if recv.cls is not None:
                 m = self._find_method(recv.cls, name)
                 if m is not None:

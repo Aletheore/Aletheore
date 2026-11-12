@@ -22,6 +22,7 @@ from aletheore.flow import extra_sinks as _X
 from aletheore.flow.java_index import ClassInfo, JavaFile, JavaIndex, simple_type_name
 from aletheore.flow import guards as G
 from aletheore.flow.values import (
+    CallableV, FuncV,
     RANDOM_MARK,
     add_prefix, SAFE,
     UNKNOWN,
@@ -115,6 +116,24 @@ SANITIZERS: dict[int, set[str]] = {
 
 class BudgetExceeded(Exception):
     pass
+
+
+@dataclass(eq=False)
+class LambdaV(CallableV):
+    """A lambda with the scope it was written in: calling it later (c.accept(x), f.apply(x), r.run()) runs its body with the arguments."""
+
+    node: Node
+    file: JavaFile
+    cls: object
+    this_obj: object
+    env: dict
+    types: dict
+
+
+# methods of the functional interfaces that are not "run the function"
+_FN_OTHER = frozenset(("equals", "hashCode", "toString", "andThen", "compose", "negate", "and", "or", "reversed", "thenComparing", "identity", "getClass"))
+_ELEMENT_CALLBACKS = frozenset(("forEach", "map", "filter", "flatMap", "anyMatch", "allMatch", "noneMatch", "peek", "ifPresent", "removeIf",
+                                "mapToInt", "mapToObj"))
 
 
 @dataclass(eq=False)
@@ -307,8 +326,10 @@ class Interp:
             return self._array_init(node, fr)
         if t == "lambda_expression":
             self._run_lambda(node, fr)
-            return UNKNOWN
-        if t in ("instanceof_expression", "switch_expression_value", "method_reference"):
+            return LambdaV(node, fr.file, fr.cls, fr.this_obj, dict(fr.env), dict(fr.types))
+        if t == "method_reference":
+            return self._method_ref(node, fr)
+        if t in ("instanceof_expression", "switch_expression_value"):
             return UNKNOWN
         if t == "switch_expression":
             return self._switch_expr(node, fr)
@@ -327,6 +348,77 @@ class Interp:
             except (BudgetExceeded, RecursionError):
                 pass
         return obj
+
+    def _method_ref(self, node: Node, fr: Frame) -> Val:
+        """A::staticMethod, this::method, obj::method as a value."""
+        kids = [c for c in node.named_children]
+        if len(kids) < 2:
+            return UNKNOWN
+        target, mname = kids[0], _t(kids[-1])
+        if target.type == "this":
+            cls, obj = fr.cls, fr.this_obj
+        else:
+            cname = self._class_ref(target, fr) if target.type in ("identifier", "field_access") else None
+            if cname is not None:
+                cls, obj = self.index.resolve_class(cname.split(".")[-1], fr.file), None
+            else:
+                v = self.eval(target, fr)
+                cls, obj = (v.cls, v) if isinstance(v, Obj) and v.cls is not None else (None, None)
+        if cls is None:
+            return UNKNOWN
+        owner = self._find_method_any(cls, mname)
+        return FuncV(owner[1][0], owner[0].file, owner[0], obj, name=mname) if owner is not None else UNKNOWN
+
+    def _find_method_any(self, cls: ClassInfo, name: str):
+        seen: set[int] = set()
+        cur: ClassInfo | None = cls
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            if cur.methods.get(name):
+                return cur, cur.methods[name]
+            cur = self.index.resolve_class(cur.superclass, cur.file) if cur.superclass else None
+        return None
+
+    def _call_callable(self, f: Val, args: list[Val], fr: Frame) -> Val:
+        if isinstance(f, FuncV):
+            owner = self._find_method_any(f.cls, f.name)
+            if owner is None:
+                return self._opaque(None, args)
+            return self._user_call(owner[0], owner[1], f.self_obj, args, fr)
+        if isinstance(f, LambdaV):
+            if fr.depth + 1 > self.MAX_DEPTH or id(f.node) in self._active:
+                return self._opaque(None, args)
+            inner = Frame(f.file, f.cls, f.this_obj, fr.depth + 1, env=dict(f.env), types=dict(f.types))
+            params = f.node.child_by_field_name("parameters")
+            names: list[str] = []
+            if params is not None:
+                if params.type == "identifier":
+                    names.append(_t(params))
+                else:
+                    for c in params.named_children:
+                        nm = c if c.type == "identifier" else c.child_by_field_name("name")
+                        if nm is not None:
+                            names.append(_t(nm))
+            for i, nm in enumerate(names):
+                inner.env[nm] = args[i] if i < len(args) else UNKNOWN
+            self._active.add(id(f.node))
+            try:
+                body = f.node.child_by_field_name("body")
+                if body is not None and body.type == "block":
+                    self.exec(body, inner)
+                    return join_all(inner.rets) if inner.rets else Const(None)
+                return self.eval(body, inner) if body is not None else UNKNOWN
+            finally:
+                self._active.discard(id(f.node))
+        return self._opaque(None, args)
+
+    @staticmethod
+    def _element_of(recv: Val) -> Val | None:
+        if isinstance(recv, ListV) and recv.items:
+            return join_all(recv.items)
+        if classify(recv) == "tainted":
+            return Tainted("element")
+        return None
 
     def _run_lambda(self, node: Node, fr: Frame) -> None:
         """Run a lambda body where it is written (a Thread/executor/stream callback): what it does with captured request data
@@ -708,6 +800,12 @@ class Interp:
     def _invoke(self, recv: Val, name: str, args: list[Val], fr: Frame, node: Node) -> Val:
         if isinstance(recv, Choice):
             return join_all(self._invoke(a, name, args, fr, node) for a in recv.alts)
+        if isinstance(recv, (LambdaV, FuncV)) and name not in _FN_OTHER:
+            return self._call_callable(recv, args, fr)
+        if name in _ELEMENT_CALLBACKS and args and isinstance(args[-1], (LambdaV, FuncV)):
+            held = self._element_of(recv)
+            if held is not None:
+                self._call_callable(args[-1], [held], fr)
         if isinstance(recv, Obj):
             if recv.kind == "request":
                 if name in REQUEST_SOURCES:
