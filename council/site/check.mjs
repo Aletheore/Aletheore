@@ -15,7 +15,13 @@ check("every in-page link points at something that exists", [...html.matchAll(/h
 check("no en or em dashes in the copy", !/[–—]/.test(html));
 check("does not name the unpublished package", !/aletheore-council\b(?!-site)/.test(html.replace(/council-control/g, "")));
 check("shows no install command that cannot be run", !/pip install|pipx install/.test(html));
-check("hidden from search engines until launch", /<meta name="robots" content="noindex, nofollow">/.test(html));
+check("open to search engines: no noindex tag, robots.txt allows crawling and names the sitemap, no X-Robots-Tag header",
+  !/noindex/i.test(html) && /Allow: \//.test(readFileSync(new URL("./robots.txt", import.meta.url), "utf8")) && !/Disallow: \//.test(readFileSync(new URL("./robots.txt", import.meta.url), "utf8"))
+  && /Sitemap: https:\/\/aletheorecouncil\.com\/sitemap\.xml/.test(readFileSync(new URL("./robots.txt", import.meta.url), "utf8"))
+  && !/X-Robots-Tag/i.test(readFileSync(new URL("./vercel.json", import.meta.url), "utf8")));
+check("the sitemap lists the home page and both legal pages", ["https://aletheorecouncil.com/</loc>", "https://aletheorecouncil.com/privacy</loc>", "https://aletheorecouncil.com/terms</loc>"]
+  .every((u) => readFileSync(new URL("./sitemap.xml", import.meta.url), "utf8").includes(u)));
+check("links back to aletheore.com with a plain followed link", /<a [^>]*href="https:\/\/aletheore\.com"[^>]*>/.test(html) && !/nofollow/i.test(html));
 
 // copy that must stay true (security model, section 2: the server sees who posted)
 check("does not claim the server cannot see who wrote what", !/who wrote what/i.test(html));
@@ -44,12 +50,19 @@ for (const t of six) check(`lists the tool ${t}`, scene.includes(t));
 
 // icons and the social image: real files of the right size, linked from the page
 const png = (name) => { const b = readFileSync(new URL(`./${name}`, import.meta.url)); return b.subarray(0, 8).toString("hex") === "89504e470d0a1a0a" ? { w: b.readUInt32BE(16), h: b.readUInt32BE(20) } : null; };
-for (const [name, w, h] of [["og.png", 1200, 630], ["apple-touch-icon.png", 180, 180], ["favicon-32.png", 32, 32]]) {
+for (const [name, w, h] of [["og.png", 1200, 630], ["apple-touch-icon.png", 180, 180], ["favicon-48.png", 48, 48], ["icon-192.png", 192, 192], ["icon-512.png", 512, 512]]) {
   const d = existsSync(new URL(`./${name}`, import.meta.url)) ? png(name) : null;
   check(`${name} is a real ${w}x${h} PNG`, !!d && d.w === w && d.h === h, d ? `${d.w}x${d.h}` : "missing");
 }
 check("favicon.svg exists", existsSync(new URL("./favicon.svg", import.meta.url)));
-for (const href of ["/favicon.svg", "/favicon-32.png", "/apple-touch-icon.png", "https://aletheorecouncil.com/og.png"]) check(`the page links ${href}`, html.includes(`"${href}"`));
+check("Google's favicon rules: /favicon.ico exists and square PNGs come in multiples of 48 px", existsSync(new URL("./favicon.ico", import.meta.url))
+  && [["favicon-48.png", 48], ["icon-192.png", 192], ["icon-512.png", 512]].every(([f, px]) => { const b = readFileSync(new URL(`./${f}`, import.meta.url)); return b.readUInt32BE(16) === px && b.readUInt32BE(20) === px; }));
+check("the description is a real sentence for search results (70 to 160 characters)", (() => { const d = html.match(/name="description" content="([^"]*)"/)?.[1] ?? ""; return d.length >= 70 && d.length <= 160; })());
+check("structured data names the site and its publisher", (() => { try { const j = JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/s)[1]); return j["@graph"].some((n) => n["@type"] === "WebSite" && n.name === "Aletheore Council") && j["@graph"].some((n) => n["@type"] === "Organization" && n.name === "Aletheore"); } catch { return false; } })());
+check("the hollow diamond mark is the favicon and sits in the header of every page",
+  /stroke-width="6"/.test(readFileSync(new URL("./favicon.svg", import.meta.url), "utf8"))
+  && ["index", "privacy", "terms"].every((n) => /<svg class="mk"/.test(readFileSync(new URL(`./${n}.html`, import.meta.url), "utf8").split("</header>")[0])));
+for (const href of ["/favicon.svg", "/favicon.ico", "/favicon-48.png", "/icon-192.png", "/apple-touch-icon.png", "https://aletheorecouncil.com/og.png"]) check(`the page links ${href}`, html.includes(`"${href}"`));
 for (const prop of ["og:title", "og:description", "og:image", "og:url", "twitter:card"]) check(`has ${prop}`, new RegExp(`(property|name)="${prop}"`).test(html));
 check("the social title and description match the page's own", html.split('og:title" content="')[1]?.startsWith(html.match(/<title>(.*?)<\/title>/)[1]) && html.includes('name="description" content="Council is a shared room'));
 
@@ -61,7 +74,7 @@ check("the stage uses the small viewport height (Safari's toolbar)", /#stage\{he
 // the legal pages: real, linked, honest
 for (const name of ["privacy", "terms"]) {
   const page = existsSync(new URL(`./${name}.html`, import.meta.url)) ? readFileSync(new URL(`./${name}.html`, import.meta.url), "utf8") : "";
-  check(`${name}.html exists and is hidden from search engines until launch`, page.length > 2000 && /<meta name="robots" content="noindex, nofollow">/.test(page));
+  check(`${name}.html exists and is open to search engines`, page.length > 2000 && !/noindex/i.test(page));
   check(`${name}.html names the contact`, page.includes("support@aletheore.com"));
   check(`${name}.html has no mockup or placeholder wording, dashes or TODOs`, !/mock-?up|placeholder|lorem|\bTODO\b|[\u2013\u2014]/i.test(page));
   check(`the page links /${name}`, html.includes(`href="/${name}"`));
