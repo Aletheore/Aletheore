@@ -49,3 +49,11 @@ def test_route_reaches_the_command(tmp_path, name):
 @pytest.mark.parametrize("name", list(CONTROLS))
 def test_control_stays_quiet(tmp_path, name):
     assert _run(tmp_path, CONTROLS[name]) == [], name
+
+
+def test_rack_request_built_from_a_rewritten_env_is_not_raw_request_data(tmp_path):
+    src = ("class R\n  def call(env)\n    request = Rack::Request.new(env)\n"
+           "    fake = Rack::Request.new(env.merge('HTTP_HOST' => 'example.org'))\n"
+           "    [301, { 'Location' => fake.url }, []]\n  end\nend\n")
+    (tmp_path / "a.rb").write_text(src)
+    assert [f for f in discover_repo(tmp_path) if "redirect" in f["rule_id"]] == []

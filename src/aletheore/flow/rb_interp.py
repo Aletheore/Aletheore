@@ -751,7 +751,8 @@ class RbInterp:
 
     def _static_call(self, cname: str, name: str, args: list[Val], fr: RFrame, recv_text: str, block: Node | None) -> Val:
         if name == "new" and recv_text.lstrip(":") in ("Rack::Request", "ActionDispatch::Request", "Sinatra::Request", "Hanami::Action::Request"):
-            return Obj(kind="request", type_name="Request")  # Rack::Request.new(env).params
+            if args and isinstance(args[0], Obj) and args[0].kind == "request_env":
+                return Obj(kind="request", type_name="Request")  # built straight from the Rack env; env.merge(...) is a different request  # Rack::Request.new(env).params
         if recv_text.lstrip(":") in ("Zip::File", "Zip::InputStream", "Gem::Package::TarReader", "Archive::Tar::Minitar::Reader", "Minitar::Reader") \
                 and name in ("open", "new", "open_buffer"):
             arc = Obj(type_name="Archive")  # rubyzip / RubyGems tar: entry names are chosen by whoever made the archive
