@@ -57,3 +57,26 @@ def test_rack_request_built_from_a_rewritten_env_is_not_raw_request_data(tmp_pat
            "    [301, { 'Location' => fake.url }, []]\n  end\nend\n")
     (tmp_path / "a.rb").write_text(src)
     assert [f for f in discover_repo(tmp_path) if "redirect" in f["rule_id"]] == []
+
+
+def test_razor_page_bound_property_reaches_a_redirect(tmp_path):
+    page = ("using Microsoft.AspNetCore.Mvc;\nusing Microsoft.AspNetCore.Mvc.RazorPages;\npublic class LoginModel : PageModel {\n"
+            "  [BindProperty(SupportsGet = true)]\n  public string ReturnUrl { get; set; }\n  public IActionResult OnPost() {\n    return Redirect(ReturnUrl);\n  }\n}\n")
+    (tmp_path / "Login.cshtml.cs").write_text(page)
+    assert [f["line"] for f in discover_repo(tmp_path) if "redirect" in f["rule_id"]] == [7]
+    (tmp_path / "Login.cshtml.cs").write_text(page.replace("[BindProperty(SupportsGet = true)]", ""))
+    assert [f for f in discover_repo(tmp_path) if "redirect" in f["rule_id"]] == []
+    (tmp_path / "Login.cshtml.cs").write_text(page.replace("Redirect(ReturnUrl)", "LocalRedirect(ReturnUrl)"))
+    assert [f for f in discover_repo(tmp_path) if "redirect" in f["rule_id"]] == []
+
+
+def test_django_redirect_view_url_from_the_request(tmp_path):
+    v = ("from django.views.generic.base import RedirectView\nclass V(RedirectView):\n    def get_redirect_url(self, *args, **kwargs):\n"
+         "        self.url = self.request.GET.get('next', '/')\n        return super().get_redirect_url(*args, **kwargs)\n")
+    (tmp_path / "views.py").write_text(v)
+    assert [f["line"] for f in discover_repo(tmp_path) if "redirect" in f["rule_id"]] == [5]
+    (tmp_path / "views.py").write_text(v.replace("self.request.GET.get('next', '/')", "'/home'"))
+    assert [f for f in discover_repo(tmp_path) if "redirect" in f["rule_id"]] == []
+    guarded = v.replace("self.url = self.request.GET.get('next', '/')", "self.url = self.request.GET.get('next', '/')\n        if not url_has_allowed_host_and_scheme(self.url, None):\n            self.url = '/'")
+    (tmp_path / "views.py").write_text(guarded)
+    assert [f for f in discover_repo(tmp_path) if "redirect" in f["rule_id"]] == []

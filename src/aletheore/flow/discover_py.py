@@ -18,7 +18,7 @@ from aletheore.flow.py_index import PyFile, PyIndex
 from aletheore.flow.py_interp import BudgetExceeded, PFrame, PyInterp
 from aletheore.flow.py_sinks import CWE_NAMES_PY, DISCOVER_CWES_PY, ROUTE_MARKERS, SEVERITY_PY, sink_args
 from aletheore.flow import library as _lib
-from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -114,9 +114,9 @@ def _entries(pf: PyFile, index: PyIndex | None = None):
 
     for fn in pf.functions.values():
         yield None, fn, is_route(fn)
-    verbs = {"get", "post", "put", "patch", "delete", "head", "options", "prepare", "open", "on_message", "list", "create", "retrieve", "update", "destroy"}
+    verbs = {"get", "post", "put", "patch", "delete", "head", "options", "prepare", "open", "on_message", "list", "create", "retrieve", "update", "destroy", "get_redirect_url", "get_success_url", "form_valid", "dispatch"}
     for cls in pf.classes.values():
-        handler = PyInterp.handler_class(cls)
+        handler = PyInterp.handler_class(cls) or any(b.endswith(("RedirectView", "FormView", "View")) for b in cls.bases)
         for fn in cls.methods.values():
             nm = fn.child_by_field_name("name").text.decode("utf-8", "replace")
             yield cls, fn, is_route(fn) or (handler and (nm in verbs or nm.startswith("on_"))) or nm in _FALCON_VERBS
@@ -228,6 +228,8 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                             return
 
                 def store(node, base_text, key, value, fr, _cwe=cwe):
+                    if isinstance(key, Const) and isinstance(key.value, str) and key.value.startswith("."):
+                        return  # self.url = ...: judged where the view returns, after any check
                     if _cwe == 942:
                         if _X.acao_store(key, value, _tainted_string, node):
                             record(node, fr, "Access-Control-Allow-Origin set from the request")
@@ -240,6 +242,13 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                 def returned(node, value, fr, _cwe=cwe, _fastapi=fastapi):
                     if _fastapi and b"HTMLResponse" not in data and b"response_class" not in data:
                         return  # FastAPI serialises a returned value as JSON, not as an HTML page
+                    if _cwe == 601 and fr.route and fr.depth == 0 and fr.cls is not None and fr.self_obj is not None \
+                            and any(b.endswith(("RedirectView", "FormView", "CreateView", "UpdateView", "DeleteView")) for b in fr.cls.bases) \
+                            and b"allowed_host" not in fr.cls.node.text and b"is_safe_url" not in fr.cls.node.text and b"get_success_url" not in fr.cls.node.text.replace(b"def get_success_url", b""):
+                        for attr in ("url", "success_url", "redirect_url", "next_page"):
+                            if _tainted_string(fr.self_obj.fields.get(attr)):
+                                record(node, fr, f"{attr} set from the request; the view redirects to it")
+                                break
                     if _cwe == 79 and fr.route and fr.depth == 0 and _tainted_string(value):
                         record(node, fr, "value returned as the response body")
 

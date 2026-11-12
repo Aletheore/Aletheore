@@ -554,6 +554,8 @@ class PyInterp:
         elif t == "attribute":
             base = self.eval(target.child_by_field_name("object"), fr)
             attr = _t(target.child_by_field_name("attribute"))
+            if self.store_hook is not None and attr in ("url", "success_url", "redirect_url", "next_page") and _t(target.child_by_field_name("object")) == "self":
+                self.store_hook(target, "self", Const("." + attr), val, fr)  # Django RedirectView / FormView: the framework redirects to this attribute
             if isinstance(base, Obj):
                 old = base.fields.get(attr)
                 base.fields[attr] = join(old, val) if (fr.branch > 0 and old is not None) else val
@@ -882,7 +884,7 @@ class PyInterp:
     @staticmethod
     def handler_class(cls) -> bool:
         """A class that handles requests by being subclassed from a framework handler (Tornado, Falcon resources, ...)."""
-        return cls is not None and any(b.endswith(("RequestHandler", "Handler", "Resource", "WebSocketHandler")) for b in cls.bases)
+        return cls is not None and any(b.endswith(("RequestHandler", "Handler", "Resource", "WebSocketHandler", "View", "ViewSet", "APIView")) for b in cls.bases)
 
     _ORM_WRITES = frozenset(("create", "update", "update_or_create", "get_or_create", "bulk_create", "bulk_update", "insert", "insert_one", "insert_many", "update_one", "update_many", "replace_one", "upsert"))
     _ORM_READS = frozenset(("get", "first", "last", "all", "filter", "latest", "earliest", "values", "values_list", "find", "find_one", "one", "one_or_none", "scalar", "scalars", "fetchone", "fetchall", "fetchmany", "fetchval"))

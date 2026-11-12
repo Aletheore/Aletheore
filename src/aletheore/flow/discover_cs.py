@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from aletheore.flow.budget import Budget
 
 from pathlib import Path
@@ -65,7 +67,29 @@ def _tainted_string(v) -> bool:
 
 
 def _is_controller(cls: CsClass) -> bool:
-    return any(b in CONTROLLER_BASES or b.endswith("Controller") for b in cls.bases)
+    return any(b in CONTROLLER_BASES or b.endswith("Controller") or b.endswith("PageModel") for b in cls.bases)
+
+
+_PAGE_HANDLER = re.compile(r"^On(Get|Post|Put|Delete|Patch)")
+
+
+def _bound_properties(cls: CsClass) -> list[str]:
+    """Razor Pages: `[BindProperty] public string ReturnUrl { get; set; }` on a PageModel is filled from the request (`SupportsGet` also from the query)."""
+    if not any(b.endswith("PageModel") for b in cls.bases):
+        return []
+    out = []
+    stack = [cls.node]
+    while stack:
+        n = stack.pop()
+        if n.type == "property_declaration":
+            attrs = " ".join(_t(c) for c in n.children if c.type == "attribute_list")
+            nm = n.child_by_field_name("name")
+            if "BindProperty" in attrs and nm is not None:
+                out.append(_t(nm))
+            continue
+        if n.type != "class_declaration" or n is cls.node:
+            stack.extend(n.children)
+    return out
 
 
 def _entry_methods(cls: CsClass):
@@ -173,6 +197,9 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
                         interp = CsInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                         interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                         fr = CFrame(cf, cls, coverage.safe_this(interp, cls, cf), 0)
+                        if fr.this_obj is not None:
+                            for prop in _bound_properties(cls):
+                                fr.this_obj.fields[prop] = Tainted("route-param")  # model-bound page property
                         try:
                             route_now[0] = (not (action_cls and _is_public(m))) and library and cwe not in _lib.SKIP_CWES and not _lib.skipped_path(_rel_parts(path, repo)) and _is_public(m) and _is_public(cls.node)
                             interp.bind_entry(m, fr, "lib" if route_now[0] else (action_cls and _is_public(m)))
