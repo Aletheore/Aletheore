@@ -7,6 +7,8 @@ they capture, because Node code puts most of its logic in them.
 
 from __future__ import annotations
 
+import re
+
 from functools import lru_cache
 
 from aletheore.flow.budget import STEPS as _STEPS
@@ -131,6 +133,7 @@ class JsInterp:
         self.sink_hook = sink_hook  # hook(node, name, recv_text, args, recv, frame)
         self.store_hook = store_hook  # hook(node, base_text, key, value, frame)
         self.steps = 0
+        self.stored_reads = 0
         self.probes: dict[tuple, list] = {}
         self.probe_keys: set[tuple] = set()
         self.dead: list[tuple] = []
@@ -306,6 +309,8 @@ class JsInterp:
             if not base.dirty and not base.opaque:
                 return base.entries.get(prop, Const(None))
             return join_all(list(base.entries.values()) + [UNKNOWN])
+        if isinstance(base, Tainted) and base.why == "request.stored":
+            return base  # a field of a record that a request stored
         if classify(base) == "tainted":
             return Tainted("derived")
         if prop == "length" and isinstance(base, (ListV, Const)):
@@ -792,9 +797,42 @@ class JsInterp:
         return self._opaque(None, args)
 
     # ------------------------------------------------------------------ methods on values
+    _DB_WRITES = frozenset(("create", "insertOne", "insertMany", "updateOne", "updateMany", "replaceOne", "findOneAndUpdate", "findByIdAndUpdate", "findOneAndReplace",
+                            "bulkCreate", "upsert", "insert", "update", "save", "set", "add", "doc"))
+    _DB_READS = frozenset(("find", "findOne", "findById", "findAll", "findByPk", "findOrCreate", "findUnique", "findFirst", "findMany", "get", "first", "all", "toArray",
+                           "select", "lean", "exec", "populate"))
+    _SQL_WRITE = re.compile(r"^\s*(insert|update|replace|merge|upsert)\b", re.I)
+
+    def _storage(self, recv: Val, name: str, args: list[Val], recv_text: str) -> Val | None:
+        """Second-order flows: `User.create(req.body)` / `db.run('INSERT ...', [x])` store request data; `await User.findOne(...)` / `db.get(...)` read it
+        back. The store is coarse (per model name, or any) and shared with the second pass over the entry points."""
+        tainted_in = any(classify(a) == "tainted" for a in args)
+        head = recv_text.split(".")[0].split("(")[0]
+        if name in ("run", "query", "exec", "execute", "prepare") and args:
+            first = args[0]
+            if isinstance(first, Const) and isinstance(first.value, str) and self._SQL_WRITE.match(first.value) and any(classify(a) == "tainted" for a in args[1:]):
+                self.stash.add("db:*")
+            return None
+        if head[:1].isupper() or recv_text.startswith(("prisma.", "db.", "knex")):
+            model = head if head[:1].isupper() else (recv_text.split(".")[1].split("(")[0] if recv_text.startswith("prisma.") and "." in recv_text else "*")
+            if name in self._DB_WRITES and tainted_in:
+                self.stash.add("db:" + model)
+                self.stash.add("db:*")
+            elif name in self._DB_READS and ("db:" + model) in self.stash:
+                self.stored_reads += 1
+                return Tainted("request.stored")
+            return None
+        if name in ("get", "all", "each") and "db:*" in self.stash and recv_text.split(".")[0] in ("db", "conn", "connection", "database", "sqlite", "stmt"):
+            self.stored_reads += 1
+            return Tainted("request.stored")
+        return None
+
     def _method(self, recv: Val, name: str, args: list[Val], fr: JFrame, recv_text: str, node: Node) -> Val:
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, fr, recv_text, node) for a in recv.alts)
+        stored = self._storage(recv, name, args, recv_text)
+        if stored is not None:
+            return stored
         if name in _ELEMENT_CALLBACKS and args and isinstance(args[0], FnV) and not args[0].inline:
             # a named function handed to forEach / then: it receives what the receiver holds
             params = self._element_params(recv, name)
