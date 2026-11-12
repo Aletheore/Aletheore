@@ -83,6 +83,9 @@ def _can_source(fn) -> bool:
     return any(m in t for m in _SOURCE_MARKERS)
 
 
+_READ_WORDS = (b".objects", b"fetch", b"cursor", b"scalar", b".first(", b".one(", b".find")
+
+
 def _rel_parts(path: Path, repo: Path) -> tuple:
     try:
         return path.relative_to(repo).parts
@@ -143,7 +146,10 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
     core_budget = budget_seconds
     # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
     # bounded extra slice, so a large repository never loses a core finding to the time the added classes take.
-    for phase in (0, 1):
+    stash: set = set()  # what handlers stored in the database; a second pass reads it back
+    for stored_pass, phase in ((False, 0), (False, 1), (True, 0), (True, 1)):
+        if stored_pass and not stash:
+            continue
         budget_seconds = core_budget if phase == 0 else core_budget * 1.4
         for path in files:
             if budget.over(budget_seconds):
@@ -151,6 +157,8 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
             try:
                 data = path.read_bytes()
             except OSError:
+                continue
+            if stored_pass and not any(w in data for w in _READ_WORDS):
                 continue
             entry_file = any(w in data for w in _ENTRY_WORDS)
             cwes = [c for c in DISCOVER_CWES_PY if c in present and _X.local_ok(c, data, _SINK_WORDS, "python")] if entry_file else [c for c in DISCOVER_CWES_PY if any(w in data for w in _SINK_WORDS[c])]
@@ -169,13 +177,15 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                     rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
                     line = node.start_point[0] + 1
                     lib = route_now[0] == "lib"
+                    prefix = "Data that a request stored earlier (read back from the database) " if stored_pass else ""
                     found.setdefault((rel, line, _cwe), {
                         "tool": "aletheore-flow", "rule_id": f"flow.python.{_slug}", "severity": "minor" if lib else SEVERITY_PY[_cwe],
                         "type": "vulnerability", "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
                         "message": (f"A parameter of a public function reaches a {_label} sink without being validated or encoded for it ({what}). "
                                     "Whoever calls the function controls it. Found by following the value through the code." if lib else
-                                    f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                                    "Found by following the value through the code, including calls into other functions and modules."),
+                                    (f"{prefix}reaches a {_label} sink without being validated or encoded for it ({what}). " if prefix else
+                                     f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). ")
+                                    + "Found by following the value through the code, including calls into other functions and modules."),
                     })
 
                 def sink(node, name, recv_text, args, kw, recv, fr, _cwe=cwe):
@@ -242,7 +252,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                     if fnode is not None and route is False and not _can_source(cls.node if cls is not None else fnode):
                         continue  # a plain function whose own text has no source of request data: it only matters when a route calls it
                     route_now[0] = route if route == "lib" else None
-                    interp = PyInterp(index, {cwe}, **interp_args)
+                    interp = PyInterp(index, {cwe}, stash=stash, **interp_args)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                     self_obj = coverage.safe_this(interp, cls, pf) if cls is not None else None
                     fr = PFrame(pf, cls, self_obj, 0, route=route is True)

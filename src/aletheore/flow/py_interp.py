@@ -80,8 +80,9 @@ class PyInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
 
-    def __init__(self, index: PyIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None, return_hook=None):
+    def __init__(self, index: PyIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None, return_hook=None, stash: set | None = None):
         self.index = index
+        self.stash = stash if stash is not None else set()  # what handlers have stored in the database ("db:Model", "db:*"), shared across a scan
         self.cwes = cwes or set()
         self.sink_hook = sink_hook      # hook(node, name, recv_text, args, kw, recv, frame)
         self.store_hook = store_hook    # hook(node, base_text, key, value, frame)
@@ -320,6 +321,8 @@ class PyInterp:
                 if m is not None:
                     return FuncV(m[1], m[0].file, cls=m[0], self_obj=base, name=attr)
             return UNKNOWN
+        if isinstance(base, Tainted) and base.why == "request.stored":
+            return base  # a column of a row that a request stored: still the stored string
         if classify(base) == "tainted":
             return Tainted("through-attr")
         if obj_n is not None and obj_n.type == "identifier" and _t(obj_n) not in fr.env:
@@ -344,6 +347,8 @@ class PyInterp:
             if isinstance(idx, Const) and not base.dirty and not base.opaque and idx.value in base.entries:
                 return base.entries[idx.value]
             return join_all(list(base.entries.values()) + [UNKNOWN])
+        if isinstance(base, Tainted) and base.why == "request.stored":
+            return base  # row[0] of a stored row
         if classify(base) == "tainted":
             return Tainted("derived")
         if isinstance(base, Const) and isinstance(base.value, str):
@@ -742,6 +747,8 @@ class PyInterp:
         init = self._find_method(cls, "__init__")
         if init is not None:
             self._run_function(init[0].file, init[1], init[0], obj, args, kw, fr)
+        else:
+            obj.fields.update(kw)  # Model(name=x), a dataclass: keyword arguments are the fields
         return obj
 
     def make_this(self, cls: PyClass, pf: PyFile) -> Obj:
@@ -875,9 +882,49 @@ class PyInterp:
         """A class that handles requests by being subclassed from a framework handler (Tornado, Falcon resources, ...)."""
         return cls is not None and any(b.endswith(("RequestHandler", "Handler", "Resource", "WebSocketHandler")) for b in cls.bases)
 
+    _ORM_WRITES = frozenset(("create", "update", "update_or_create", "get_or_create", "bulk_create", "bulk_update", "insert", "insert_one", "insert_many", "update_one", "update_many", "replace_one", "upsert"))
+    _ORM_READS = frozenset(("get", "first", "last", "all", "filter", "latest", "earliest", "values", "values_list", "find", "find_one", "one", "one_or_none", "scalar", "scalars", "fetchone", "fetchall", "fetchmany", "fetchval"))
+    _SQL_WRITE = re.compile(r"^\s*(insert|update|replace|merge|upsert)\b", re.I)
+
+    def _storage(self, recv: Val, name: str, args: list[Val], kw: dict, recv_text: str) -> Val | None:
+        """Second-order flows: a handler stores request data (`User.objects.create(name=x)`, `obj.save()`, `cursor.execute("INSERT ...")`), a later one
+        reads it back (`User.objects.get(...)`, `cursor.fetchone()`), and that value is not request-clean. The store is coarse (per model, or any)."""
+        model = None
+        if ".objects" in recv_text:
+            model = recv_text.split(".objects")[0].split(".")[-1].split("(")[-1]
+        elif isinstance(recv, Obj) and recv.cls is not None and name == "save":
+            if any(classify(v) == "tainted" for v in recv.fields.values()):
+                self.stash.add("db:" + recv.cls.name)
+                self.stash.add("db:*")
+            return None
+        tainted_in = any(classify(v) == "tainted" for v in list(args) + list(kw.values()))
+        if model is not None:
+            if name in self._ORM_WRITES and tainted_in:
+                self.stash.add("db:" + model)
+                self.stash.add("db:*")
+            elif name in self._ORM_READS and ("db:" + model) in self.stash:
+                return Tainted("request.stored")
+            return None
+        last = recv_text.rsplit(".", 1)[-1].lower()
+        if name in ("execute", "executemany"):
+            first = args[0] if args else None
+            text = first.value if isinstance(first, Const) and isinstance(first.value, str) else None
+            writes = text is not None and bool(self._SQL_WRITE.match(text))
+            if writes and any(classify(v) == "tainted" for v in args[1:]):
+                self.stash.add("db:*")
+            return None
+        if name in ("fetchone", "fetchall", "fetchmany") and "db:*" in self.stash:
+            return Tainted("request.stored")
+        if name in ("fetchval", "scalar", "scalars", "one", "first") and "db:*" in self.stash and any(w in last for w in ("cursor", "cur", "result", "rows", "res")):
+            return Tainted("request.stored")
+        return None
+
     def _method(self, recv: Val, name: str, args: list[Val], kw: dict, fr: PFrame, recv_text: str) -> Val:
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, kw, fr, recv_text) for a in recv.alts)
+        stored = self._storage(recv, name, args, kw, recv_text)
+        if stored is not None:
+            return stored
         if recv_text == "self" and name in self._HANDLER_SOURCES and self.handler_class(fr.cls):
             return Tainted("request." + name)  # self.get_argument('d') in a Tornado handler
         if recv_text in ("st", "streamlit") and name in self._UI_INPUTS:
