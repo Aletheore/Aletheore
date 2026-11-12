@@ -24,9 +24,10 @@ type Props = {
   alt: string;
 };
 
-const INK = 0x16140f;
-const STAMP = 0xa33327;
-const FAINT = 0xc9c3b5;
+// Colours match the dark theme (--color-ink, --color-stamp in globals.css); faint is the dimmed state while a step is focused.
+const INK = 0xf1eee6;
+const STAMP = 0xffffff;
+const FAINT = 0x4a463c;
 
 export function GraphCanvas({ graph, activeIds = [], activeLabel, focus = false, edgeMode = "none", zoom = 0.5, orbit = 0, interactive = false, className, staticSrc, alt }: Props) {
   const host = useRef<HTMLDivElement>(null);
