@@ -50,7 +50,7 @@ for (const t of six) check(`lists the tool ${t}`, scene.includes(t));
 
 // icons and the social image: real files of the right size, linked from the page
 const png = (name) => { const b = readFileSync(new URL(`./${name}`, import.meta.url)); return b.subarray(0, 8).toString("hex") === "89504e470d0a1a0a" ? { w: b.readUInt32BE(16), h: b.readUInt32BE(20) } : null; };
-for (const [name, w, h] of [["og.png", 1200, 630], ["apple-touch-icon.png", 180, 180], ["favicon-32.png", 32, 32]]) {
+for (const [name, w, h] of [["og.png", 1200, 630], ["apple-touch-icon.png", 180, 180], ["favicon-48.png", 48, 48], ["icon-192.png", 192, 192], ["icon-512.png", 512, 512]]) {
   const d = existsSync(new URL(`./${name}`, import.meta.url)) ? png(name) : null;
   check(`${name} is a real ${w}x${h} PNG`, !!d && d.w === w && d.h === h, d ? `${d.w}x${d.h}` : "missing");
 }
