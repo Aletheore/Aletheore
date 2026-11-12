@@ -50,7 +50,11 @@ def test_keystore_file_is_private(tmp_path):
         acl = subprocess.run(["icacls", str(files[0])], capture_output=True, text=True).stdout
         user = os.environ["USERNAME"].lower()
         entries = [ln for ln in acl.splitlines() if "(" in ln and ":" in ln]
-        assert entries and all(user in ln.lower() for ln in entries), acl
+        # An elevated process (a CI runner, an administrator's shell) also leaves SYSTEM, Administrators and OWNER RIGHTS on a new file;
+        # they can reach it anyway. What must never appear is anyone else (Users, Everyone, Authenticated Users).
+        always_there = ("nt authority\\system", "builtin\\administrators", "owner rights")
+        assert entries and all(user in ln.lower() or any(p in ln.lower() for p in always_there) for ln in entries), acl
+        assert any(user in ln.lower() for ln in entries), acl
     else:
         assert stat.S_IMODE(files[0].stat().st_mode) == 0o600
         assert stat.S_IMODE((tmp_path / "keys").stat().st_mode) == 0o700
