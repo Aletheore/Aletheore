@@ -15,6 +15,7 @@ from pathlib import Path
 
 from aletheore.flow.java_index import JavaIndex, JavaFile
 from aletheore.flow import coverage
+from aletheore.flow import library as _lib
 from aletheore.flow import extra_sinks as _X
 from aletheore.flow.java_interp import BudgetExceeded, Frame, Interp
 from aletheore.flow.java_sinks import CWE_NAMES, DISCOVER_CWES, sink_args
@@ -61,6 +62,13 @@ def _string_taint(v) -> bool:
     return one(v) or (isinstance(v, Choice) and any(one(a) for a in v.alts)) or (classify(v) == "tainted" and not isinstance(v, (Tainted, Choice)))
 
 
+def _rel_parts(path: Path, repo: Path) -> tuple:
+    try:
+        return path.relative_to(repo).parts
+    except ValueError:
+        return path.resolve().relative_to(repo.resolve()).parts
+
+
 def _java_files(repo: Path) -> list[Path]:
     skip = set(IGNORED_DIRS) | _EXTRA_SKIP
     out: list[Path] = []
@@ -76,6 +84,21 @@ def _java_files(repo: Path) -> list[Path]:
 def has_java(repo: Path) -> bool:
     skip = set(IGNORED_DIRS) | _EXTRA_SKIP
     return any(not skip.intersection(p.relative_to(repo).parts) for p in repo.rglob("*.java"))
+
+
+def _public_java(cls, method) -> bool:
+    """A public method (or constructor) of a public top-level or nested type: something other code can call."""
+    def mods(n) -> str:
+        for c in n.children:
+            if c.type == "modifiers":
+                return c.text.decode("utf-8", "replace")
+        return ""
+    c = cls
+    while c is not None:
+        if "public" not in mods(c.node) and c.node.type != "interface_declaration":
+            return False
+        c = c.outer
+    return "public" in mods(method) or cls.node.type == "interface_declaration"
 
 
 def _methods(jf: JavaFile):
@@ -94,6 +117,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
     budget = Budget()
     found: dict[tuple, dict] = {}
     files = _java_files(repo)
+    library = _lib.is_library(repo.resolve(), "java")
     present = classes_present(files, _SINK_WORDS)
     core_budget = budget_seconds
     # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
@@ -118,6 +142,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
             jf = index.file(path)
             if jf is None:
                 continue
+            skip_lib = not library or _lib.skipped_path(_rel_parts(path, repo))
             for cwe in cwes:
                 for cls, method in _methods(jf):
                     if budget.over(budget_seconds):
@@ -125,8 +150,9 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                     body = method.child_by_field_name("body")
                     if body is None:
                         continue
+                    is_lib = not skip_lib and cwe not in _lib.SKIP_CWES and _public_java(cls, method)
 
-                    def hook(node, name, cname, recv_type, recv_text, args, fr, recv=None, _cwe=cwe):
+                    def hook(node, name, cname, recv_type, recv_text, args, fr, recv=None, _cwe=cwe, _is_lib=is_lib):
                         recv_tainted = recv is not None and _direct_taint(recv)
                         positions = sink_args(_cwe, name, cname, recv_type, recv_text, len(args), recv_tainted)
                         ext = False
@@ -172,13 +198,16 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                                     {
                                         "tool": "aletheore-flow",
                                         "rule_id": f"flow.java.{slug}",
-                                        "severity": _SEVERITY[_cwe],
+                                        "severity": "minor" if _is_lib else _SEVERITY[_cwe],
                                         "type": "vulnerability",
                                         "path": rel,
                                         "line": line,
-                                        "message": f"Request data reaches a {label} sink without being validated or encoded for it "
-                                                   f"({'the receiver' if i == -1 else f'argument {i + 1}'} of {name}). Found by following the value through the code, "
-                                                   "including calls into other methods and files.",
+                                        "message": (f"A parameter of a public method reaches a {label} sink without being validated or encoded for it "
+                                                    f"({'the receiver' if i == -1 else f'argument {i + 1}'} of {name}). Whoever calls the method controls it. "
+                                                    "Found by following the value through the code." if _is_lib else
+                                                    f"Request data reaches a {label} sink without being validated or encoded for it "
+                                                    f"({'the receiver' if i == -1 else f'argument {i + 1}'} of {name}). Found by following the value through the code, "
+                                                    "including calls into other methods and files."),
                                         "cwe": [f"CWE-{_cwe}"],
                                     },
                                 )
@@ -186,7 +215,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
 
                     interp = Interp(index, {cwe}, sink_hook=hook, annotated_sources=True)
                     fr = Frame(file=jf, cls=cls, this_obj=coverage.safe_this(interp, cls, jf), depth=0)
-                    interp.bind_entry_params(method, fr)
+                    interp.bind_entry_params(method, fr, is_lib)
                     try:
                         interp.exec(body, fr)
                     except Exception:  # a construct the engine mishandles must cost one entry point, never the scan

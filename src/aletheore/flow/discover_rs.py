@@ -9,6 +9,7 @@ from pathlib import Path
 from tree_sitter import Node
 
 from aletheore.flow import coverage
+from aletheore.flow import library as _lib
 from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.rs_index import RsIndex, RsType, attrs_before, type_name
@@ -55,7 +56,7 @@ def has_rs(repo: Path) -> bool:
 
 def _tainted_string(v) -> bool:
     def one(t) -> bool:
-        return isinstance(t, Tainted) and (t.why in ("derived", "param") or t.why.startswith("request"))
+        return isinstance(t, Tainted) and (t.why in ("derived", "param", "library parameter") or t.why.startswith("request"))
     return one(v) or (isinstance(v, Choice) and any(one(a) for a in v.alts))
 
 
@@ -71,12 +72,23 @@ def _is_action(fn: Node) -> bool:
     return False
 
 
+def _public_rs(fn) -> bool:
+    return any(c.type == "visibility_modifier" for c in fn.children)
+
+def _rel_parts(path: Path, repo: Path) -> tuple:
+    try:
+        return path.relative_to(repo).parts
+    except ValueError:
+        return path.resolve().relative_to(repo.resolve()).parts
+
+
 def discover_rs(repo: Path, index: RsIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
     index = index or RsIndex(repo)
     repo_r = repo.resolve()
     budget = Budget()
     found: dict[tuple, dict] = {}
     files = _rs_files(repo)
+    library = _lib.is_library(repo_r, "rust")
     present = classes_present(files, _SINK_WORDS)
     core_budget = budget_seconds
     # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
@@ -101,14 +113,19 @@ def discover_rs(repo: Path, index: RsIndex | None = None, budget_seconds: float 
             for cwe in cwes:
                 slug, label = CWE_NAMES_RS[cwe]
 
+                route_now = [False]  # running a public function of a library
+
                 def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
                     rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
                     line = node.start_point[0] + 1
+                    lib = route_now[0]
                     found.setdefault((rel, line, _cwe), {
-                        "tool": "aletheore-flow", "rule_id": f"flow.rs.{_slug}", "severity": SEVERITY_RS[_cwe], "type": "vulnerability",
+                        "tool": "aletheore-flow", "rule_id": f"flow.rs.{_slug}", "severity": "minor" if lib else SEVERITY_RS[_cwe], "type": "vulnerability",
                         "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                                   "Found by following the value through the code, including calls into other functions and types.",
+                        "message": (f"A parameter of a public function reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Whoever calls the function controls it. Found by following the value through the code." if lib else
+                                    f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Found by following the value through the code, including calls into other functions and types."),
                     })
 
                 def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
@@ -138,7 +155,8 @@ def discover_rs(repo: Path, index: RsIndex | None = None, budget_seconds: float 
                             interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                             fr = SFrame(rf, ty, Obj(cls=ty, type_name=ty.name) if ty.name != "<main>" else None, 0)
                             try:
-                                interp.bind_entry(fn, fr, _is_action(fn))
+                                route_now[0] = (not _is_action(fn)) and library and cwe not in _lib.SKIP_CWES and not _lib.skipped_path(_rel_parts(path, repo)) and _public_rs(fn)
+                                interp.bind_entry(fn, fr, "lib" if route_now[0] else _is_action(fn))
                                 interp.exec(fn.child_by_field_name("body"), fr)
                             except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                                 coverage.note(path)

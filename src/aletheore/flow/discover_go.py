@@ -14,6 +14,7 @@ from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.go_interp import BudgetExceeded, GFrame, GoInterp
 from aletheore.flow.go_sinks import CWE_NAMES_GO, DISCOVER_CWES_GO, SEVERITY_GO, sink_args
+from aletheore.flow import library as _lib
 from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
@@ -55,15 +56,24 @@ def has_go(repo: Path) -> bool:
 
 def _tainted_string(v) -> bool:
     def one(t) -> bool:
-        return isinstance(t, Tainted) and (t.why == "derived" or t.why.startswith("request"))
+        return isinstance(t, Tainted) and (t.why in ("derived", "library parameter") or t.why.startswith("request"))
     return one(v) or (isinstance(v, Choice) and any(one(a) for a in v.alts))
 
 
-def _functions(gf: GoFile):
-    for fn in gf.functions.values():
-        yield None, fn
-    for (rtype, _), m in gf.methods.items():
-        yield rtype, m
+def _rel_parts(path: Path, repo: Path) -> tuple:
+    try:
+        return path.relative_to(repo).parts
+    except ValueError:
+        return path.resolve().relative_to(repo.resolve()).parts
+
+
+def _functions(gf: GoFile, library: bool = False):
+    """(receiver type or None, function, is a public library entry). In a library, an exported function (or an exported
+    method of an exported type) is called with whatever the importing program passes."""
+    for name, fn in gf.functions.items():
+        yield None, fn, library and name[:1].isupper()
+    for (rtype, name), m in gf.methods.items():
+        yield rtype, m, library and name[:1].isupper() and (rtype or "").lstrip("*")[:1].isupper()
 
 
 def discover_go(repo: Path, index: GoIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
@@ -72,6 +82,7 @@ def discover_go(repo: Path, index: GoIndex | None = None, budget_seconds: float 
     budget = Budget()
     found: dict[tuple, dict] = {}
     files = _go_files(repo)
+    library = _lib.is_library(repo_r, "go")
     present = classes_present(files, _SINK_WORDS)
     core_budget = budget_seconds
     # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
@@ -96,14 +107,19 @@ def discover_go(repo: Path, index: GoIndex | None = None, budget_seconds: float 
             for cwe in cwes:
                 slug, label = CWE_NAMES_GO[cwe]
 
+                route_now = [False]  # running an exported function of a library
+
                 def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
                     rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
                     line = node.start_point[0] + 1
+                    lib = route_now[0]
                     found.setdefault((rel, line, _cwe), {
-                        "tool": "aletheore-flow", "rule_id": f"flow.go.{_slug}", "severity": SEVERITY_GO[_cwe], "type": "vulnerability",
+                        "tool": "aletheore-flow", "rule_id": f"flow.go.{_slug}", "severity": "minor" if lib else SEVERITY_GO[_cwe], "type": "vulnerability",
                         "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                                   "Found by following the value through the code, including calls into other functions and packages.",
+                        "message": (f"A parameter of an exported function reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Whoever calls the function controls it. Found by following the value through the code." if lib else
+                                    f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Found by following the value through the code, including calls into other functions and packages."),
                     })
 
                 def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
@@ -141,16 +157,18 @@ def discover_go(repo: Path, index: GoIndex | None = None, budget_seconds: float 
                         record(node, fr, "write to the session")
 
                 stash: set = set()
-                fns = list(_functions(gf))
-                for step, (rtype, fn) in enumerate(fns + fns):  # a second pass sees state stored by a handler run later
+                skip_lib = cwe in _lib.SKIP_CWES or _lib.skipped_path(_rel_parts(path, repo))
+                fns = list(_functions(gf, library and not skip_lib))
+                for step, (rtype, fn, is_lib) in enumerate(fns + fns):  # a second pass sees state stored by a handler run later
                     if budget.over(budget_seconds) or (step >= len(fns) and not stash):
                         break
                     interp = GoInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                     this = Obj(type_name=rtype) if rtype else None
                     fr = GFrame(gf, this, 0)
+                    route_now[0] = is_lib
                     try:
-                        interp.bind_entry(fn, fr)
+                        interp.bind_entry(fn, fr, is_lib)
                         interp.exec(fn.child_by_field_name("body"), fr)
                     except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                         coverage.note(path)

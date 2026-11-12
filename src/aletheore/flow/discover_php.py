@@ -17,6 +17,7 @@ from tree_sitter import Node
 
 from aletheore.flow.php_index import EXTS, PhpFile, PhpIndex
 from aletheore.flow import coverage
+from aletheore.flow import library as _lib
 from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.php_interp import BudgetExceeded, PFrame, PhpInterp
@@ -69,7 +70,7 @@ def _direct(v) -> bool:
 
 def tainted_string(v) -> bool:
     def one(t) -> bool:
-        return isinstance(t, Tainted) and (t.why in ("derived", "argv") or t.why.startswith("request"))
+        return isinstance(t, Tainted) and (t.why in ("derived", "argv", "library parameter") or t.why.startswith("request"))
     return one(v) or (isinstance(v, Choice) and any(one(a) for a in v.alts))
 
 
@@ -81,12 +82,26 @@ def _functions(pf: PhpFile):
             yield cls, m
 
 
+def _rel_parts(path: Path, repo: Path) -> tuple:
+    try:
+        return path.relative_to(repo).parts
+    except ValueError:
+        return path.resolve().relative_to(repo.resolve()).parts
+
+
+def _public_php(cls, fn) -> bool:
+    if cls is None:
+        return not (fn.child_by_field_name("name") is not None and fn.child_by_field_name("name").text.decode().startswith("_"))
+    return not any(c.type == "visibility_modifier" and c.text.decode() in ("private", "protected") for c in fn.children)
+
+
 def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
     index = index or PhpIndex(repo)
     repo_r = repo.resolve()
     budget = Budget()
     found: dict[tuple, dict] = {}
     files = _php_files(repo)
+    library = _lib.is_library(repo_r, "php")
     json_roots = _json_api_roots(files)
     present = classes_present(files, _SINK_WORDS)
     core_budget = budget_seconds
@@ -112,14 +127,19 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
             for cwe in cwes:
                 slug, label = CWE_NAMES_PHP[cwe]
 
+                route_now = [False]  # running a public function of a library
+
                 def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
                     rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
                     line = node.start_point[0] + 1
+                    lib = route_now[0]
                     found.setdefault((rel, line, _cwe), {
-                        "tool": "aletheore-flow", "rule_id": f"flow.php.{_slug}", "severity": SEVERITY_PHP[_cwe], "type": "vulnerability",
+                        "tool": "aletheore-flow", "rule_id": f"flow.php.{_slug}", "severity": "minor" if lib else SEVERITY_PHP[_cwe], "type": "vulnerability",
                         "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                                   "Found by following the value through the code, including calls into other functions and files.",
+                        "message": (f"A parameter of a public function reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Whoever calls the function controls it. Found by following the value through the code." if lib else
+                                    f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Found by following the value through the code, including calls into other functions and files."),
                     })
 
                 def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
@@ -172,9 +192,11 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                         record(node, fr, "write to the session")
 
                 runs = [(None, None)] + list(_functions(pf))
+                skip_lib = not library or cwe in _lib.SKIP_CWES or _lib.skipped_path(_rel_parts(path, repo))
                 for cls, fn in runs:
                     if budget.over(budget_seconds):
                         break
+                    route_now[0] = (not skip_lib) and fn is not None and _public_php(cls, fn)
                     interp = PhpInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                     this = coverage.safe_this(interp, cls, pf) if cls is not None else None
@@ -183,7 +205,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                         if fn is None:
                             interp.exec(pf.root, fr)
                         else:
-                            interp.bind_entry(fn, fr)
+                            interp.bind_entry(fn, fr, route_now[0])
                             interp.exec(fn.child_by_field_name("body"), fr)
                     except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                         coverage.note(path)

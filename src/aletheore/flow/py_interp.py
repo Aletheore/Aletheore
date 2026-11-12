@@ -845,9 +845,11 @@ class PyInterp:
                 fr.env[name] = fr.self_obj or UNKNOWN
             elif name == "request":
                 fr.env[name] = Obj(kind="request", type_name="Request")
-            elif route and t in ("default_parameter", "typed_default_parameter") and re.match(r"\s*(?:fastapi\.)?(Depends|Security)\(", _t(p.child_by_field_name("value"))):
+            elif route == "lib" and t != "list_splat_pattern":
+                fr.env[name] = Tainted("library parameter")  # a public function of a library: its caller chooses the arguments
+            elif route is True and t in ("default_parameter", "typed_default_parameter") and re.match(r"\s*(?:fastapi\.)?(Depends|Security)\(", _t(p.child_by_field_name("value"))):
                 fr.env[name] = UNKNOWN  # a FastAPI dependency (database session, current user), not request data
-            elif route and t != "list_splat_pattern":
+            elif route is True and t != "list_splat_pattern":
                 fr.env[name] = Tainted("route-param")
             else:
                 fr.env[name] = UNKNOWN

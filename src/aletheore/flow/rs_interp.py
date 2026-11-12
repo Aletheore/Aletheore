@@ -857,7 +857,8 @@ class RsInterp:
                 fr.env[var] = join(fr.env[var], inner.env[pnm]) if (fr.branch > 0 and var in fr.env) else inner.env[pnm]
         return join_all(inner.rets + [inner.last]) if inner.rets else inner.last
 
-    def bind_entry(self, fn: Node, fr: SFrame, action: bool) -> None:
+    def bind_entry(self, fn: Node, fr: SFrame, action) -> None:
+        lib, action = action == "lib", action is True
         pn = fn.child_by_field_name("parameters")
         for p in (pn.named_children if pn is not None else []):
             if p.type != "parameter":
@@ -871,6 +872,8 @@ class RsInterp:
                 v = SAFE if inner and inner <= SAFE_PARAM_TYPES else Tainted("param")
             elif tn in SAFE_PARAM_TYPES:
                 v = SAFE
+            elif lib and tn in ("String", "str", "Path", "PathBuf", "OsStr"):
+                v = Tainted("library parameter")  # a public function of a library: its caller chooses the arguments
             elif action and tn in ("String", "str"):
                 v = Tainted("param")
             else:

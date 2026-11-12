@@ -12,6 +12,7 @@ from aletheore.flow.kt_index import KtClass, KtIndex, annotations
 from aletheore.flow.kt_interp import BudgetExceeded, KFrame, KtInterp
 from aletheore.flow.kt_sinks import FILE_USE, CONTROLLER_ANNOTATIONS, CWE_NAMES_KT, DISCOVER_CWES_KT, MAPPING_ANNOTATIONS, SEVERITY_KT, sink_args
 from aletheore.flow import coverage
+from aletheore.flow import library as _lib
 from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, Obj, Tainted, classify
@@ -60,12 +61,27 @@ def has_kt(repo: Path) -> bool:
 
 def _tainted_string(v) -> bool:
     def one(t) -> bool:
-        return isinstance(t, Tainted) and (t.why in ("derived", "param") or t.why.startswith("request"))
+        return isinstance(t, Tainted) and (t.why in ("derived", "param", "library parameter") or t.why.startswith("request"))
     return one(v) or (isinstance(v, Choice) and any(one(a) for a in v.alts))
 
 
 def _is_action(cls: KtClass, fn: Node) -> bool:
     return bool(annotations(fn) & MAPPING_ANNOTATIONS) or bool(cls.annots & CONTROLLER_ANNOTATIONS)
+
+
+def _public_kt(cls, fn) -> bool:
+    """A function nothing hides: not private, internal or protected, in a class that is not hidden either."""
+    def hidden(n) -> bool:
+        m = next((c for c in n.children if c.type == "modifiers"), None)
+        t = m.text.decode("utf-8", "replace") if m is not None else ""
+        return any(w in t.split() for w in ("private", "internal", "protected"))
+    return not hidden(fn) and not hidden(cls.node)
+
+def _rel_parts(path: Path, repo: Path) -> tuple:
+    try:
+        return path.relative_to(repo).parts
+    except ValueError:
+        return path.resolve().relative_to(repo.resolve()).parts
 
 
 def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
@@ -74,6 +90,7 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
     budget = Budget()
     found: dict[tuple, dict] = {}
     files = _kt_files(repo)
+    library = _lib.is_library(repo_r, "kotlin")
     present = classes_present(files, _SINK_WORDS)
     core_budget = budget_seconds
     # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
@@ -98,14 +115,19 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
             for cwe in cwes:
                 slug, label = CWE_NAMES_KT[cwe]
 
+                route_now = [False]  # running a public function of a library
+
                 def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
                     rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
                     line = node.start_point[0] + 1
+                    lib = route_now[0]
                     found.setdefault((rel, line, _cwe), {
-                        "tool": "aletheore-flow", "rule_id": f"flow.kt.{_slug}", "severity": SEVERITY_KT[_cwe], "type": "vulnerability",
+                        "tool": "aletheore-flow", "rule_id": f"flow.kt.{_slug}", "severity": "minor" if lib else SEVERITY_KT[_cwe], "type": "vulnerability",
                         "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                                   "Found by following the value through the code, including calls into other functions and classes.",
+                        "message": (f"A parameter of a public function reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Whoever calls the function controls it. Found by following the value through the code." if lib else
+                                    f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Found by following the value through the code, including calls into other functions and classes."),
                     })
 
                 def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
@@ -161,7 +183,8 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                             interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                             fr = KFrame(kf, cls, coverage.safe_this(interp, cls, kf) if cls.name != "<main>" else None, 0)
                             try:
-                                interp.bind_entry(fn, fr, _is_action(cls, fn))
+                                route_now[0] = (not _is_action(cls, fn)) and library and cwe not in _lib.SKIP_CWES and not _lib.skipped_path(_rel_parts(path, repo)) and _public_kt(cls, fn)
+                                interp.bind_entry(fn, fr, "lib" if route_now[0] else _is_action(cls, fn))
                                 body = next((c for c in fn.children if c.type == "function_body"), None)
                                 inner = next((c for c in (body.named_children if body is not None else [])), None)
                                 if inner is not None and inner.type != "block":

@@ -889,7 +889,8 @@ class KtInterp:
             self._active.discard(key)
         return join_all(inner.rets + [inner.last]) if inner.rets else inner.last
 
-    def bind_entry(self, fn: Node, fr: KFrame, action: bool) -> None:
+    def bind_entry(self, fn: Node, fr: KFrame, action) -> None:
+        lib, action = action == "lib", action is True
         for p in _params(fn):
             nm, tn = _pname(p), _ptype(p)
             ann = annotations(p)
@@ -897,6 +898,8 @@ class KtInterp:
                 fr.env[nm] = Obj(kind="request", type_name=tn)
             elif ann & PARAM_ANNOTATIONS:
                 fr.env[nm] = SAFE if tn in SAFE_PARAM_TYPES else Tainted("param")
+            elif lib and tn in ("String", "CharSequence"):
+                fr.env[nm] = Tainted("library parameter")  # a public function of a library: its caller chooses the arguments
             elif action and tn in SAFE_PARAM_TYPES:
                 fr.env[nm] = SAFE
             elif action and tn in ("String", "CharSequence", "Map", "List", "MultipartFile", "") or (action and tn and tn[0].isupper() and tn not in ("HttpServletResponse", "Model", "BindingResult", "Principal", "HttpSession", "Authentication", "RedirectAttributes", "Pageable", "Locale", "ModelMap", "Logger")):

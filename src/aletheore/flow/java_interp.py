@@ -1098,7 +1098,7 @@ class Interp:
             inner.env[pname] = a
             inner.types[pname] = simple_type_name(p.child_by_field_name("type"))
 
-    def bind_entry_params(self, method: Node, fr: Frame) -> None:
+    def bind_entry_params(self, method: Node, fr: Frame, lib: bool = False) -> None:
         """Parameters of the method under analysis: request objects are sources, the rest unknown."""
         params = method.child_by_field_name("parameters")
         if params is None:
@@ -1115,6 +1115,8 @@ class Interp:
                 fr.env[pname] = Obj(kind="request", type_name=tname)
             elif self.annotated_sources and annotations & ANNOTATED_SOURCE_PARAMS:
                 fr.env[pname] = Tainted("annotated-param")
+            elif lib and tname in ("String", "CharSequence", "StringBuilder"):
+                fr.env[pname] = Tainted("library parameter")  # a public method of a library: its caller chooses the arguments
             else:
                 fr.env[pname] = Obj(type_name=tname) if tname[:1].isupper() and tname not in ("String", "Object") else UNKNOWN
 

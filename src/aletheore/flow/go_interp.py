@@ -376,7 +376,9 @@ class GoInterp:
                 out.append(self.eval(c.named_children[0] if c.type == "variadic_argument" and c.named_children else c, fr))
         return out
 
-    def _bind_params(self, fn: Node, args: list[Val], inner: GFrame, entry: bool = False) -> None:
+    _LIB_TYPES = frozenset(("string", "[]string", "[]byte", "...string", "...[]byte", "*string"))
+
+    def _bind_params(self, fn: Node, args: list[Val], inner: GFrame, entry: bool = False, lib: bool = False) -> None:
         params = fn.child_by_field_name("parameters")
         pos = list(args)
         for p in (params.named_children if params is not None else []):
@@ -386,7 +388,9 @@ class GoInterp:
             type_n = p.child_by_field_name("type")
             ttext = _t(type_n).replace(" ", "")
             for nm in names:
-                if entry or not pos:
+                if lib and ttext in self._LIB_TYPES:
+                    inner.env[_t(nm)] = Tainted("library parameter")  # an exported function of a library: its caller chooses the arguments
+                elif entry or not pos:
                     inner.env[_t(nm)] = self._typed_param(ttext, inner.file)
                 else:
                     inner.env[_t(nm)] = pos.pop(0)
@@ -661,9 +665,9 @@ class GoInterp:
                 if nm is not None:
                     inner.env[_t(nm)] = this_obj
 
-    def bind_entry(self, fn: Node, fr: GFrame) -> None:
+    def bind_entry(self, fn: Node, fr: GFrame, lib: bool = False) -> None:
         self._bind_receiver(fn, fr.this_obj, fr)
-        self._bind_params(fn, [], fr, entry=True)
+        self._bind_params(fn, [], fr, entry=True, lib=lib)
 
     # ------------------------------------------------------------------ statements
     def _bind(self, target: Node | None, val: Val, fr: GFrame) -> None:

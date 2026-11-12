@@ -1109,8 +1109,9 @@ class RbInterp:
             self._active.discard(key)
         return join_all(inner.rets + [inner.last]) if inner.rets else inner.last
 
-    def bind_entry(self, m: Node, fr: RFrame, action: bool = False) -> None:
+    def bind_entry(self, m: Node, fr: RFrame, action=False) -> None:
         """Entry point. Plain method parameters of an action are route segments only when named (Rails passes none)."""
+        lib, action = action == "lib", action is True
         p = _params(m) if m.type in ("method", "singleton_method") else None
         for c in (p.named_children if p is not None else []):
             nm = c if c.type == "identifier" else next((x for x in c.named_children if x.type == "identifier"), None) if c.type in ("optional_parameter", "keyword_parameter", "splat_parameter") else None
@@ -1118,7 +1119,7 @@ class RbInterp:
                 if _t(nm) == "env":  # a Rack app's `call(env)`: PATH_INFO, QUERY_STRING and the HTTP_* headers are the request
                     fr.env["env"] = Obj(kind="request_env", type_name="RequestEnv")
                     continue
-                fr.env[_t(nm)] = UNKNOWN if not action else Tainted("route-param")
+                fr.env[_t(nm)] = Tainted("library parameter") if lib else UNKNOWN if not action else Tainted("route-param")  # a library method: its caller chooses the arguments
 
     # ------------------------------------------------------------------ statements
     def exec(self, n: Node | None, fr: RFrame) -> bool:

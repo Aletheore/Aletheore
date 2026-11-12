@@ -9,6 +9,7 @@ from pathlib import Path
 from tree_sitter import Node
 
 from aletheore.flow import coverage
+from aletheore.flow import library as _lib
 from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.rb_index import RbClass, RbFile, RbIndex
@@ -59,7 +60,7 @@ def has_rb(repo: Path) -> bool:
 
 def _tainted_string(v) -> bool:
     def one(t) -> bool:
-        return isinstance(t, Tainted) and (t.why in ("derived", "route-param") or t.why.startswith(("params", "request", "cookies")))
+        return isinstance(t, Tainted) and (t.why in ("derived", "route-param", "library parameter") or t.why.startswith(("params", "request", "cookies")))
     return one(v) or (isinstance(v, Choice) and any(one(a) for a in v.alts))
 
 
@@ -85,12 +86,20 @@ def _exec_block(interp: RbInterp, blk: Node, fr: RFrame) -> None:
     interp.exec(body, fr)
 
 
+def _rel_parts(path: Path, repo: Path) -> tuple:
+    try:
+        return path.relative_to(repo).parts
+    except ValueError:
+        return path.resolve().relative_to(repo.resolve()).parts
+
+
 def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
     index = index or RbIndex(repo)
     repo_r = repo.resolve()
     budget = Budget()
     found: dict[tuple, dict] = {}
     files = _rb_files(repo)
+    library = _lib.is_library(repo_r, "ruby")
     present = classes_present(files, _SINK_WORDS)
     core_budget = budget_seconds
     # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
@@ -115,14 +124,19 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
             for cwe in cwes:
                 slug, label = CWE_NAMES_RB[cwe]
 
+                route_now = [False]  # running a public function of a library
+
                 def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
                     rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
                     line = node.start_point[0] + 1
+                    lib = route_now[0]
                     found.setdefault((rel, line, _cwe), {
-                        "tool": "aletheore-flow", "rule_id": f"flow.rb.{_slug}", "severity": SEVERITY_RB[_cwe], "type": "vulnerability",
+                        "tool": "aletheore-flow", "rule_id": f"flow.rb.{_slug}", "severity": "minor" if lib else SEVERITY_RB[_cwe], "type": "vulnerability",
                         "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                                   "Found by following the value through the code, including calls into other methods and classes.",
+                        "message": (f"A parameter of a public function reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Whoever calls the function controls it. Found by following the value through the code." if lib else
+                                    f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Found by following the value through the code, including calls into other methods and classes."),
                     })
 
                 def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
@@ -182,12 +196,14 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
                     for ms in cls.smethods.values():
                         for m in ms:
                             entries.append((m, False, True))
+                    skip_lib = not library or cwe in _lib.SKIP_CWES or _lib.skipped_path(_rel_parts(path, repo))
                     for m, is_action, singleton in entries:
+                        route_now[0] = (not is_action) and not skip_lib and (singleton or m.start_byte not in cls.private)
                         interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                         interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                         fr = RFrame(rf, cls, coverage.safe_this(interp, cls, rf) if not singleton else Obj(cls=cls, type_name=cls.name), 0, singleton=singleton)
                         try:
-                            interp.bind_entry(m, fr, is_action)
+                            interp.bind_entry(m, fr, "lib" if route_now[0] else is_action)
                             body = m.child_by_field_name("body")
                             if body is not None:
                                 if body.type in ("body_statement", "begin"):

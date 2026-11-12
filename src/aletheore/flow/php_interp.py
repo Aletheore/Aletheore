@@ -914,7 +914,7 @@ class PhpInterp:
                     inner.env[_vname(nm)] = MapV({i: v for i, v in enumerate(pos)}, dirty=True)
                 pos = []
 
-    def bind_entry(self, fn: Node, fr: PFrame) -> None:
+    def bind_entry(self, fn: Node, fr: PFrame, lib: bool = False) -> None:
         params = fn.child_by_field_name("parameters")
         for p in (params.named_children if params is not None else []):
             nm = next((c for c in p.named_children if c.type == "variable_name"), None)
@@ -922,6 +922,8 @@ class PhpInterp:
                 ptype = _t(next((c for c in p.named_children if c.type in ("named_type", "qualified_name", "union_type", "optional_type")), None)).lstrip("?")
                 if ptype.split("\\")[-1] in ("Request", "ServerRequestInterface", "FormRequest", "HttpRequest", "ServerRequest"):
                     fr.env[_vname(nm)] = Obj(kind="request", type_name="Request")
+                elif lib and ptype.lstrip("?").split("\\")[-1] in ("", "string", "mixed"):
+                    fr.env[_vname(nm)] = Tainted("library parameter")  # a public function of a library: its caller chooses the arguments
                 else:
                     fr.env[_vname(nm)] = UNKNOWN
 

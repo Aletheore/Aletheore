@@ -848,8 +848,9 @@ class CsInterp:
             if ids:
                 inner.env[_t(ids[-1])] = pos.pop(0) if pos else UNKNOWN
 
-    def bind_entry(self, m: Node, fr: CFrame, action: bool) -> None:
+    def bind_entry(self, m: Node, fr: CFrame, action) -> None:
         """Entry point. Parameters of a controller action are model-bound request data."""
+        lib, action = action == "lib", action is True
         params = m.child_by_field_name("parameters") or next((c for c in m.children if c.type == "parameter_list"), None)
         for p in (params.named_children if params is not None else []):
             ids = [c for c in p.named_children if c.type == "identifier"]
@@ -860,6 +861,8 @@ class CsInterp:
             tname = _t(ptype).rstrip("?")
             if tname in ("HttpRequest", "HttpRequestBase", "HttpRequestMessage") or name in ("request", "Request"):
                 fr.env[name] = Obj(kind="request", type_name="Request")
+            elif lib and tname in ("string", "String", "string[]"):
+                fr.env[name] = Tainted("library parameter")  # a public method of a library: its caller chooses the arguments
             elif action and tname in ("int", "long", "short", "byte", "bool", "double", "decimal", "float", "Guid", "DateTime", "CancellationToken", "uint", "ulong"):
                 fr.env[name] = SAFE
             elif action and tname not in ("HttpContext", "ILogger", "IConfiguration") and not tname.startswith("I"):

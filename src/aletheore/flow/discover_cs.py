@@ -12,6 +12,7 @@ from aletheore.flow.cs_index import CsClass, CsFile, CsIndex
 from aletheore.flow.cs_interp import BudgetExceeded, CFrame, CsInterp
 from aletheore.flow.cs_sinks import CONTROLLER_BASES, CWE_NAMES_CS, DISCOVER_CWES_CS, SEVERITY_CS, sink_args
 from aletheore.flow import coverage
+from aletheore.flow import library as _lib
 from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, Obj, Tainted, classify
@@ -59,7 +60,7 @@ def has_cs(repo: Path) -> bool:
 
 def _tainted_string(v) -> bool:
     def one(t) -> bool:
-        return isinstance(t, Tainted) and (t.why == "derived" or t.why.startswith("request") or t.why == "route-param")
+        return isinstance(t, Tainted) and (t.why in ("derived", "route-param", "library parameter") or t.why.startswith("request"))
     return one(v) or (isinstance(v, Choice) and any(one(a) for a in v.alts))
 
 
@@ -79,12 +80,22 @@ def _is_public(m: Node) -> bool:
     return any(c.type == "modifier" and _t(c) == "public" for c in m.children)
 
 
+
+
+def _rel_parts(path: Path, repo: Path) -> tuple:
+    try:
+        return path.relative_to(repo).parts
+    except ValueError:
+        return path.resolve().relative_to(repo.resolve()).parts
+
+
 def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
     index = index or CsIndex(repo)
     repo_r = repo.resolve()
     budget = Budget()
     found: dict[tuple, dict] = {}
     files = _cs_files(repo)
+    library = _lib.is_library(repo_r, "csharp")
     present = classes_present(files, _SINK_WORDS)
     core_budget = budget_seconds
     # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
@@ -109,14 +120,19 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
             for cwe in cwes:
                 slug, label = CWE_NAMES_CS[cwe]
 
+                route_now = [False]  # running a public function of a library
+
                 def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
                     rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
                     line = node.start_point[0] + 1
+                    lib = route_now[0]
                     found.setdefault((rel, line, _cwe), {
-                        "tool": "aletheore-flow", "rule_id": f"flow.cs.{_slug}", "severity": SEVERITY_CS[_cwe], "type": "vulnerability",
+                        "tool": "aletheore-flow", "rule_id": f"flow.cs.{_slug}", "severity": "minor" if lib else SEVERITY_CS[_cwe], "type": "vulnerability",
                         "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                                   "Found by following the value through the code, including calls into other methods and classes.",
+                        "message": (f"A parameter of a public function reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Whoever calls the function controls it. Found by following the value through the code." if lib else
+                                    f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Found by following the value through the code, including calls into other methods and classes."),
                     })
 
                 def sink(node, name, recv_text, args, recv, fr, _cwe=cwe):
@@ -158,7 +174,8 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
                         interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                         fr = CFrame(cf, cls, coverage.safe_this(interp, cls, cf), 0)
                         try:
-                            interp.bind_entry(m, fr, action_cls and _is_public(m))
+                            route_now[0] = (not (action_cls and _is_public(m))) and library and cwe not in _lib.SKIP_CWES and not _lib.skipped_path(_rel_parts(path, repo)) and _is_public(m) and _is_public(cls.node)
+                            interp.bind_entry(m, fr, "lib" if route_now[0] else (action_cls and _is_public(m)))
                             body = m.child_by_field_name("body") or next((c for c in m.children if c.type in ("block", "arrow_expression_clause")), None)
                             if body is not None and body.type == "arrow_expression_clause":
                                 interp.eval(body.named_children[-1] if body.named_children else None, fr)

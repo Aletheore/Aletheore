@@ -17,6 +17,7 @@ from aletheore.flow.prefilter import classes_present
 from aletheore.flow.py_index import PyFile, PyIndex
 from aletheore.flow.py_interp import BudgetExceeded, PFrame, PyInterp
 from aletheore.flow.py_sinks import CWE_NAMES_PY, DISCOVER_CWES_PY, ROUTE_MARKERS, SEVERITY_PY, sink_args
+from aletheore.flow import library as _lib
 from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
@@ -67,8 +68,22 @@ def _tainted_string(v) -> bool:
     concatenation or formatting. A value that merely passed through an unmodeled call (a framework
     response builder such as jsonify or render_template) is not."""
     def one(t) -> bool:
-        return isinstance(t, Tainted) and (t.why in ("derived", "route-param", "sys.argv", "input()") or t.why.startswith("request"))
+        return isinstance(t, Tainted) and (t.why in ("derived", "route-param", "sys.argv", "input()", "library parameter") or t.why.startswith("request"))
     return one(v) or (isinstance(v, Choice) and any(one(a) for a in v.alts))
+
+
+def _rel_parts(path: Path, repo: Path) -> tuple:
+    try:
+        return path.relative_to(repo).parts
+    except ValueError:
+        return path.resolve().relative_to(repo.resolve()).parts
+
+
+def _public_py(cls, fn) -> bool:
+    name = fn.child_by_field_name("name").text.decode("utf-8", "replace")
+    if cls is not None and (cls.name.startswith("_") or cls.name.startswith("Test")):
+        return False
+    return not name.startswith("_") or name == "__init__"
 
 
 def _entries(pf: PyFile, index: PyIndex | None = None):
@@ -106,6 +121,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
     budget = Budget()
     found: dict[tuple, dict] = {}
     files = _py_files(repo)
+    library = _lib.is_library(repo_r, "python")
     present = classes_present(files, _SINK_WORDS)
     core_budget = budget_seconds
     # Core classes first, with the whole budget; the added classes (template, regex, reflection, ...) after, in a
@@ -130,14 +146,19 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
             for cwe in cwes:
                 slug, label = CWE_NAMES_PY[cwe]
 
+                route_now = [None]  # the kind of entry point being run
+
                 def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
                     rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
                     line = node.start_point[0] + 1
+                    lib = route_now[0] == "lib"
                     found.setdefault((rel, line, _cwe), {
-                        "tool": "aletheore-flow", "rule_id": f"flow.python.{_slug}", "severity": SEVERITY_PY[_cwe],
+                        "tool": "aletheore-flow", "rule_id": f"flow.python.{_slug}", "severity": "minor" if lib else SEVERITY_PY[_cwe],
                         "type": "vulnerability", "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
-                        "message": f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
-                                   "Found by following the value through the code, including calls into other functions and modules.",
+                        "message": (f"A parameter of a public function reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Whoever calls the function controls it. Found by following the value through the code." if lib else
+                                    f"Request data reaches a {_label} sink without being validated or encoded for it ({what}). "
+                                    "Found by following the value through the code, including calls into other functions and modules."),
                     })
 
                 def sink(node, name, recv_text, args, kw, recv, fr, _cwe=cwe):
@@ -196,13 +217,16 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
 
                 interp_args = dict(sink_hook=sink, store_hook=store, return_hook=returned)
                 runs = [(None, None, False)] + [(c, f, r) for c, f, r in _entries(pf, index)]
+                if library and cwe not in _lib.SKIP_CWES and not _lib.skipped_path(_rel_parts(path, repo)):
+                    runs = [(c, f, "lib" if (r is False and f is not None and _public_py(c, f)) else r) for c, f, r in runs]
                 for cls, fnode, route in runs:
                     if budget.over(budget_seconds):
                         break
+                    route_now[0] = route if route == "lib" else None
                     interp = PyInterp(index, {cwe}, **interp_args)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                     self_obj = coverage.safe_this(interp, cls, pf) if cls is not None else None
-                    fr = PFrame(pf, cls, self_obj, 0, route=route)
+                    fr = PFrame(pf, cls, self_obj, 0, route=route is True)
                     try:
                         if fnode is None:
                             interp.exec(pf.root, fr)  # module-level code, once
