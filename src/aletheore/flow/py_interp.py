@@ -749,7 +749,8 @@ class PyInterp:
         if init is not None:
             self._run_function(init[0].file, init[1], init[0], obj, args, kw, fr)
         else:
-            obj.fields.update(kw)  # Model(name=x), a dataclass: keyword arguments are the fields
+            if kw:
+                obj.fields["__kwargs__"] = MapV(dict(kw))  # Model(name=x): kept for .save(); not readable as attributes (a serializer's .data is not its input)
         return obj
 
     def make_this(self, cls: PyClass, pf: PyFile) -> Obj:
@@ -894,7 +895,8 @@ class PyInterp:
         if ".objects" in recv_text:
             model = recv_text.split(".objects")[0].split(".")[-1].split("(")[-1]
         elif isinstance(recv, Obj) and recv.cls is not None and name == "save":
-            if any(classify(v) == "tainted" for v in recv.fields.values()):
+            held = recv.fields.get("__kwargs__")
+            if any(classify(v) == "tainted" for v in list(recv.fields.values()) + (list(held.entries.values()) if isinstance(held, MapV) else [])):
                 self.stash.add("db:" + recv.cls.name)
                 self.stash.add("db:*")
             return None

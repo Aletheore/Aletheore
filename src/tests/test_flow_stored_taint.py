@@ -83,3 +83,10 @@ def test_js_nothing_stored_or_constant_write_stays_quiet(tmp_path):
     const = "app.post('/w',async (req,res)=>{ await User.create({name:'x'}); });\n" + read
     (tmp_path / "c" / "a.js").write_text(JS_HEAD + const)
     assert discover_repo(tmp_path / "c") == []
+
+
+def test_serializer_data_is_not_its_raw_input(tmp_path):
+    src = ("from rest_framework.views import APIView\nfrom rest_framework.response import Response\nclass S:\n    def save(self):\n        pass\n"
+           "class V(APIView):\n    def post(self, request):\n        s = S(data=request.data)\n        s.save()\n        return Response(s.data)\n")
+    (tmp_path / "a.py").write_text(src)
+    assert [f for f in discover_repo(tmp_path) if f["rule_id"].endswith("xss")] == []
