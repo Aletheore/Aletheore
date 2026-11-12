@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import time
+from aletheore.flow.budget import Budget
+
 from pathlib import Path
 
 from tree_sitter import Node
@@ -70,7 +71,7 @@ def _is_action(cls: KtClass, fn: Node) -> bool:
 def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
     index = index or KtIndex(repo)
     repo_r = repo.resolve()
-    started = time.monotonic()
+    budget = Budget()
     found: dict[tuple, dict] = {}
     files = _kt_files(repo)
     present = classes_present(files, _SINK_WORDS)
@@ -80,7 +81,7 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
     for phase in (0, 1):
         budget_seconds = core_budget if phase == 0 else core_budget * 1.4
         for path in files:
-            if time.monotonic() - started > budget_seconds:
+            if budget.over(budget_seconds):
                 break
             try:
                 data = path.read_bytes()
@@ -152,7 +153,7 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                             coverage.note(path)
                             continue
                 for cls in kf.classes:
-                    if time.monotonic() - started > budget_seconds:
+                    if budget.over(budget_seconds):
                         break
                     for fns in cls.funcs.values():
                         for fn in fns:

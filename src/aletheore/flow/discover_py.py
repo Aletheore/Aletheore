@@ -7,7 +7,8 @@ class is run separately because sanitizers are class specific.
 
 from __future__ import annotations
 
-import time
+from aletheore.flow.budget import Budget
+
 from pathlib import Path
 
 from aletheore.flow import coverage
@@ -102,7 +103,7 @@ def _entries(pf: PyFile, index: PyIndex | None = None):
 def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
     index = index or PyIndex(repo)
     repo_r = repo.resolve()
-    started = time.monotonic()
+    budget = Budget()
     found: dict[tuple, dict] = {}
     files = _py_files(repo)
     present = classes_present(files, _SINK_WORDS)
@@ -112,7 +113,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
     for phase in (0, 1):
         budget_seconds = core_budget if phase == 0 else core_budget * 1.4
         for path in files:
-            if time.monotonic() - started > budget_seconds:
+            if budget.over(budget_seconds):
                 break
             try:
                 data = path.read_bytes()
@@ -196,7 +197,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                 interp_args = dict(sink_hook=sink, store_hook=store, return_hook=returned)
                 runs = [(None, None, False)] + [(c, f, r) for c, f, r in _entries(pf, index)]
                 for cls, fnode, route in runs:
-                    if time.monotonic() - started > budget_seconds:
+                    if budget.over(budget_seconds):
                         break
                     interp = PyInterp(index, {cwe}, **interp_args)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget

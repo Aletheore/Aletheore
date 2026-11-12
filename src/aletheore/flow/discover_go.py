@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import time
+from aletheore.flow.budget import Budget
+
 from pathlib import Path
 
 from tree_sitter import Node
@@ -68,7 +69,7 @@ def _functions(gf: GoFile):
 def discover_go(repo: Path, index: GoIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
     index = index or GoIndex(repo)
     repo_r = repo.resolve()
-    started = time.monotonic()
+    budget = Budget()
     found: dict[tuple, dict] = {}
     files = _go_files(repo)
     present = classes_present(files, _SINK_WORDS)
@@ -78,7 +79,7 @@ def discover_go(repo: Path, index: GoIndex | None = None, budget_seconds: float 
     for phase in (0, 1):
         budget_seconds = core_budget if phase == 0 else core_budget * 1.4
         for path in files:
-            if time.monotonic() - started > budget_seconds:
+            if budget.over(budget_seconds):
                 break
             try:
                 data = path.read_bytes()
@@ -142,7 +143,7 @@ def discover_go(repo: Path, index: GoIndex | None = None, budget_seconds: float 
                 stash: set = set()
                 fns = list(_functions(gf))
                 for step, (rtype, fn) in enumerate(fns + fns):  # a second pass sees state stored by a handler run later
-                    if time.monotonic() - started > budget_seconds or (step >= len(fns) and not stash):
+                    if budget.over(budget_seconds) or (step >= len(fns) and not stash):
                         break
                     interp = GoInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget

@@ -5,6 +5,8 @@ objects, `if`/`when`/`try` as expressions, lambdas with implicit `it`, collectio
 
 from __future__ import annotations
 
+from aletheore.flow.budget import STEPS as _STEPS
+
 import re
 from dataclasses import dataclass, field
 
@@ -97,6 +99,7 @@ class KtInterp:
     # ------------------------------------------------------------------ helpers
     def _tick(self) -> None:
         self.steps += 1
+        _STEPS[0] += 1
         if self.steps > self.MAX_STEPS:
             raise BudgetExceeded
 

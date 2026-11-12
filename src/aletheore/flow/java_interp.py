@@ -12,6 +12,8 @@ later reads are not trusted. A finding is only dropped on a proof.
 
 from __future__ import annotations
 
+from aletheore.flow.budget import STEPS as _STEPS
+
 from dataclasses import dataclass, field
 
 from tree_sitter import Node
@@ -190,6 +192,7 @@ class Interp:
     # ------------------------------------------------------------------ helpers
     def _tick(self) -> None:
         self.steps += 1
+        _STEPS[0] += 1
         if self.steps > self.MAX_STEPS:
             raise BudgetExceeded
 

@@ -7,7 +7,8 @@ setup code). Each weakness class is run separately because sanitizers are class 
 
 from __future__ import annotations
 
-import time
+from aletheore.flow.budget import Budget
+
 from pathlib import Path
 
 from aletheore.flow.js_index import FN_TYPES, JsFile, JsIndex
@@ -200,7 +201,7 @@ def _request_like_functions(jf: JsFile):
 def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
     index = index or JsIndex(repo)
     repo_r = repo.resolve()
-    started = time.monotonic()
+    budget = Budget()
     found: dict[tuple, dict] = {}
     files = _js_files(repo)
     present = classes_present(files, _SINK_WORDS)
@@ -210,7 +211,7 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
     for phase in (0, 1):
         budget_seconds = core_budget if phase == 0 else core_budget * 1.4
         for path in files:
-            if time.monotonic() - started > budget_seconds:
+            if budget.over(budget_seconds):
                 break
             try:
                 data = path.read_bytes()
@@ -332,7 +333,7 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
 
                 stash: set = set()
                 for step, (fn, route) in enumerate(entries + entries):  # a second pass sees request state written by a middleware that ran later
-                    if time.monotonic() - started > budget_seconds or (step >= len(entries) and not stash):
+                    if budget.over(budget_seconds) or (step >= len(entries) and not stash):
                         break
                     interp = JsInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget

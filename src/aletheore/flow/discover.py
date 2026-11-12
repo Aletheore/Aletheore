@@ -9,7 +9,8 @@ found and reported at the sink.
 
 from __future__ import annotations
 
-import time
+from aletheore.flow.budget import Budget
+
 from pathlib import Path
 
 from aletheore.flow.java_index import JavaIndex, JavaFile
@@ -90,7 +91,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
     index = index or JavaIndex(repo)
     from aletheore.flow.mybatis import mybatis_sinks, positions as mybatis_positions
     mapper_sql = mybatis_sinks(repo, index)  # MyBatis `${...}` placeholders: mapper methods that paste a parameter into SQL
-    started = time.monotonic()
+    budget = Budget()
     found: dict[tuple, dict] = {}
     files = _java_files(repo)
     present = classes_present(files, _SINK_WORDS)
@@ -100,7 +101,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
     for phase in (0, 1):
         budget_seconds = core_budget if phase == 0 else core_budget * 1.4
         for path in files:
-            if time.monotonic() - started > budget_seconds:
+            if budget.over(budget_seconds):
                 break
             try:
                 data = path.read_bytes()
@@ -119,7 +120,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                 continue
             for cwe in cwes:
                 for cls, method in _methods(jf):
-                    if time.monotonic() - started > budget_seconds:
+                    if budget.over(budget_seconds):
                         break
                     body = method.child_by_field_name("body")
                     if body is None:

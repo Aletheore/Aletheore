@@ -7,6 +7,8 @@ decides whether the value reaching the sink is provably safe.
 
 from __future__ import annotations
 
+from aletheore.flow.budget import Budget
+
 import re
 import time
 from pathlib import Path
@@ -82,7 +84,7 @@ def _functions(pf: PhpFile):
 def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
     index = index or PhpIndex(repo)
     repo_r = repo.resolve()
-    started = time.monotonic()
+    budget = Budget()
     found: dict[tuple, dict] = {}
     files = _php_files(repo)
     json_roots = _json_api_roots(files)
@@ -93,7 +95,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
     for phase in (0, 1):
         budget_seconds = core_budget if phase == 0 else core_budget * 1.4
         for path in files:
-            if time.monotonic() - started > budget_seconds:
+            if budget.over(budget_seconds):
                 break
             try:
                 data = path.read_bytes()
@@ -171,7 +173,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
 
                 runs = [(None, None)] + list(_functions(pf))
                 for cls, fn in runs:
-                    if time.monotonic() - started > budget_seconds:
+                    if budget.over(budget_seconds):
                         break
                     interp = PhpInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget

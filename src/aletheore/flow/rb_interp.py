@@ -5,6 +5,8 @@ heredocs, keyword-argument hashes, blocks, attr accessors, and `private` section
 
 from __future__ import annotations
 
+from aletheore.flow.budget import STEPS as _STEPS
+
 import re
 from dataclasses import dataclass, field
 
@@ -112,6 +114,7 @@ class RbInterp:
     # ------------------------------------------------------------------ helpers
     def _tick(self) -> None:
         self.steps += 1
+        _STEPS[0] += 1
         if self.steps > self.MAX_STEPS:
             raise BudgetExceeded
 

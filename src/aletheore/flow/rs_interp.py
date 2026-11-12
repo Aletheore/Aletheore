@@ -5,6 +5,8 @@ through, `impl` blocks, struct literals, `match` and `if let` patterns, closures
 
 from __future__ import annotations
 
+from aletheore.flow.budget import STEPS as _STEPS
+
 import re
 from dataclasses import dataclass, field
 
@@ -141,6 +143,7 @@ class RsInterp:
     # ------------------------------------------------------------------ helpers
     def _tick(self) -> None:
         self.steps += 1
+        _STEPS[0] += 1
         if self.steps > self.MAX_STEPS:
             raise BudgetExceeded
 

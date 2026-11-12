@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import time
+from aletheore.flow.budget import Budget
+
 from pathlib import Path
 
 from tree_sitter import Node
@@ -81,7 +82,7 @@ def _is_public(m: Node) -> bool:
 def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float = 150.0) -> list[dict]:
     index = index or CsIndex(repo)
     repo_r = repo.resolve()
-    started = time.monotonic()
+    budget = Budget()
     found: dict[tuple, dict] = {}
     files = _cs_files(repo)
     present = classes_present(files, _SINK_WORDS)
@@ -91,7 +92,7 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
     for phase in (0, 1):
         budget_seconds = core_budget if phase == 0 else core_budget * 1.4
         for path in files:
-            if time.monotonic() - started > budget_seconds:
+            if budget.over(budget_seconds):
                 break
             try:
                 data = path.read_bytes()
@@ -149,7 +150,7 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
                         record(node, fr, "write to the session")
 
                 for cls in cf.classes:
-                    if time.monotonic() - started > budget_seconds:
+                    if budget.over(budget_seconds):
                         break
                     action_cls = _is_controller(cls)
                     for m, _ in _entry_methods(cls):
