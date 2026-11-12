@@ -180,7 +180,7 @@ def test_an_unexpected_error_in_one_entry_point_does_not_lose_the_scan(tmp_path,
             raise ValueError("an unmodelled construct")
         return real(self, n, fr)
     monkeypatch.setattr(PyInterp, "exec", flaky)
-    (tmp_path / "a.py").write_text("from flask import request\nimport os\n\ndef bad():\n    boom = 1\n\ndef good():\n    os.system(request.args.get('c'))\n")
+    (tmp_path / "a.py").write_text("from flask import request\nimport os\n\ndef bad():\n    boom = request.args\n\ndef good():\n    os.system(request.args.get('c'))\n")
     result = check_flow(tmp_path)
     assert any("command-injection" in f["rule_id"] for f in result["findings"])
     assert result.get("incomplete_files") == ["a.py"]

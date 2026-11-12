@@ -45,7 +45,7 @@ def _t(n: Node | None) -> str:
 def _rb_files(repo: Path) -> list[Path]:
     skip = set(IGNORED_DIRS) | _EXTRA_SKIP
     out: list[Path] = []
-    for p in repo.rglob("*.rb"):
+    for p in list(repo.rglob("*.rb")) + list(repo.rglob("*.ru")):  # config.ru holds Rack apps
         if skip.intersection(p.relative_to(repo).parts):
             continue
         out.append(p)
@@ -71,7 +71,8 @@ def _is_controller(cls: RbClass) -> bool:
 def _sinatra_blocks(cls: RbClass):
     body = cls.node.child_by_field_name("body") if cls.name != "<main>" else cls.node
     for c in (body.named_children if body is not None else []):
-        if c.type == "call" and c.child_by_field_name("receiver") is None and _t(c.child_by_field_name("method")) in SINATRA_VERBS:
+        if c.type == "call" and c.child_by_field_name("receiver") is None and (_t(c.child_by_field_name("method")) in SINATRA_VERBS or (
+                _t(c.child_by_field_name("method")) == "route" and any(b.endswith("Roda") for b in cls.bases))):
             blk = c.child_by_field_name("block")
             if blk is not None:
                 yield blk
@@ -213,6 +214,17 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
                         except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                             coverage.note(path)
                             continue
+                    if cls.name == "<main>":
+                        for st in cls.node.named_children:  # config.ru / app.rb: `run ->(env) { ... }`
+                            if st.type == "call" and st.child_by_field_name("receiver") is None and _t(st.child_by_field_name("method")) in ("run", "map"):
+                                an = st.child_by_field_name("arguments")
+                                lam = an.named_children[0] if an is not None and an.named_children else None
+                                if lam is not None and lam.type == "lambda":
+                                    interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                                    try:
+                                        interp._run_rack_lambda(lam, RFrame(rf, cls, Obj(cls=cls, type_name=cls.name), 0))
+                                    except Exception:
+                                        coverage.note(path)
                     for blk in _sinatra_blocks(cls):
                         interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
                         interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget

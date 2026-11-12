@@ -394,6 +394,9 @@ class PhpInterp:
         obj_n, name_n = n.child_by_field_name("object"), n.child_by_field_name("name")
         base = self.eval(obj_n, fr)
         prop = _t(name_n)
+        if prop == "request" and _t(obj_n) == "$this" and fr.cls is not None and (fr.cls.parent or "").endswith("Controller") \
+                and not (isinstance(base, Obj) and prop in base.fields):
+            return Obj(kind="request", type_name="Request")  # CodeIgniter: $this->request in a controller
         if prop in ("query", "data", "cookies", "files", "params", "headers", "body") and "request" in _t(obj_n).lower() \
                 and not (isinstance(base, Obj) and prop in base.fields):
             # `$request->query`, `Flight::request()->query`, `$this->request()->data`: framework request collections
@@ -798,6 +801,8 @@ class PhpInterp:
         self._hook(n, name, scope_text, args, None, fr)
         if self._sanitizer(name):
             return SAFE
+        if scope_text.split("\\")[-1] in ("Route", "Router", "Flight", "Lumen") and name in _ROUTE_VERBS and args and isinstance(args[-1], ClosureV):
+            self._call_closure(args[-1], [Obj(kind="request", type_name="Request"), UNKNOWN, UNKNOWN], fr)  # Route::get('/', function (Request $r) {...})
         cls: PhpClass | None
         if scope_text in ("self", "static") and fr.cls is not None:
             cls = fr.cls

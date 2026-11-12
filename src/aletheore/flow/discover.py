@@ -86,6 +86,9 @@ def has_java(repo: Path) -> bool:
     return any(not skip.intersection(p.relative_to(repo).parts) for p in repo.rglob("*.java"))
 
 
+_STRUTS_BASES = frozenset(("ActionSupport", "ActionForm", "DispatchAction", "Action", "ValidatorForm", "ValidatorActionForm", "DynaActionForm"))
+
+
 def _public_java(cls, method) -> bool:
     """A public method (or constructor) of a public top-level or nested type: something other code can call."""
     def mods(n) -> str:
@@ -215,6 +218,10 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
 
                     interp = Interp(index, {cwe}, sink_hook=hook, annotated_sources=True)
                     fr = Frame(file=jf, cls=cls, this_obj=coverage.safe_this(interp, cls, jf), depth=0)
+                    if fr.this_obj is not None and (cls.superclass or "").split(".")[-1] in _STRUTS_BASES:
+                        for fname, ftype in cls.field_types.items():  # Struts fills the action's fields from request parameters through their setters
+                            if str(ftype) in ("String", "Object", "CharSequence"):
+                                fr.this_obj.fields[fname] = Tainted("request.struts")
                     interp.bind_entry_params(method, fr, is_lib)
                     try:
                         interp.exec(body, fr)

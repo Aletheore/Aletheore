@@ -625,6 +625,8 @@ class RbInterp:
                     return self._call_func(recv, self._args(args_n, fr), fr)
             return UNKNOWN
         if recv_n is None:
+            if name in ("run", "map") and args_n is not None and args_n.named_children and args_n.named_children[0].type == "lambda":
+                self._run_rack_lambda(args_n.named_children[0], fr)  # config.ru: run ->(env) { ... }
             args = self._args(args_n, fr)
             self._hook(n, name, "", args, None, fr)
             return self._call_unqualified(name, args, fr, n, block)
@@ -730,7 +732,26 @@ class RbInterp:
         except (TypeError, ValueError, KeyError):
             return SAFE
 
+    def _run_rack_lambda(self, lam: Node, fr: RFrame) -> None:
+        params = lam.child_by_field_name("parameters") or next((c for c in lam.named_children if c.type == "lambda_parameters"), None)
+        names = [_t(c) for c in (params.named_children if params is not None else []) if c.type == "identifier"]
+        body = lam.child_by_field_name("body") or next((c for c in lam.named_children if c.type in ("block", "do_block")), None)
+        if not names or body is None:
+            return
+        saved = fr.env.get(names[0])
+        fr.env[names[0]] = Obj(kind="request_env", type_name="RequestEnv")
+        try:
+            inner = next((c for c in body.named_children if c.type in ("block_body", "body_statement")), body)
+            self.exec(inner, fr)
+        finally:
+            if saved is None:
+                fr.env.pop(names[0], None)
+            else:
+                fr.env[names[0]] = saved
+
     def _static_call(self, cname: str, name: str, args: list[Val], fr: RFrame, recv_text: str, block: Node | None) -> Val:
+        if name == "new" and recv_text.lstrip(":") in ("Rack::Request", "ActionDispatch::Request", "Sinatra::Request", "Hanami::Action::Request"):
+            return Obj(kind="request", type_name="Request")  # Rack::Request.new(env).params
         if recv_text.lstrip(":") in ("Zip::File", "Zip::InputStream", "Gem::Package::TarReader", "Archive::Tar::Minitar::Reader", "Minitar::Reader") \
                 and name in ("open", "new", "open_buffer"):
             arc = Obj(type_name="Archive")  # rubyzip / RubyGems tar: entry names are chosen by whoever made the archive

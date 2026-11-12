@@ -72,6 +72,17 @@ def _tainted_string(v) -> bool:
     return one(v) or (isinstance(v, Choice) and any(one(a) for a in v.alts))
 
 
+_SOURCE_MARKERS = (b"request", b"req", b"argv", b"input", b"environ", b"namelist", b"getnames", b"infolist", b"getmember", b"getinfo", b"next(",
+                   b"get_argument", b"get_param", b"text_area", b"chat_input", b"file_uploader", b"data_editor", b"stdin", b"flask")
+
+
+def _can_source(fn) -> bool:
+    """Could running this function by itself bring request data in? For a method the whole class is read: a constructor or another method may have stored a request value in a field. Only a reference to a request, an archive entry or the like can; a plain
+    helper is analysed in the context of whatever route calls it."""
+    t = fn.text.lower()
+    return any(m in t for m in _SOURCE_MARKERS)
+
+
 def _rel_parts(path: Path, repo: Path) -> tuple:
     try:
         return path.relative_to(repo).parts
@@ -228,6 +239,8 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                 for cls, fnode, route in runs:
                     if budget.over(budget_seconds):
                         break
+                    if fnode is not None and route is False and not _can_source(cls.node if cls is not None else fnode):
+                        continue  # a plain function whose own text has no source of request data: it only matters when a route calls it
                     route_now[0] = route if route == "lib" else None
                     interp = PyInterp(index, {cwe}, **interp_args)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget

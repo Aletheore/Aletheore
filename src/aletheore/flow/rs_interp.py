@@ -542,6 +542,7 @@ class RsInterp:
             turbofish = tf
         else:
             turbofish = ""
+        self._route_closures(n, fn, fr)
         if fn.type == "identifier":
             name = _t(fn)
             args = self._args(n, fr)
@@ -575,6 +576,53 @@ class RsInterp:
         if self._callable_part(target):
             return self._call_value(target, args, fr)
         return self._opaque(None, args)
+
+    _ROUTE_FNS = frozenset(("get", "post", "put", "delete", "patch", "head", "options", "any", "to", "route", "service", "handler"))
+
+    def _route_closures(self, call: Node, fn: Node, fr: SFrame) -> None:
+        """`get(|Query(q): Query<Q>| async move {...})` (axum), `web::get().to(|q: web::Query<Q>| ...)` (actix), warp's
+        `warp::path::param().map(|d: String| ...)`: a closure given to a router is a request handler, so its extractor parameters are request data."""
+        if fn.type == "identifier":
+            name, recv = _t(fn), ""
+        elif fn.type == "scoped_identifier":
+            name, recv = _t(fn.child_by_field_name("name")), _t(fn.child_by_field_name("path"))
+        elif fn.type == "field_expression":
+            name, recv = _t(fn.child_by_field_name("field")), _t(fn.child_by_field_name("value"))
+        else:
+            return
+        warp = "warp" in recv and name in ("map", "and_then", "then", "and")
+        if name not in self._ROUTE_FNS and not warp:
+            return
+        an = call.child_by_field_name("arguments")
+        for a in (an.named_children if an is not None else []):
+            if a.type != "closure_expression":
+                continue
+            pn = a.child_by_field_name("parameters")
+            vals: list[Val] = []
+            for c in (pn.named_children if pn is not None else []):
+                ptype = c.child_by_field_name("type") if c.type == "parameter" else None
+                tn = type_name(ptype) if ptype is not None else ""
+                names = _pattern_names(c.child_by_field_name("pattern") if c.type == "parameter" else c)
+                if tn in REQUEST_TYPES:
+                    v: Val = Obj(kind="request", type_name=tn)
+                elif tn in EXTRACTORS:
+                    inner = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", _t(ptype).split("<", 1)[1])) if "<" in _t(ptype) else set()
+                    v = SAFE if inner and inner <= SAFE_PARAM_TYPES else Tainted("param")
+                elif tn in SAFE_PARAM_TYPES:
+                    v = SAFE
+                elif tn in ("String", "str", "Vec"):
+                    v = Tainted("param")
+                else:
+                    v = UNKNOWN
+                vals.extend([v] * max(1, len(names)))
+            key = (id(fr.file), a.start_byte, "route-closure")
+            if key in self._active or fr.depth + 1 > self.MAX_DEPTH:
+                continue
+            self._active.add(key)
+            try:
+                self._run_closure(a, vals, fr)
+            finally:
+                self._active.discard(key)
 
     def _args_with_closures(self, call: Node, fr: SFrame) -> list[Val]:
         return self._args(call, fr)
