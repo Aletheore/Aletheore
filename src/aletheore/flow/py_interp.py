@@ -88,6 +88,7 @@ class PyInterp:
         self.store_hook = store_hook    # hook(node, base_text, key, value, frame)
         self.return_hook = return_hook  # hook(node, value, frame)
         self.steps = 0
+        self.stored_reads = 0  # reads of data that a request stored (second-order flows)
         self._cur_env: dict = {}
         self.probes: dict[tuple, list] = {}
         self.probe_keys: set[tuple] = set()
@@ -903,6 +904,7 @@ class PyInterp:
                 self.stash.add("db:" + model)
                 self.stash.add("db:*")
             elif name in self._ORM_READS and ("db:" + model) in self.stash:
+                self.stored_reads += 1
                 return Tainted("request.stored")
             return None
         last = recv_text.rsplit(".", 1)[-1].lower()
@@ -914,6 +916,7 @@ class PyInterp:
                 self.stash.add("db:*")
             return None
         if name in ("fetchone", "fetchall", "fetchmany") and "db:*" in self.stash:
+            self.stored_reads += 1
             return Tainted("request.stored")
         if name in ("fetchval", "scalar", "scalars", "one", "first") and "db:*" in self.stash and any(w in last for w in ("cursor", "cur", "result", "rows", "res")):
             return Tainted("request.stored")

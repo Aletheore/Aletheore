@@ -172,12 +172,13 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                 slug, label = CWE_NAMES_PY[cwe]
 
                 route_now = [None]  # the kind of entry point being run
+                cur_interp = [None]
 
                 def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
                     rel = str(fr.file.path.relative_to(repo_r)) if fr.file.path.is_relative_to(repo_r) else str(fr.file.path)
                     line = node.start_point[0] + 1
                     lib = route_now[0] == "lib"
-                    prefix = "Data that a request stored earlier (read back from the database) " if stored_pass else ""
+                    prefix = "Data that a request stored earlier (read back from the database) " if (stored_pass or (cur_interp[0] is not None and cur_interp[0].stored_reads)) else ""
                     found.setdefault((rel, line, _cwe), {
                         "tool": "aletheore-flow", "rule_id": f"flow.python.{_slug}", "severity": "minor" if lib else SEVERITY_PY[_cwe],
                         "type": "vulnerability", "path": rel, "line": line, "cwe": [f"CWE-{_cwe}"],
@@ -253,6 +254,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                         continue  # a plain function whose own text has no source of request data: it only matters when a route calls it
                     route_now[0] = route if route == "lib" else None
                     interp = PyInterp(index, {cwe}, stash=stash, **interp_args)
+                    cur_interp[0] = interp
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                     self_obj = coverage.safe_this(interp, cls, pf) if cls is not None else None
                     fr = PFrame(pf, cls, self_obj, 0, route=route is True)
