@@ -172,6 +172,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                 slug, label = CWE_NAMES_PY[cwe]
 
                 route_now = [None]  # the kind of entry point being run
+                url_stores: dict = {}  # (view, attribute) -> where the request value was assigned
                 cur_interp = [None]
 
                 def record(node, fr, what, _cwe=cwe, _slug=slug, _label=label):
@@ -236,7 +237,9 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
 
                 def store(node, base_text, key, value, fr, _cwe=cwe):
                     if isinstance(key, Const) and isinstance(key.value, str) and key.value.startswith("."):
-                        return  # self.url = ...: judged where the view returns, after any check
+                        if _tainted_string(value) and fr.self_obj is not None:
+                            url_stores[(id(fr.self_obj), key.value[1:])] = node  # judged where the view returns, reported where it was set
+                        return
                     if _cwe == 942:
                         if _X.acao_store(key, value, _tainted_string, node):
                             record(node, fr, "Access-Control-Allow-Origin set from the request")
@@ -254,7 +257,7 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                             and b"allowed_host" not in fr.cls.node.text and b"is_safe_url" not in fr.cls.node.text and b"get_success_url" not in fr.cls.node.text.replace(b"def get_success_url", b""):
                         for attr in ("url", "success_url", "redirect_url", "next_page"):
                             if _tainted_string(fr.self_obj.fields.get(attr)):
-                                record(node, fr, f"{attr} set from the request; the view redirects to it")
+                                record(url_stores.get((id(fr.self_obj), attr), node), fr, f"{attr} set from the request; the view redirects to it")
                                 break
                     if _cwe == 79 and fr.route and fr.depth == 0 and _tainted_string(value):
                         record(node, fr, "value returned as the response body")

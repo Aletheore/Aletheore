@@ -74,7 +74,7 @@ def test_django_redirect_view_url_from_the_request(tmp_path):
     v = ("from django.views.generic.base import RedirectView\nclass V(RedirectView):\n    def get_redirect_url(self, *args, **kwargs):\n"
          "        self.url = self.request.GET.get('next', '/')\n        return super().get_redirect_url(*args, **kwargs)\n")
     (tmp_path / "views.py").write_text(v)
-    assert [f["line"] for f in discover_repo(tmp_path) if "redirect" in f["rule_id"]] == [5]
+    assert [f["line"] for f in discover_repo(tmp_path) if "redirect" in f["rule_id"]] == [4]
     (tmp_path / "views.py").write_text(v.replace("self.request.GET.get('next', '/')", "'/home'"))
     assert [f for f in discover_repo(tmp_path) if "redirect" in f["rule_id"]] == []
     guarded = v.replace("self.url = self.request.GET.get('next', '/')", "self.url = self.request.GET.get('next', '/')\n        if not url_has_allowed_host_and_scheme(self.url, None):\n            self.url = '/'")
