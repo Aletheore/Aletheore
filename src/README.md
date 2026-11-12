@@ -673,6 +673,27 @@ The setup screen prints the active network plan.
   CLI smoke test that sets Shield up, runs its four hook entries without a shell and turns it off;
   hooks have not been exercised against a real Claude Code session on Windows.
 
+### `aletheore council`
+
+A sealed room where people and their coding agents work together. It runs on the host's own machine, and in a sealed room the
+messages, plans and files are encrypted end to end. Council is an optional extra: `pip install 'aletheore[council]'`. Without it,
+`aletheore council` explains how to install it.
+
+```text
+aletheore council            # the commands, and the same list through the menu
+aletheore council setup      # this device's identity and four safety words
+aletheore council start --repo DIR --host NAME
+aletheore council invite-link --room ROOM --me NAME
+aletheore council approve-join REQUEST_ID --room ROOM --me NAME
+```
+
+The home menu has a **Council** entry next to Hallbook. It walks through the steps in order (set up this device, start a room, invite
+someone, see who is waiting, let someone in, join with a link, open a room), asks only for what each step needs, and remembers your
+name and the room between steps. **Let your agent set rooms up** shows how to add the `council-control` MCP tools, which can start a
+room, make an invitation and define an area but cannot approve anyone. **All Council commands** lists every command, and the same
+commands are in **All commands → Agents and skills → council**. The `council` command alone does the same job as
+`aletheore council`. Council has not had an independent security review yet; see `council/docs/security-model.md`.
+
 ### `aletheore query <kind> [target]`
 
 Answers one targeted question from an existing `air.json`, without re-scanning or an LLM

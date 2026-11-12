@@ -115,7 +115,9 @@ def test_nested_menu_commands_accept_required_arguments_and_protocols_show_help(
         assert ran == [[*path, "--help"]]
     else:
         required = [p for p in command.params if p.required or (isinstance(p, TyperArgument) and p.default is None)]
-        assert ran == [[*path, *("value with spaces" for _ in required)]]
+        options = [f"{p.opts[0]}=value with spaces" for p in required if not isinstance(p, TyperArgument)]
+        arguments = ["value with spaces" for p in required if isinstance(p, TyperArgument)]
+        assert ran == [[*path, *options, *arguments]]
 
 
 @pytest.mark.parametrize("route", [["tokens"], ["hallbook"], ["skill-hub"], ["hook"], ["config"]])
