@@ -55,10 +55,14 @@ for (const [name, w, h] of [["og.png", 1200, 630], ["apple-touch-icon.png", 180,
   check(`${name} is a real ${w}x${h} PNG`, !!d && d.w === w && d.h === h, d ? `${d.w}x${d.h}` : "missing");
 }
 check("favicon.svg exists", existsSync(new URL("./favicon.svg", import.meta.url)));
+check("Google's favicon rules: /favicon.ico exists and square PNGs come in multiples of 48 px", existsSync(new URL("./favicon.ico", import.meta.url))
+  && [["favicon-48.png", 48], ["icon-192.png", 192], ["icon-512.png", 512]].every(([f, px]) => { const b = readFileSync(new URL(`./${f}`, import.meta.url)); return b.readUInt32BE(16) === px && b.readUInt32BE(20) === px; }));
+check("the description is a real sentence for search results (70 to 160 characters)", (() => { const d = html.match(/name="description" content="([^"]*)"/)?.[1] ?? ""; return d.length >= 70 && d.length <= 160; })());
+check("structured data names the site and its publisher", (() => { try { const j = JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/s)[1]); return j["@graph"].some((n) => n["@type"] === "WebSite" && n.name === "Aletheore Council") && j["@graph"].some((n) => n["@type"] === "Organization" && n.name === "Aletheore"); } catch { return false; } })());
 check("the hollow diamond mark is the favicon and sits in the header of every page",
   /stroke-width="6"/.test(readFileSync(new URL("./favicon.svg", import.meta.url), "utf8"))
   && ["index", "privacy", "terms"].every((n) => /<svg class="mk"/.test(readFileSync(new URL(`./${n}.html`, import.meta.url), "utf8").split("</header>")[0])));
-for (const href of ["/favicon.svg", "/favicon-32.png", "/apple-touch-icon.png", "https://aletheorecouncil.com/og.png"]) check(`the page links ${href}`, html.includes(`"${href}"`));
+for (const href of ["/favicon.svg", "/favicon.ico", "/favicon-48.png", "/icon-192.png", "/apple-touch-icon.png", "https://aletheorecouncil.com/og.png"]) check(`the page links ${href}`, html.includes(`"${href}"`));
 for (const prop of ["og:title", "og:description", "og:image", "og:url", "twitter:card"]) check(`has ${prop}`, new RegExp(`(property|name)="${prop}"`).test(html));
 check("the social title and description match the page's own", html.split('og:title" content="')[1]?.startsWith(html.match(/<title>(.*?)<\/title>/)[1]) && html.includes('name="description" content="Council is a shared room'));
 
