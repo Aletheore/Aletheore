@@ -975,34 +975,42 @@ def test_concurrent_state_updates_never_lose_a_key(tmp_path, monkeypatch):
     assert sorted(p.name for p in path.parent.iterdir()) == [".hook-state.lock", path.name]
 
 
-def test_a_queue_of_writers_keeps_every_key_within_the_default_lock_wait(tmp_path, monkeypatch):
-    """Twelve hooks queued behind one lock, each write taking 30 ms, need about 0.4 s: more than the 0.25 s a bare lock
-    allows (hooks used to drop their state write after that), less than the state lock's own wait."""
+def test_a_writer_waits_longer_than_a_bare_lock_for_a_busy_state_lock(tmp_path):
+    """Another hook holds the state lock for 0.5 s (a bare lock gives up after 0.25 s); this write waits and lands. The
+    hold is a fixed time, not a race, so a slow machine only adds margin."""
+    from aletheore.shield import locking
+
     repo = _init(tmp_path / "r")
     path = _state_file(repo)
     path.parent.mkdir()
-    real = hooks._load_state
+    held, release = threading.Event(), threading.Event()
 
-    def slow(target):
-        data = real(target)
-        time.sleep(0.03)
-        return data
+    def holder():
+        with locking.file_lock(path.parent / ".hook-state.lock") as got:
+            assert got
+            held.set()
+            release.wait(30)
 
-    monkeypatch.setattr(hooks, "_load_state", slow)  # the default wait stays in force
-    barrier = threading.Barrier(12)
-    saved = {}
+    thread = threading.Thread(target=holder)
+    thread.start()
+    assert held.wait(30)
+    timer = threading.Timer(0.5, release.set)
+    timer.start()
+    try:
+        assert hooks._update_state(path, {"edited": True}) is True
+    finally:
+        release.set()
+        timer.cancel()
+        thread.join(30)
+    assert _state(repo) == {"edited": True}
 
-    def update(index):
-        barrier.wait()
-        saved[index] = hooks._update_state(path, {f"k{index}": index})
 
-    threads = [threading.Thread(target=update, args=(i,)) for i in range(12)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(30)
-    assert all(saved.values()) and len(saved) == 12
-    assert _state(repo) == {f"k{i}": i for i in range(12)}
+def test_the_state_lock_waits_longer_than_a_bare_lock_but_less_than_the_hard_stop():
+    from aletheore.shield import locking
+    import inspect
+
+    default = inspect.signature(locking.file_lock).parameters["timeout"].default
+    assert default < hooks.STATE_LOCK_WAIT_S < min(hooks.PRE_EDIT_STOP_S, hooks.POST_EDIT_STOP_S)
 
 
 def test_concurrent_pre_edits_prune_once(tmp_path, monkeypatch):
