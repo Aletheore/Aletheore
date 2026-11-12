@@ -16,7 +16,7 @@ from aletheore.flow import coverage
 from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
 from aletheore.flow.js_interp import BudgetExceeded, JFrame, JsInterp, request_like
-from aletheore.flow.js_sinks import CWE_NAMES_JS, DISCOVER_CWES_JS, ROUTE_METHODS, SEVERITY_JS, sink_args
+from aletheore.flow.js_sinks import CWE_NAMES_JS, DISCOVER_CWES_JS, HTTP_METHODS, ROUTE_METHODS, SEVERITY_JS, sink_args
 from aletheore.flow.values import ListV, host_is_fixed, path_prefix_safe, Choice, Const, MapV, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
@@ -36,7 +36,7 @@ for _c in _X.rule_classes("javascript"):  # the shared catalogue's method names
     _SINK_WORDS[_c] = tuple(_SINK_WORDS.get(_c, ())) + _X.prefilter_words("javascript", _c)
 _ENTRY_WORDS = (b"req", b"request", b"ctx.", b"process.argv", b"express", b"koa", b"fastify", b"hapi", b".tool(", b".tool<", b".registerTool", b".setRequestHandler")
 _EXTS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx")
-_SKIP_PARTS = {"node_modules", "dist", "build", "coverage", "__tests__", "test", "tests", "spec", "e2e", "frontend", "client",
+_SKIP_PARTS = {"external", "browser_build", "third_party", "thirdparty", "node_modules", "dist", "build", "coverage", "__tests__", "test", "tests", "spec", "e2e", "frontend", "client",
                "public", "static", "vendor", "bower_components", ".next", ".nuxt", "cypress", "storybook"}
 _EXTRA_SKIP = {".worktrees", ".repowise"}
 MAX_FILES = 6000
@@ -87,6 +87,13 @@ def _tainted_string(v) -> bool:
 _WEB_DEPS = {"express", "koa", "fastify", "hapi", "@hapi/hapi", "next", "restify", "connect", "sails", "@nestjs/core", "@nestjs/common", "nuxt",
              "hono", "polka", "micro", "feathers", "@feathersjs/feathers", "loopback", "meteor-node-stubs", "apollo-server", "apollo-server-express",
              "@remix-run/node", "@sveltejs/kit", "astro", "react-scripts", "gatsby", "electron"}
+
+
+_HTTP_LIBS = ("axios", "got", "node-fetch", "request", "needle", "superagent", "ky", "undici", "http", "https", "bent", "phin", "cross-fetch", "isomorphic-fetch",
+              "make-fetch-happen", "urllib", "supertest")
+# Classes whose "source" is meaningless for an exported function's parameter: they need a real request (a browser-facing response, a
+# session, a redirect target) or are too often deliberate (a pattern the caller supplies).
+_LIB_SKIP_CWES = frozenset((79, 601, 501))
 
 
 _OTHER_MANIFESTS = ("Gemfile", "go.mod", "pom.xml", "build.gradle", "build.gradle.kts", "composer.json", "Cargo.toml", "requirements.txt",
@@ -387,6 +394,10 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                             name = orig if orig and orig != "default" else name
                         elif mod == "send":  # the `send` file-serving package: send(req, path)
                             name = "@send"
+                    if _cwe == 918 and not recv_text and name in HTTP_METHODS and name != "fetch":
+                        imp = fr.file.requires.get(name)  # a bare get(...) is the HTTP client's only when it was imported from one
+                        if not (imp and isinstance(imp[0], str) and any(h in imp[0].removeprefix("node:").split("/")[0] for h in _HTTP_LIBS)):
+                            return
                     positions = sink_args(_cwe, name, recv_text, len(args))
                     ext = False
                     if not positions:  # the shared catalogue, for a string built from request data
@@ -435,6 +446,8 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                 for step, (fn, route) in enumerate(entries + entries):  # a second pass sees request state written by a middleware that ran later
                     if budget.over(budget_seconds) or (step >= len(entries) and not stash):
                         break
+                    if route == "lib" and cwe in _LIB_SKIP_CWES:
+                        continue
                     interp = JsInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                     fr = JFrame(jf, None, Obj(type_name="module"), 0, route=route)

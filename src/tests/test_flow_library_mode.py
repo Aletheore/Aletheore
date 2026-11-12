@@ -67,3 +67,16 @@ def test_javascript_inside_a_ruby_or_go_application_is_not_a_library(tmp_path):
 def test_library_findings_are_minor_severity(tmp_path):
     _scan(tmp_path, EXEC + "module.exports = function (a) { exec('echo ' + a); };\n")
     assert {f["severity"] for f in discover_repo(tmp_path)} == {"minor"}
+
+
+def test_a_bare_get_is_a_request_only_when_it_comes_from_an_http_client(tmp_path):
+    getter = "const { get } = require('immutable');\nmodule.exports = function (m) { return get(m, 'screens'); };\n"
+    assert _scan(tmp_path, getter) == []
+    client = "const { get } = require('axios');\nmodule.exports = function (u) { return get(u); };\n"
+    assert _scan(tmp_path, client) == [("ssrf", 2)]
+    assert _scan(tmp_path, "module.exports = function (u) { return fetch(u); };\n") == [("ssrf", 1)]
+
+
+def test_library_mode_does_not_report_response_or_session_classes(tmp_path):
+    assert _scan(tmp_path, "module.exports = function (reply, err) { reply.send(err); };\n") == []
+    assert _scan(tmp_path, "module.exports = function (req, tok) { req.session.t = tok; };\n") == []
