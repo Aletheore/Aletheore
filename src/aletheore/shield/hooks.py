@@ -70,6 +70,11 @@ SESSION_END_BUDGET_S = 6.0
 PRE_COMMIT_BUDGET_S = 6.0
 
 PRUNE_INTERVAL_S = 3600.0
+# How long a hook waits for the state lock before giving up on its write. Each locked write takes tens of milliseconds
+# on Windows (file creation and replace go through the virus scanner), so a dozen hooks queued behind one lock need
+# well over the 0.25 s a bare lock allows; a hook that gives up loses its state silently. It stays under the 2 s hard
+# stop of the pre- and post-edit hooks, which end the process whatever it is waiting on.
+STATE_LOCK_WAIT_S = 1.0
 HOOK_STATE_MAX_AGE_S = 7 * 24 * 3600.0
 GUARD_MAX_LINES = 12
 MAX_PAYLOAD_CHARS = 64 * 1024 * 1024
@@ -280,7 +285,7 @@ def _load_state(path: Path) -> dict:
 
 def _state_lock(path: Path):
     """The one bounded OS lock (see locking.file_lock) every read-modify-write of the hook state folder takes."""
-    return file_lock(path.parent / ".hook-state.lock")
+    return file_lock(path.parent / ".hook-state.lock", timeout=STATE_LOCK_WAIT_S)
 
 
 def _merge_into(path: Path, updates: dict) -> bool:

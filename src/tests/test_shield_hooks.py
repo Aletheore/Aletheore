@@ -943,11 +943,7 @@ def test_session_end_reports_a_receipt_that_could_not_be_built_on_stderr_and_exi
 def _slow_state_reads(monkeypatch, seconds=0.03):
     """Widen the race window, and let a waiter wait as long as it takes, so a loaded machine cannot turn a lock wait
     that runs out (which skips the write, by design) into a test failure."""
-    import functools
-
-    from aletheore.shield import locking
-
-    monkeypatch.setattr(hooks, "file_lock", functools.partial(locking.file_lock, timeout=60.0))
+    monkeypatch.setattr(hooks, "STATE_LOCK_WAIT_S", 60.0)
     real = hooks._load_state
 
     def slow(path):
@@ -977,6 +973,36 @@ def test_concurrent_state_updates_never_lose_a_key(tmp_path, monkeypatch):
     assert _state(repo) == {f"k{i}": i for i in range(4)}
     # No temporary file left; the folder's OS lock file stays (empty, released).
     assert sorted(p.name for p in path.parent.iterdir()) == [".hook-state.lock", path.name]
+
+
+def test_a_queue_of_writers_keeps_every_key_within_the_default_lock_wait(tmp_path, monkeypatch):
+    """Twelve hooks queued behind one lock, each write taking 30 ms, need about 0.4 s: more than the 0.25 s a bare lock
+    allows (hooks used to drop their state write after that), less than the state lock's own wait."""
+    repo = _init(tmp_path / "r")
+    path = _state_file(repo)
+    path.parent.mkdir()
+    real = hooks._load_state
+
+    def slow(target):
+        data = real(target)
+        time.sleep(0.03)
+        return data
+
+    monkeypatch.setattr(hooks, "_load_state", slow)  # the default wait stays in force
+    barrier = threading.Barrier(12)
+    saved = {}
+
+    def update(index):
+        barrier.wait()
+        saved[index] = hooks._update_state(path, {f"k{index}": index})
+
+    threads = [threading.Thread(target=update, args=(i,)) for i in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert all(saved.values()) and len(saved) == 12
+    assert _state(repo) == {f"k{i}": i for i in range(12)}
 
 
 def test_concurrent_pre_edits_prune_once(tmp_path, monkeypatch):
