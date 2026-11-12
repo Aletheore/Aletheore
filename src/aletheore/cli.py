@@ -3601,9 +3601,7 @@ class _CouncilGroup(typer.core.TyperGroup):
     def commands(self) -> dict:
         try:
             real = self._load().commands
-        except ModuleNotFoundError as exc:
-            if (exc.name or "").split(".")[0] == "aletheore":
-                raise
+        except ModuleNotFoundError:  # the extra is not installed: no subcommands, and --help still works
             return {}
         first = [name for name in _COUNCIL_FIRST if name in real]
         return {name: real[name] for name in [*first, *(n for n in real if n not in first)]}
