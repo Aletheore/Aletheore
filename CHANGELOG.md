@@ -5,6 +5,13 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: the read guard, evidence and Hallbook hooks, and the evidence hook's background index build, no longer
+  import modules from the repository they run in. Hooks run with the repository as the current folder, so a
+  repository holding its own `aletheore/` package (or `json.py`, `tree_sitter.py`, ...) could run its code inside them.
+  They now start Python with `-P`, as Shield's hooks already did. `aletheore tokens meter --enable-read-guard` rewrites
+  an existing read-guard entry in place. Hooks you already pasted from `hook evidence-snippet` or `hallbook hook`
+  keep the old form, because Aletheore did not write them and cannot change them: run the snippet command again and
+  replace the old entry with the new one. `--disable-read-guard` removes both the old and the new form.
 - Added Council, a sealed room where people and their coding agents work together, as the optional `council` extra:
   `pip install 'aletheore[council]'`, then `aletheore council --help` (or the `council` command). A room runs on the host's own
   machine; across the internet it goes through a free Cloudflare tunnel (150 at a time), and in a sealed room the messages, plans and

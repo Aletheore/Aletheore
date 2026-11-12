@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from aletheore.hook_config import python_hook
+from aletheore.hook_config import python_hook, with_isolation, without_isolation
 from aletheore.user_paths import is_link_or_junction, set_replacement_mode
 
 SETTINGS_RELATIVE_PATH = Path(".claude") / "settings.local.json"
@@ -95,6 +95,24 @@ def _command(event: str, setup_id: str) -> dict:
     return python_hook("aletheore.read_guard", event_arg, "--setup-id", setup_id)
 
 
+def _map_hooks(entry: dict[str, Any], fn) -> dict[str, Any]:
+    hooks = entry.get("hooks")
+    if not isinstance(hooks, list):
+        return entry
+    return {**entry, "hooks": [fn(hook) for hook in hooks]}
+
+
+def _modern(entry: dict[str, Any]) -> dict[str, Any]:
+    """The entry with `-P` in its hook command (earlier versions wrote it without, so a repository's own files could
+    shadow the hook's modules)."""
+    return _map_hooks(entry, with_isolation)
+
+
+def _forms(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every shape this entry has been written in: as recorded, with `-P`, and without."""
+    return [entry, _modern(entry), _map_hooks(_modern(entry), without_isolation)]
+
+
 def _validated_existing_entries(
     sidecar: dict[str, Any], sidecar_path: Path
 ) -> dict[str, dict[str, Any]]:
@@ -136,7 +154,8 @@ def is_installed(project: Path) -> bool:
         isinstance(hooks, dict)
         and set(owned) == set(_EVENTS)
         and all(
-            isinstance(hooks.get(event), list) and entry in hooks[event]
+            isinstance(hooks.get(event), list)
+            and any(form in hooks[event] for form in _forms(entry))
             for event, entry in owned.items()
         )
     )
@@ -179,12 +198,22 @@ def plan_install(project: Path) -> InstallPlan:
             raise ReadGuardSetupError(
                 f"{sidecar_path}: incomplete hook ownership record; nothing was changed"
             )
-        missing = {
-            event: entry
-            for event, entry in owned.items()
-            if entry not in hooks.get(event, [])
-        }
-        if not missing:
+        modern = {event: _modern(entry) for event, entry in owned.items()}
+        after = json.loads(json.dumps(settings))
+        after_hooks = after.setdefault("hooks", {})
+        changed: dict[str, dict[str, Any]] = {}
+        for event, entry in modern.items():
+            registered = after_hooks.get(event, [])
+            if entry in registered:
+                continue
+            changed[event] = entry
+            # An entry in the shape an earlier version wrote is replaced where it stands.
+            old_shape = next((i for i, item in enumerate(registered) if item in _forms(owned[event])), None)
+            if old_shape is None:
+                after_hooks.setdefault(event, []).append(entry)
+            else:
+                registered[old_shape] = entry
+        if not changed and modern == owned:
             return InstallPlan(
                 settings_path,
                 sidecar_path,
@@ -195,16 +224,12 @@ def plan_install(project: Path) -> InstallPlan:
                 sidecar_fingerprint,
                 True,
             )
-        after = json.loads(json.dumps(settings))
-        after_hooks = after.setdefault("hooks", {})
-        for event, entry in missing.items():
-            after_hooks.setdefault(event, []).append(entry)
         return InstallPlan(
             settings_path,
             sidecar_path,
-            missing,
+            changed,
             after,
-            sidecar,
+            {**sidecar, "entries": modern},
             settings_fingerprint,
             sidecar_fingerprint,
         )
@@ -258,6 +283,9 @@ def install(project: Path, plan: InstallPlan | None = None) -> InstallPlan:
         plan.sidecar_after,
         expected_fingerprint=plan.sidecar_fingerprint,
     )
+    if not plan.entries:
+        # The hooks in settings are already current; only the ownership record needed refreshing.
+        return plan
     try:
         _write_json(
             plan.settings_path,
@@ -309,7 +337,8 @@ def remove(project: Path) -> list[str]:
             raise ReadGuardSetupError(
                 f"{settings_path}: hooks.{event} is not a list; nothing was changed"
             )
-        kept = [entry for entry in registered if entry != owned_entry]
+        forms = _forms(owned_entry)
+        kept = [entry for entry in registered if entry not in forms]
         if len(kept) != len(registered):
             removed.append(event)
         if kept:

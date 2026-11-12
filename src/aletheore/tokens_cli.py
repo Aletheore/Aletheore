@@ -177,8 +177,11 @@ def meter(
             if plan.already_installed:
                 typer.echo("Aletheore read-guard hooks are already registered in this project.")
                 return
-            typer.echo(f"This will update {plan.settings_path} with these two project-local hooks:")
-            typer.echo(json.dumps(plan.entries, indent=2))
+            if plan.entries:
+                typer.echo(f"This will update {plan.settings_path} with these project-local hooks:")
+                typer.echo(json.dumps(plan.entries, indent=2))
+            else:
+                typer.echo(f"The hooks in {plan.settings_path} are already current; only the ownership record changes.")
             typer.echo(f"It will also write this ownership record to {plan.sidecar_path}:")
             typer.echo(json.dumps(plan.sidecar_after, indent=2))
             if not (project / ".aletheore").is_dir():

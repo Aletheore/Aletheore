@@ -258,7 +258,7 @@ def load_index(repo_path: Path) -> dict | None:
 def _spawn_background_build(repo_path: Path) -> None:
     try:
         subprocess.Popen(  # noqa: S603  # nosec B603 - fixed argv, our own module, no shell
-            [sys.executable, "-m", "aletheore.evidence_hook", "--build-index", str(repo_path)],
+            [sys.executable, "-P", "-m", "aletheore.evidence_hook", "--build-index", str(repo_path)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

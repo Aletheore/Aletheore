@@ -26,7 +26,7 @@ def test_snippet_quotes_an_interpreter_path_with_spaces(monkeypatch):
     assert result.exit_code == 0
     hook = json.loads(result.stdout)["hooks"]["PostToolUse"][0]["hooks"][0]
     assert hook["command"] == sys.executable
-    assert hook["args"] == ["-X", "utf8", "-m", "aletheore.evidence_hook", "--mode", "inject"]
+    assert hook["args"] == ["-X", "utf8", "-P", "-m", "aletheore.evidence_hook", "--mode", "inject"]
 
 
 @pytest.mark.parametrize(
