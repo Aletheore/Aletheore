@@ -253,6 +253,7 @@ def discover_repo(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
              ("Ruby", has_rb, lambda: discover_rb(repo, None, budget_seconds)),
              ("Kotlin", has_kt, lambda: discover_kt(repo, None, budget_seconds)),
              ("Rust", has_rs, lambda: discover_rs(repo, None, budget_seconds))]
+    steps.append(("weak checks", lambda r: True, lambda: __import__("aletheore.flow.weak_checks", fromlist=["scan"]).scan(repo)))
     for lang, has, run in steps:
         try:
             if has(repo):
