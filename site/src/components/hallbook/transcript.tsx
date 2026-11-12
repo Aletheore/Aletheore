@@ -48,7 +48,7 @@ export function Transcript() {
   }, []);
 
   return (
-    <div ref={box} className="min-h-[250px] overflow-x-auto rounded-[6px] bg-ink p-5 font-display text-[12.5px] leading-[1.85] text-[#e8e2d4] shadow-[0_18px_40px_-24px_rgba(22,20,15,0.6)]" aria-label="Recorded example of an agent asking Hallbook for a skill">
+    <div ref={box} className="min-h-[250px] overflow-x-auto rounded-[6px] border border-line bg-term p-5 font-display text-[12.5px] leading-[1.85] text-ink shadow-[0_18px_40px_-24px_rgba(0,0,0,0.7)]" aria-label="Recorded example of an agent asking Hallbook for a skill">
       {shown.map((l, i) => (
         <div key={i} className={l.startsWith("you") ? "text-[#9fd3b8]" : l.startsWith("agent") ? "text-[#f0c987]" : "text-[#8fb7e8]"}><pre className="m-0 whitespace-pre-wrap font-[inherit]">{l}</pre></div>
       ))}

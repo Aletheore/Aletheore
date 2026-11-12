@@ -320,7 +320,7 @@ buildCommand: bundle install && bundle exec rails assets:precompile
 
 **Use internal URLs for better performance:**
 
-When using `fromDatabase`, Render automatically provides internal `.render-internal.com` URLs:
+When using `fromDatabase`, Render automatically provides the internal connection string:
 
 ```yaml
 envVars:
@@ -330,7 +330,7 @@ envVars:
       property: connectionString
 ```
 
-This provides: `postgresql://user:pass@postgres.render-internal.com:5432/db`
+This provides the internal connection string for the database (copy it from the dashboard or use `fromDatabase`; do not construct hostnames by hand).
 
 **Benefits:**
 - Lower latency (same data center)
@@ -581,7 +581,7 @@ routes:
 
 **Database:**
 - [ ] Connection pooling configured
-- [ ] Using internal URLs (`.render-internal.com`)
+- [ ] Using internal connection strings from `fromDatabase` / `fromService`
 - [ ] SSL enabled if needed
 
 **Plans:**

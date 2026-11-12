@@ -1,0 +1,9 @@
+{
+  "name": "aletheore-council-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node check.mjs",
+    "preview": "node preview.mjs"
+  }
+}

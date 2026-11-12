@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Aletheore Council">
+  <rect width="64" height="64" rx="12" fill="#FFFFFF"/>
+  <path d="M32 11 L53 32 L32 53 L11 32 Z" fill="none" stroke="#0F0E0B" stroke-width="6"/>
+  <path d="M32 23 L41 32 L32 41 L23 32 Z" fill="#0F0E0B"/>
+</svg>

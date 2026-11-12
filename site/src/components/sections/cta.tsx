@@ -10,7 +10,7 @@ export function Cta() {
           <p className="mt-4 max-w-[54ch] text-[14.5px] leading-[1.7] text-muted">{c.body}</p>
           <ul className="mt-5 flex flex-col gap-2 text-[13.5px]">{c.points.map((x) => (<li key={x} className="flex gap-2.5"><span className="text-stamp">&rarr;</span>{x}</li>))}</ul>
         </div>
-        <div className="overflow-x-auto rounded-[4px] bg-ink p-5" aria-label="Example output of aletheore scan">
+        <div className="overflow-x-auto rounded-[4px] border border-line bg-term p-5" aria-label="Example output of aletheore scan">
           {c.terminal.map((l) => (<div key={l} className="whitespace-pre-wrap break-words font-display text-[12px] leading-[1.75] text-[#D8D2C5]">{l}</div>))}
         </div>
       </div>

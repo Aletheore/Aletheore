@@ -1,0 +1,27 @@
+name: Council site
+
+on:
+  pull_request:
+    paths:
+      - "council/site/**"
+      - ".github/workflows/council-site.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "council/site/**"
+
+permissions:
+  contents: read
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Check the Council site
+        working-directory: council/site
+        run: node check.mjs

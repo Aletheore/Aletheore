@@ -57,7 +57,7 @@ export function FlowScene({ steps, panels }: { steps: readonly FlowStep[]; panel
 
 function PanelView({ panel }: { panel: Panel }) {
   return (
-    <div className="overflow-hidden rounded-[6px] bg-ink text-[#e8e2d4] shadow-[0_18px_40px_-24px_rgba(22,20,15,0.6)]">
+    <div className="overflow-hidden rounded-[6px] bg-term text-ink border border-line shadow-[0_18px_40px_-24px_rgba(0,0,0,0.7)]">
       <div className="flex items-center gap-2 border-b border-white/10 px-4 py-2.5">
         <span className="size-2 rounded-full bg-white/20" aria-hidden="true" />
         <span className="size-2 rounded-full bg-white/20" aria-hidden="true" />
@@ -66,7 +66,7 @@ function PanelView({ panel }: { panel: Panel }) {
       </div>
       <pre className="max-h-[26rem] overflow-auto whitespace-pre-wrap break-words p-5 font-display text-[12px] leading-[1.75]">
         {panel.lines.map((l, i) => (
-          <div key={i} className={cn("term-line", l.kind === "cmd" ? "text-paper" : "text-[#b6b09f]")} style={{ animationDelay: `${Math.min(i, 24) * 45}ms` }}>
+          <div key={i} className={cn("term-line", l.kind === "cmd" ? "text-ink" : "text-[#b6b09f]")} style={{ animationDelay: `${Math.min(i, 24) * 45}ms` }}>
             {l.kind === "cmd" ? <span className="mr-2 text-stamp" aria-hidden="true">$</span> : null}
             {l.text}
           </div>

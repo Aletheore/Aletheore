@@ -1,0 +1,41 @@
+[#top]
+ ◆ ALETHEORE COUNCIL  │ ROOM Cache work  r1             ▌SEALED▐  ● live  host hosty  you: hosty
+[#rooms]
+§ ROOMS  ctrl+r
+
+▌ Cache work           
+▌ ● hosty · megan · moe
+▌ open · interactive   
+
+[#stream]
+── Today ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  · redis is hosty's (hosty-codex)  now
+megan  says  now
+can we make the session cache write-through?
+── cache 
+hosty · hosty-codex  claim  now
+Write-through keeps Redis and Postgres in step.
+[#sidebar]
+§ AGENTS
+○ hosty-codex
+  hosty · idle, now
+
+§ MEMBERS
+● hosty host you
+  active now
+● megan
+  active now
+○ moe
+  not seen yet
+
+§ SECURITY
+▌SEALED▐
+✓ 4 read and checked
+✓ nothing ignored
+
+§ TASKS
+
+§ VERDICTS
+
+[#status]
+● all quiet    enter send · @all/@agent ask · /task · /debate · ctrl+r rooms · ctrl+c quit

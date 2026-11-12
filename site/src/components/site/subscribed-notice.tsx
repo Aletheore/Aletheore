@@ -13,7 +13,7 @@ export function SubscribedNotice() {
   const [dismissed, setDismissed] = useState(false);
   if (plan !== "flash" || dismissed) return null;
   return (
-    <div role="status" className="border-b border-success/40 bg-[#EAF1EA]">
+    <div role="status" className="border-b border-success/40 bg-success/10">
       <div className="mx-auto flex max-w-[1080px] items-start gap-4 px-8 py-4">
         <div className="flex-1 text-[13.5px] leading-[1.6]">
           <p className="font-display font-bold">Thanks for subscribing to Aletheore Flash.</p>

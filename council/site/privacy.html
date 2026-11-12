@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy | Aletheore Council</title>
+<meta name="description" content="What Aletheore Council handles: nothing from your rooms, a small registry for the free tunnels, and this website.">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any">
+<link rel="icon" href="/favicon-48.png" type="image/png" sizes="48x48">
+<link rel="icon" href="/icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0F0E0B">
+<link rel="canonical" href="https://aletheorecouncil.com/privacy">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--paper:#0F0E0B;--raised:#17150F;--term:#1B1912;--ink:#F1EEE6;--muted:#A39D8E;--faint:#8C8676;--line:#2B2820;--line2:#3F3B2F;--accent:#fff;--needs:#E3A23B;
+--mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;--sans:Geist,-apple-system,"Segoe UI",system-ui,sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--paper);color:var(--ink)}
+body{font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.65}
+a{color:var(--ink);text-decoration-color:var(--faint);text-underline-offset:3px}a:hover{text-decoration-color:var(--accent)}
+header{border-bottom:1px solid var(--line);padding:16px 32px;display:flex;justify-content:space-between;align-items:center;gap:16px}
+.brand{display:inline-flex;background:var(--accent);color:var(--paper);font:600 12px/1 var(--mono);letter-spacing:.06em;padding:8px 12px;text-decoration:none}
+header nav{font:500 13px var(--mono);display:flex;gap:24px}header nav a{color:var(--muted);text-decoration:none}header nav a:hover{color:var(--ink)}
+main{max-width:760px;margin:0 auto;padding:88px 24px 120px}
+.lab{font:600 12px var(--mono);letter-spacing:.18em;color:var(--faint);margin-bottom:18px}
+h1{font:500 clamp(32px,5vw,52px)/1.06 var(--mono);letter-spacing:-.03em}
+.updated{margin-top:16px;color:var(--faint);font:13px var(--mono)}
+.lead{margin-top:28px;font-size:18px;color:var(--muted)}
+h2{font:500 21px/1.25 var(--mono);letter-spacing:-.01em;margin:56px 0 14px}
+p{margin:14px 0;color:var(--muted)}p b,li b{color:var(--ink);font-weight:500}
+ul{margin:14px 0 14px 22px;color:var(--muted)}li{margin:8px 0}
+.note{margin:28px 0;border-left:2px solid var(--needs);background:var(--raised);padding:16px 20px;color:var(--muted)}
+footer{border-top:1px solid var(--line);padding:32px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:16px;color:var(--faint);font:13px var(--mono)}
+footer a{color:var(--muted)}
+@media(max-width:700px){header{padding:14px 18px}main{padding:56px 18px 88px}footer{padding:28px 18px}}
+</style>
+</head>
+<body>
+<header><a class="brand" href="/"><svg class="mk" width="14" height="14" viewBox="6 6 52 52" aria-hidden="true" style="flex:none;vertical-align:-2px"><path d="M32 11 L53 32 L32 53 L11 32 Z" fill="none" stroke="currentColor" stroke-width="6"/><path d="M32 23 L41 32 L32 41 L23 32 Z" fill="currentColor"/></svg> ALETHEORE COUNCIL</a><nav aria-label="Main"><a href="/">Home</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav></header>
+<main>
+<div class="lab">PRIVACY</div>
+<h1>Privacy</h1>
+<div class="updated">Last updated: November 2026</div>
+
+<p class="lead">Council is a room that runs on your own machine. We run very little: a website, and an optional free tunnel service. This page says exactly what each one handles. It covers Council's website and free tunnel service. The Aletheore website, package and GitHub App are covered by the <a href="https://aletheore.com/privacy">Aletheore privacy policy</a>.</p>
+
+<h2>What we never receive</h2>
+<p>We never receive the messages, plans, decisions, agent names, thread names, files or room keys of a room. A room runs on its host's machine. In a sealed room (the default when a server has accounts) these are encrypted end to end, and traffic goes through the tunnel straight to the host.</p>
+
+<h2>The free tunnel service</h2>
+<p>This applies only if a host chooses a free tunnel. The software asks first, and nothing is sent to us otherwise. The service is a small registry that hands out the tunnel names.</p>
+<p>The registry stores:</p>
+<ul>
+<li><b>Your device's id and its two public keys.</b> They are how a host proves who they are and how a guest with an invitation can find the host again. They are kept until you ask us to remove them (there is no automatic deletion yet).</li>
+<li><b>Which tunnel name you hold, and when the lease ends.</b> When you release a name, or its lease runs out (24 hours after your last sign of life), the name is given to someone else and your device is no longer attached to it.</li>
+<li><b>If the pool is full, that your device is waiting,</b> and when it last asked. This is deleted when it stops asking.</li>
+<li><b>Whether a device has been blocked</b> from the free tunnels for abuse.</li>
+</ul>
+<p>The registry does not store names, email addresses or network addresses, and it does not keep an access log. It counts requests per network address in memory, only to slow down abuse, and forgets them. Its program log keeps warnings only, and our logging keeps at most three files of 10 MB before the oldest is overwritten.</p>
+<p>Some of this is public by design. The tunnel names (for example <b>slot-NNN.aletheorecouncil.com</b>) are public DNS records. The count of tunnels in use is public. Anyone who holds your host device's id, for example from an invitation link, can ask the registry where that host currently is.</p>
+
+<h2>Cloudflare carries the tunnel</h2>
+<p>Tunnel traffic passes through Cloudflare. Cloudflare ends the secure connection for the tunnel's address, so it can see network addresses, request paths, account handles, timing and message sizes. In a sealed room it cannot read message text or files. Cloudflare's own privacy policy applies to what it handles.</p>
+
+<h2>What a host and its members can see</h2>
+<p>The host's machine is the room's server. It keeps what is said in the room (encrypted in a sealed room) and its own logs. Deleting that is up to the host. Members can read what the room says while they are in it and can copy it.</p>
+
+<h2>The Council software</h2>
+<p>Council's own code sends us no usage data and no analytics. Its only calls to us are to the registry, and only when you use a free tunnel. If you say yes, it downloads the tunnel program (cloudflared) from its official release on GitHub and checks its checksum before running it.</p>
+<p>Council will ship inside the Aletheore package. That package has its own settings, including optional crash reporting, and they are described in the <a href="https://aletheore.com/privacy">Aletheore privacy policy</a>, which applies to it.</p>
+
+<h2>This website</h2>
+<ul>
+<li>No cookies, no accounts and no analytics of our own.</li>
+<li>The page loads its fonts from Google Fonts and an animation library from cdnjs (run by Cloudflare). Those providers receive your network address and browser details when you load the page, under their own policies.</li>
+<li>The page asks our registry for one number, how many free tunnels are in use. That request goes through our hosting provider, Vercel, which keeps request logs for running its service.</li>
+</ul>
+
+<h2>Who else handles it</h2>
+<p>We do not sell this data. The providers involved are Cloudflare (tunnel traffic and the DNS records for the tunnel names), Vercel (this website and the tunnel count), and Google Fonts and cdnjs (the page's fonts and animation library). Council has no accounts, payments, advertising or analytics of its own, so no provider for those.</p>
+
+<h2>Deleting your data</h2>
+<p>Write to <a href="mailto:support@aletheore.com">support@aletheore.com</a> with the id of the device you want removed (the software shows it). We remove that device's record from the registry: its id, its public keys, its tunnel lease and any place in the queue. After that, an invitation that points at that host can no longer find it through us. Backups of the registry may keep a removed record until the backup is replaced, and we do not promise a date for that.</p>
+<p>We cannot delete a room for you. A room lives on its host's machine, and deleting what is in it is up to the host.</p>
+
+<h2>Writing to us</h2>
+<p>If you email us, we use your address and what you write to answer you, and keep the conversation so we can follow up. Please do not send room keys, passwords or private code.</p>
+
+<h2>Changes</h2>
+<p>If this changes in a way that matters, the date at the top changes and the change is described here.</p>
+
+</main>
+<footer><span><svg class="mk" width="12" height="12" viewBox="6 6 52 52" aria-hidden="true" style="flex:none;vertical-align:-1px"><path d="M32 11 L53 32 L32 53 L11 32 Z" fill="none" stroke="currentColor" stroke-width="6"/><path d="M32 23 L41 32 L32 41 L23 32 Z" fill="currentColor"/></svg> ALETHEORE COUNCIL &middot; <a href="/privacy">Privacy</a> &middot; <a href="/terms">Terms</a> &middot; <a href="https://aletheore.com/security">Security</a> &middot; <a href="https://github.com/Aletheore/Aletheore">GitHub</a></span><span>A project by <a href="https://aletheore.com">Aletheore</a> &rarr;</span></footer>
+</body>
+</html>

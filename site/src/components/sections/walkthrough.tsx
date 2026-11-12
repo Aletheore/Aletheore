@@ -8,7 +8,7 @@ export function Walkthrough() {
       title="Follow the evidence, from scan to review."
       intro="See a scan of Aletheore’s own CLI source, inspect dependencies and candidate tests, and learn how the same evidence connects to coding agents and PR reviews."
     >
-      <div className="overflow-hidden rounded-sm border border-line-strong bg-ink">
+      <div className="overflow-hidden rounded-sm border border-line-strong bg-term">
         <video
           className="aspect-video w-full"
           controls

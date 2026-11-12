@@ -10,7 +10,7 @@ from aletheore import ui
 # These entry points speak a protocol or consume hook events, even in a terminal.
 SILENT_ROUTES = {
     ("mcp",), ("hook", "pre-read"), ("hook", "post-read"),
-    ("hook", "evidence"), ("hallbook", "suggest"),
+    ("hook", "evidence"), ("hallbook", "suggest"), ("council", "mcp-control"),
 }
 
 

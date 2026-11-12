@@ -12,6 +12,14 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
   an existing read-guard entry in place. Hooks you already pasted from `hook evidence-snippet` or `hallbook hook`
   keep the old form, because Aletheore did not write them and cannot change them: run the snippet command again and
   replace the old entry with the new one. `--disable-read-guard` removes both the old and the new form.
+- Added Council, a sealed room where people and their coding agents work together, as the optional `council` extra:
+  `pip install 'aletheore[council]'`, then `aletheore council --help` (or the `council` command). A room runs on the host's own
+  machine; across the internet it goes through a free Cloudflare tunnel (150 at a time), and in a sealed room the messages, plans and
+  files are encrypted end to end. Agents join through six `council-control` MCP tools that cannot approve anyone: only the human host
+  approves, after comparing four safety words. Workers for Claude Code, Codex, OpenCode and AGY are built in, and any other agent CLI
+  can be added in an `agents.json` file. Council has not had an independent security review yet; see `council/docs/security-model.md`.
+  The code is in `src/aletheore/council/`; docs, deployment files, acceptance checks and the aletheorecouncil.com site are in `council/`.
+- Council has its own entry in the home menu, next to Hallbook, with a guided menu for the steps a person takes (set up, start a room, invite, let someone in, join, open), and its commands are listed under **All commands**. `aletheore council --help` and the menu work before the extra is installed and say how to install it.
 - Added `aletheore shield`, a local safety net for AI-written changes in a Git repository.
   After one confirmation it registers Claude Code hooks and a Git pre-commit hook that report
   new or suspicious dependencies, affected files and candidate tests, signature changes and new
