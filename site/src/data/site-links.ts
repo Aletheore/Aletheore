@@ -41,6 +41,8 @@ export const footerColumns: { title: string; links: SiteLink[] }[] = [
       { label: "Pricing", href: "/pricing" },
       { label: "Developers", href: "/developers" },
       { label: "Benchmarks", href: "/benchmarks" },
+      // A plain followed link to Council's own site, on every page.
+      ...(COUNCIL_LAUNCHED ? [{ label: "Council", href: "https://aletheorecouncil.com", external: true }] : []),
       { label: "Changelog", href: "/changelog" },
       { label: "Status", href: "/status" },
       { label: "GitHub", href: "https://github.com/Aletheore/Aletheore", external: true },

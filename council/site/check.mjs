@@ -15,7 +15,13 @@ check("every in-page link points at something that exists", [...html.matchAll(/h
 check("no en or em dashes in the copy", !/[–—]/.test(html));
 check("does not name the unpublished package", !/aletheore-council\b(?!-site)/.test(html.replace(/council-control/g, "")));
 check("shows no install command that cannot be run", !/pip install|pipx install/.test(html));
-check("hidden from search engines until launch", /<meta name="robots" content="noindex, nofollow">/.test(html));
+check("open to search engines: no noindex tag, robots.txt allows crawling and names the sitemap, no X-Robots-Tag header",
+  !/noindex/i.test(html) && /Allow: \//.test(readFileSync(new URL("./robots.txt", import.meta.url), "utf8")) && !/Disallow: \//.test(readFileSync(new URL("./robots.txt", import.meta.url), "utf8"))
+  && /Sitemap: https:\/\/aletheorecouncil\.com\/sitemap\.xml/.test(readFileSync(new URL("./robots.txt", import.meta.url), "utf8"))
+  && !/X-Robots-Tag/i.test(readFileSync(new URL("./vercel.json", import.meta.url), "utf8")));
+check("the sitemap lists the home page and both legal pages", ["https://aletheorecouncil.com/</loc>", "https://aletheorecouncil.com/privacy</loc>", "https://aletheorecouncil.com/terms</loc>"]
+  .every((u) => readFileSync(new URL("./sitemap.xml", import.meta.url), "utf8").includes(u)));
+check("links back to aletheore.com with a plain followed link", /<a [^>]*href="https:\/\/aletheore\.com"[^>]*>/.test(html) && !/nofollow/i.test(html));
 
 // copy that must stay true (security model, section 2: the server sees who posted)
 check("does not claim the server cannot see who wrote what", !/who wrote what/i.test(html));
@@ -61,7 +67,7 @@ check("the stage uses the small viewport height (Safari's toolbar)", /#stage\{he
 // the legal pages: real, linked, honest
 for (const name of ["privacy", "terms"]) {
   const page = existsSync(new URL(`./${name}.html`, import.meta.url)) ? readFileSync(new URL(`./${name}.html`, import.meta.url), "utf8") : "";
-  check(`${name}.html exists and is hidden from search engines until launch`, page.length > 2000 && /<meta name="robots" content="noindex, nofollow">/.test(page));
+  check(`${name}.html exists and is open to search engines`, page.length > 2000 && !/noindex/i.test(page));
   check(`${name}.html names the contact`, page.includes("support@aletheore.com"));
   check(`${name}.html has no mockup or placeholder wording, dashes or TODOs`, !/mock-?up|placeholder|lorem|\bTODO\b|[\u2013\u2014]/i.test(page));
   check(`the page links /${name}`, html.includes(`href="/${name}"`));
