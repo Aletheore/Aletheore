@@ -45,6 +45,6 @@ const lines = out.edges
   .map(([i, j]) => `<line x1="${pts[i].x.toFixed(1)}" y1="${pts[i].y.toFixed(1)}" x2="${pts[j].x.toFixed(1)}" y2="${pts[j].y.toFixed(1)}"/>`)
   .join("");
 const dots = pts.map((p, i) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${((out.nodes[i].hub ? 5.5 : 3.2) * p.scale).toFixed(1)}"/>`).join("");
-const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Dependency graph of the Aletheore repository"><g stroke="#16140F" stroke-opacity="0.28" stroke-width="1">${lines}</g><g fill="#16140F">${dots}</g></svg>`;
+const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Dependency graph of the Aletheore repository"><g stroke="#F1EEE6" stroke-opacity="0.28" stroke-width="1">${lines}</g><g fill="#F1EEE6">${dots}</g></svg>`;
 writeFileSync(new URL("../public/hero-graph-static.svg", import.meta.url), svg);
 console.log(`graph.json: ${out.nodes.length} nodes, ${out.edges.length} edges, commit ${commit}`);
