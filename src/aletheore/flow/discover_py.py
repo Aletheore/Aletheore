@@ -22,7 +22,7 @@ from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
-    89: (b"execute", b"raw(", b"mogrify", b".extra("),
+    89: (b"execute", b"raw(", b"mogrify", b".extra(", b"exec_driver_sql", b".sql(", b".query(", b"run_sql", b"callproc", b".exec("),
     78: (b"system(", b"popen", b"subprocess", b"spawn", b"Popen", b"exec", b"getoutput", b"check_output"),
     22: (b"open(", b"os.", b"shutil", b"send_file", b"send_from_directory", b"Path(", b"FileResponse"),
     79: (b"Markup", b"mark_safe", b"HttpResponse", b"make_response", b"render_template_string", b"HTMLResponse", b"route(", b".get(", b".post("),
@@ -201,6 +201,11 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                             items = v.items if hasattr(v, "items") and isinstance(getattr(v, "items"), list) else (list(v.entries.values()) if hasattr(v, "entries") else [v])
                             if v is not None and any(classify(x) == "tainted" for x in items):
                                 record(node, fr, f"{k}= of QuerySet.extra() built from the request")
+                                return
+                    if _cwe == 89 and name in ("execute_statement", "execute", "query", "sql", "execute_sql", "run_query", "fetch", "run") and any(k in kw for k in ("statement", "sql", "query", "stmt", "operation")):
+                        for k in ("statement", "sql", "query", "stmt", "operation"):
+                            if k in kw and classify(kw[k]) == "tainted":
+                                record(node, fr, f"{k}= of {name}")
                                 return
                     if _cwe == 915:
                         if "**" in kw and _X.whole_body(kw["**"]) and (name[:1].isupper() or name in _MASS_METHODS):

@@ -98,3 +98,15 @@ def test_django_queryset_extra(tmp_path):
     assert _sql(tmp_path, "v.py", "def i(request):\n    User.objects.extra(where=[request.GET['w']])\n") == [2]
     (tmp_path / "b").mkdir()
     assert _sql(tmp_path / "b", "v.py", "def i(request):\n    User.objects.extra(where=['a = %s'], params=[request.GET['a']])\n") == []
+
+
+def test_more_python_sql_call_names(tmp_path):
+    head = "from flask import Flask, request\napp = Flask(__name__)\n@app.route('/')\ndef i():\n    q = 'select * from t where n = ' + request.args['n']\n    %s\n"
+    for k, call in enumerate(["client.statement_execution.execute_statement(statement=q)", "spark.sql(q)", "engine.exec_driver_sql(q)", "bq.query(q)", "db.execute_sql(q)", "duckdb.sql(q)"]):
+        d = tmp_path / str(k)
+        d.mkdir()
+        (d / "a.py").write_text(head % call)
+        assert [f["line"] for f in discover_repo(d) if "sql" in f["rule_id"]] == [6], call
+    (tmp_path / "safe").mkdir()
+    (tmp_path / "safe" / "a.py").write_text("from flask import request\ndef i():\n    client.query('select 1 where n = @n', params={'n': request.args['n']})\n    session.query(User).filter(User.n == request.args['n'])\n")
+    assert [f for f in discover_repo(tmp_path / "safe") if "sql" in f["rule_id"]] == []

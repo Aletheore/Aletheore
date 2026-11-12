@@ -66,8 +66,10 @@ SEVERITY_PY = {89: "critical", 78: "critical", 94: "critical", 502: "critical", 
 def sink_args(cwe: int, name: str, recv: str, argc: int, kw: dict, recv_tainted: bool = False) -> list[int] | None:
     base = recv.split(".")[-1] if recv else ""
     if cwe == 89:
-        if name in ("execute", "executemany", "executescript", "mogrify", "raw") and argc >= 1:
+        if name in ("execute", "executemany", "executescript", "mogrify", "raw", "exec_driver_sql", "execute_statement", "execute_sql", "run_sql", "callproc", "execute_raw") and argc >= 1:
             return [0]
+        if name in ("sql", "query", "exec", "read_sql_x") and argc >= 1 and base.lower() in ("spark", "duckdb", "con", "conn", "connection", "db", "database", "client", "bq", "bigquery", "warehouse", "engine", "session", "pool", "cursor", "cur"):
+            return [0]  # spark.sql(q), duckdb.sql(q), client.query(q), session.exec(q): the string is the statement
         return None
     if cwe == 78:
         if base == "os" and name in OS_CMD and argc >= 1:
