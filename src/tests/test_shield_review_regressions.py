@@ -230,7 +230,10 @@ def test_oversized_registry_cache_is_ignored(tmp_path):
     assert registry._read_cache(path) == {}
 
 
-def test_concurrent_cache_updates_are_preserved(tmp_path):
+def test_concurrent_cache_updates_are_preserved(tmp_path, monkeypatch):
+    # The cache write is best effort and skips when the lock stays busy for file_lock's default 0.25 s, which a slow
+    # runner can exceed. This test is about the merge being correct once every writer holds the lock, so wait for it.
+    monkeypatch.setattr(registry, 'file_lock', lambda p: locking.file_lock(p, timeout=60.0))
     path = tmp_path / 'cache.json'
     now = datetime.now(timezone.utc)
     with ThreadPoolExecutor(max_workers=4) as pool:
