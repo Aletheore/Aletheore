@@ -11,7 +11,6 @@ from pathlib import Path
 
 from xml.etree import ElementTree
 
-import certifi
 from tree_sitter import Node
 from aletheore.user_paths import user_home
 
@@ -44,7 +43,18 @@ _VULNERABILITY_CACHE_TTL_SECONDS = 24 * 60 * 60
 # would otherwise make every OSV.dev call fail with CERTIFICATE_VERIFY_FAILED
 # even though certifi itself is installed and correct - discovered by actually
 # running this against a real repo, not by inspection.
-_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+_ssl_context: ssl.SSLContext | None = None
+
+
+def _tls_context() -> ssl.SSLContext:
+    """Built on first use, not at import: loading the certificate bundle took about 0.6 s on a Windows machine, and
+    Shield's hooks import this module without making a request."""
+    global _ssl_context
+    if _ssl_context is None:
+        import certifi
+
+        _ssl_context = ssl.create_default_context(cafile=certifi.where())
+    return _ssl_context
 
 
 def _clean_range_version(version: str) -> str | None:
@@ -955,14 +965,16 @@ def _query_batch(pins: list[tuple[str, str, str]], timeout: int) -> list[dict]:
     request = urllib.request.Request(
         OSV_BATCH_URL, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
-    with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
+    # B310: the URL is the fixed https OSV endpoint above, never a file: or custom scheme
+    with urllib.request.urlopen(request, timeout=timeout, context=_tls_context()) as response:  # nosec B310
         return json.loads(response.read())["results"]
 
 
 def _fetch_vuln_detail(vuln_id: str, timeout: int) -> dict:
     request = urllib.request.Request(OSV_VULN_URL_TEMPLATE.format(vuln_id=vuln_id))
     try:
-        with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
+        # B310: the URL is built from the fixed https OSV template, never a file: or custom scheme
+        with urllib.request.urlopen(request, timeout=timeout, context=_tls_context()) as response:  # nosec B310
             return json.loads(response.read())
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
         # One advisory's detail lookup failing isn't the same as the whole
