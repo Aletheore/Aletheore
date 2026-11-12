@@ -763,22 +763,49 @@ def test_js_imports_are_not_hidden_by_stray_backticks_or_found_in_member_calls(s
 
 def test_installed_names_include_namespace_packages_by_their_dotted_name(monkeypatch):
     import importlib.metadata as md
-    from pathlib import PurePosixPath
 
     class _Dist:
-        def __init__(self, files):
-            self.files = [PurePosixPath(f) for f in files]
+        def __init__(self, files, top_level=None):
+            self._texts = {"RECORD": "".join(f"{f},sha256=x,1\n" for f in files), "top_level.txt": top_level}
 
-    dists = {
-        "protobuf": _Dist(["google/protobuf/__init__.py", "google/protobuf/json_format.py", "google/__init__.py"]),
-        "google-auth": _Dist(["google/auth/__init__.py", "google/oauth2/id_token.py", "google/__pycache__/x.pyc"]),
-    }
-    monkeypatch.setattr(md, "packages_distributions",
-                        lambda: {"google": ["protobuf", "google-auth"], "requests": ["requests"]})
-    monkeypatch.setattr(md, "distribution", lambda name: dists[name])
+        def read_text(self, name):
+            return self._texts.get(name)
+
+    dists = [
+        _Dist(["google/protobuf/__init__.py", "google/protobuf/json_format.py", "google/__init__.py"]),
+        _Dist(["google/auth/__init__.py", "google/oauth2/id_token.py", "google/__pycache__/x.pyc"]),
+        _Dist(["requests/__init__.py", "requests-2.0.dist-info/METADATA", "six.py"]),
+        _Dist(["ignored/a.py"], top_level="cv2\n"),  # a declared top_level.txt wins over the file list
+    ]
+    monkeypatch.setattr(md, "distributions", lambda: iter(dists))
     names = _deps._real_installed_import_names()
-    assert {"google", "requests", "google.protobuf", "google.auth", "google.oauth2"} <= names
+    assert {"google", "requests", "six", "cv2", "google.protobuf", "google.auth", "google.oauth2"} <= names
+    assert "ignored" not in names and "requests-2.0.dist-info" not in names
     assert not {n for n in names if "__" in n}
+
+
+def test_installed_names_skip_one_broken_distribution(monkeypatch):
+    import importlib.metadata as md
+
+    class _Broken:
+        def read_text(self, name):
+            raise OSError("unreadable")
+
+    class _Fine:
+        def read_text(self, name):
+            return "okpkg/__init__.py,,\n" if name == "RECORD" else None
+
+    monkeypatch.setattr(md, "distributions", lambda: iter([_Broken(), _Fine()]))
+    assert _deps._real_installed_import_names() == {"okpkg"}
+
+
+def test_installed_names_match_the_librarys_own_answer_for_this_environment():
+    import importlib.metadata as md
+
+    ours = _deps._real_installed_import_names()
+    theirs = set(md.packages_distributions()) - {"__pycache__"}  # compiled files of one-file modules, not an import name
+    # Ours may add namespace children and may keep a name whose files are gone from disk; it must not miss any.
+    assert theirs <= ours, sorted(theirs - ours)[:10]
 
 
 @pytest.mark.parametrize("imp,declared", [("environ", "environ-config"), ("slugify", "awesome-slugify")])

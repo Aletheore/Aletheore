@@ -618,26 +618,55 @@ def _import_map() -> dict[str, tuple[str, ...]]:
     return found
 
 
+def _record_paths(dist) -> list[list[str]]:
+    """The file paths a distribution lists in its RECORD, as lists of path parts. Read as plain text: the library's own
+    `dist.files` (and so `packages_distributions()`) also checks that every listed file exists, which was about 16,000
+    file checks for 50 small packages, over 2 s on a Windows machine and past the 2 s limit of the post-edit hook."""
+    import csv
+
+    text = dist.read_text("RECORD")
+    if not text:
+        return []
+    return [row[0].split("/") for row in csv.reader(text.splitlines()) if row and row[0]]
+
+
+def _top_level_names(dist, records: list[list[str]]) -> set[str]:
+    """Import names a distribution provides: those it declares in top_level.txt, else those its files imply."""
+    declared = {name for name in (dist.read_text("top_level.txt") or "").split() if name}
+    if declared:
+        return declared
+    names: set[str] = set()
+    for parts in records:
+        if len(parts) > 1:
+            first = parts[0]
+        else:
+            first = parts[0].partition(".")[0] if parts[0].endswith((".py", ".so", ".pyd")) else ""
+        if first and "." not in first and first != "__pycache__":
+            names.add(first)
+    return names
+
+
 def _real_installed_import_names() -> set[str]:
     """Top-level import names of the installed distributions, plus `root.sub` for namespace roots (google.protobuf),
     which is how the import check names those imports."""
     import importlib.metadata
 
     try:
-        mapping = importlib.metadata.packages_distributions()
+        distributions = list(importlib.metadata.distributions())
     except Exception as error:  # noqa: BLE001 - a broken installed distribution must not stop the check
         debug_note("could not list the installed distributions", error)
         return set()
-    names = set(mapping)
-    for root in imports.PY_NAMESPACE_ROOTS & names:
-        for dist in set(mapping[root]):
-            try:
-                files = importlib.metadata.distribution(dist).files or []
-            except Exception as error:  # noqa: BLE001
-                debug_note("could not list the files of an installed distribution", error)
-                continue
-            for file in files:
-                parts = file.parts
+    names: set[str] = set()
+    for dist in distributions:
+        try:
+            records = _record_paths(dist)
+            provided = _top_level_names(dist, records)
+        except Exception as error:  # noqa: BLE001 - one unreadable distribution must not hide the others
+            debug_note("could not read an installed distribution", error)
+            continue
+        names |= provided
+        for root in imports.PY_NAMESPACE_ROOTS & provided:
+            for parts in records:
                 if len(parts) >= 2 and parts[0] == root and not parts[1].startswith("__"):
                     names.add(f"{root}.{parts[1].removesuffix('.py')}")
     return names

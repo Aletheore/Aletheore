@@ -362,3 +362,31 @@ def test_an_older_world_readable_registry_cache_is_tightened_on_the_next_write(t
     cache.chmod(0o644)
     _lookup(tmp_path, "PyPI", "no-such-pkg", _http_error("u", 404))
     assert stat.S_IMODE(cache.stat().st_mode) == 0o600
+
+
+def test_importing_the_registry_does_not_load_the_certificate_bundle():
+    """Hooks import this module on every call, and the post-edit hook looks nothing up: the TLS context is built when a
+    lookup first needs it, not at import (it cost 0.6 s of a 2 s hook limit on a Windows machine)."""
+    import subprocess
+    import sys
+
+    code = "import aletheore.shield.registry as r, sys; print(r._ssl_context is None, 'certifi' in sys.modules)"
+    done = subprocess.run([sys.executable, "-P", "-c", code], capture_output=True, text=True, timeout=60)
+    assert done.stdout.split() == ["True", "False"], done.stdout + done.stderr
+
+
+def test_the_tls_context_is_built_once_on_first_use():
+    from aletheore.shield import registry
+
+    first = registry._tls_context()
+    assert registry._tls_context() is first
+
+
+def test_importing_the_vulnerability_scanner_does_not_load_the_certificate_bundle():
+    """Shield's guard imports it when a manifest changes, and the post-edit hook has a 2 s limit."""
+    import subprocess
+    import sys
+
+    code = "import aletheore.vulnerabilities as v, sys; print(v._ssl_context is None, 'certifi' in sys.modules)"
+    done = subprocess.run([sys.executable, "-P", "-c", code], capture_output=True, text=True, timeout=60)
+    assert done.stdout.split() == ["True", "False"], done.stdout + done.stderr

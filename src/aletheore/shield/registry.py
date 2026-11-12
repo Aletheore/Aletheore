@@ -18,8 +18,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import certifi
-
 from aletheore.user_paths import user_home
 from aletheore.shield.locking import file_lock
 
@@ -30,7 +28,19 @@ CACHE_TTL = timedelta(hours=24)
 MAX_CACHE_BYTES = 1024 * 1024
 MAX_CACHE_ENTRIES = 2048
 USER_AGENT = "aletheore-shield"
-_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+_ssl_context: ssl.SSLContext | None = None
+
+
+def _tls_context() -> ssl.SSLContext:
+    """The TLS context for registry lookups, built on first use: loading the certificate bundle took about 0.15 s on
+    macOS and 0.6 s on a Windows machine, and every hook that merely imports this module (the post-edit hook never
+    looks anything up) was paying it against its 2 s limit."""
+    global _ssl_context
+    if _ssl_context is None:
+        import certifi
+
+        _ssl_context = ssl.create_default_context(cafile=certifi.where())
+    return _ssl_context
 
 
 @dataclass(frozen=True)
@@ -160,7 +170,7 @@ def _write_cache(path: Path, key: str, info: RegistryInfo, now: datetime) -> Non
 
 def _default_opener(request, timeout=None):
     # B310: _url only builds https://pypi.org or https://registry.npmjs.org URLs, never file: or custom schemes
-    return urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT)  # nosec B310
+    return urllib.request.urlopen(request, timeout=timeout, context=_tls_context())  # nosec B310
 
 
 def lookup_package(
