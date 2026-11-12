@@ -1,0 +1,86 @@
+# The tunnel registry, on its own. Its own network and volume, no published port (it is reached only through its own Cloudflare tunnel
+# sidecar), hard CPU, memory and process ceilings, no capabilities, a read-only root filesystem, and nothing shared with any other stack
+# on the machine: no shared volume, no shared network, no shared secret.
+# Run from this folder:  docker compose -f compose.registry.yml --env-file registry.env up -d
+name: council-registry
+
+services:
+  registry:
+    build:
+      context: ../..
+      dockerfile: council/deploy/registry/Dockerfile
+    image: aletheore-registry:stage3
+    restart: unless-stopped
+    user: "10002:10002"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file: registry.env
+    environment:
+      COUNCIL_CF_TOKEN_FILE: /run/secrets/cf_token
+      COUNCIL_REGISTRY_ADMIN_TOKEN_FILE: /run/secrets/registry_admin
+    secrets:
+      - cf_token
+      - registry_admin
+    networks:
+      - registry_net
+    volumes:
+      - registry_data:/data
+    cpus: 0.25
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 64
+    cpu_shares: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Carries registry.aletheorecouncil.com to the registry over an outbound connection, so no port is opened on the machine.
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.7
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN_FILE: /run/secrets/registry_tunnel_token
+    secrets:
+      - registry_tunnel_token
+    networks:
+      - registry_net
+    cpus: 0.25
+    mem_limit: 128m
+    pids_limit: 64
+    cpu_shares: 128
+    depends_on:
+      registry:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  registry_net: {}
+
+volumes:
+  registry_data: {}
+
+secrets:
+  cf_token:
+    file: ./secrets/cf_token
+  registry_admin:
+    file: ./secrets/registry_admin
+  registry_tunnel_token:
+    file: ./secrets/registry_tunnel_token

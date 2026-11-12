@@ -1,0 +1,14 @@
+# The build context is the repository root: send only what the image copies.
+# Each level is re-included and then narrowed again, because a file cannot be re-included under a directory that is still excluded.
+*
+!src
+src/*
+!src/pyproject.toml
+!src/README.md
+!src/LICENSE
+!src/aletheore
+src/aletheore/*
+!src/aletheore/__init__.py
+!src/aletheore/council
+**/__pycache__
+**/*.pyc

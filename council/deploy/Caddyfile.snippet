@@ -1,0 +1,26 @@
+# Add ONE site block like this to the existing Caddy configuration (do not change any existing site), then reload Caddy.
+# Replace the name with the real subdomain once it exists. A bare host name gets HTTPS automatically; there is no plain-HTTP site.
+council.example.com {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Bundles can be up to 20 MiB; everything else is much smaller. The server enforces its own limits as well.
+	request_body {
+		max_size 25MB
+	}
+
+	reverse_proxy 127.0.0.1:8765 {
+		# Replace, never append to, what a client sent: the server trusts this header only from this proxy.
+		header_up X-Forwarded-For {remote_host}
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 60s
+		}
+	}
+}

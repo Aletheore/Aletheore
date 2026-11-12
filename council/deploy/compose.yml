@@ -1,0 +1,96 @@
+# Council room server + its own Postgres. Own network, hard CPU/memory/process limits, nothing shared with other stacks.
+# Run from this folder:  docker compose --env-file council.env up -d
+name: council
+
+services:
+  council:
+    build:
+      context: ../..
+      dockerfile: council/deploy/Dockerfile
+    image: aletheore-council:stage3
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file: council.env
+    environment:
+      COUNCIL_HOST: 0.0.0.0
+      COUNCIL_ALLOW_PUBLIC: "1"
+    # Only the loopback address of this machine can reach the server; the reverse proxy (Caddy) forwards to it.
+    ports:
+      - "127.0.0.1:8765:8765"
+    networks:
+      - council_net
+      - council_db
+    volumes:
+      - bundles:/data/bundles
+    secrets:
+      - council_tokens
+    # Hard ceilings so this stack cannot starve its neighbours (the numbers are set from the Task 14 measurements).
+    cpus: 1.0
+    mem_limit: 1g
+    memswap_limit: 1g
+    pids_limit: 256
+    # Lower CPU weight than anything else on the machine: under contention, the others win.
+    # (A lower disk weight is in compose.io-weight.yml: some kernels refuse to start a container that sets one.)
+    cpu_shares: 128
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: council.env
+    # No published port: only the server container, over an internal network, can reach the database.
+    networks:
+      - council_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    command: ["postgres", "-c", "shared_buffers=256MB", "-c", "effective_cache_size=512MB", "-c", "max_connections=60",
+              "-c", "work_mem=4MB", "-c", "log_min_duration_statement=500"]
+    shm_size: 128mb
+    cpus: 1.0
+    mem_limit: 1g
+    memswap_limit: 1g
+    pids_limit: 200
+    cpu_shares: 128
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  council_net: {}
+  council_db:
+    internal: true
+
+volumes:
+  pgdata: {}
+  bundles: {}
+
+secrets:
+  council_tokens:
+    file: ./council_tokens.json
