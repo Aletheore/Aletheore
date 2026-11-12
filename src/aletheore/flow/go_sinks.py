@@ -45,6 +45,7 @@ SHELLS = {"sh", "bash", "zsh", "/bin/sh", "/bin/bash", "/usr/bin/sh", "/usr/bin/
 SQL_HINTS = ("db", "tx", "conn", "sql", "database", "gorm", "sqlx", "store", "repo", "stmt", "pool", "dbx", "orm", "session")
 PREPARED_RECEIVERS = {"stmt", "st", "prepared", "ps", "pstmt", "preparedstmt", "stmts", "stmt1", "stmt2", "namedstmt"}
 SQL_ARG0 = {"Query", "QueryRow", "Exec", "Prepare", "Raw", "Select", "Get", "NamedQuery", "NamedExec", "MustExec", "Queryx", "QueryRowx", "Preparex", "Where", "Having", "Order", "Group", "Joins"}
+SQUIRREL_STRINGS = {"OrderBy", "Where", "Having", "GroupBy", "Suffix", "Prefix", "Column", "Columns", "Join", "LeftJoin", "RightJoin", "InnerJoin", "CrossJoin", "From", "Set_x"}
 SQL_ARG1 = {"QueryContext", "QueryRowContext", "ExecContext", "PrepareContext", "QueryxContext", "GetContext", "SelectContext", "NamedQueryContext", "NamedExecContext"}
 # Stat, Lstat and Readlink are existence or metadata checks, not file access, and are deliberately left out.
 OS_FILE_ONE = {"Open", "OpenFile", "ReadFile", "WriteFile", "Create", "Remove", "RemoveAll", "Mkdir", "MkdirAll", "ReadDir", "Chmod", "Chown", "Truncate"}
@@ -75,6 +76,8 @@ def sink_args(cwe: int, name: str, recv: str, argc: int, first_const: str | None
     if cwe == 89:
         if base in PREPARED_RECEIVERS:
             return None  # a prepared statement's Query/Exec take bound PARAMETERS, not SQL text
+        if name in SQUIRREL_STRINGS and argc >= 1 and any(m in recv for m in ("sq.", "squirrel.", "Select(", "Update(", "Delete(", "Insert(", "StatementBuilder")):
+            return [0]  # a squirrel builder: OrderBy("name; drop ..."), Where("x = " + v), Suffix(...) paste the string into the query
         hinted = any(h in base or h in recv.lower() for h in SQL_HINTS)
         if name in SQL_ARG0 and argc >= 1 and hinted:
             return [0]

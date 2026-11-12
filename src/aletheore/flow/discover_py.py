@@ -22,7 +22,7 @@ from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
-    89: (b"execute", b"raw(", b"mogrify"),
+    89: (b"execute", b"raw(", b"mogrify", b".extra("),
     78: (b"system(", b"popen", b"subprocess", b"spawn", b"Popen", b"exec", b"getoutput", b"check_output"),
     22: (b"open(", b"os.", b"shutil", b"send_file", b"send_from_directory", b"Path(", b"FileResponse"),
     79: (b"Markup", b"mark_safe", b"HttpResponse", b"make_response", b"render_template_string", b"HTMLResponse", b"route(", b".get(", b".post("),
@@ -194,6 +194,13 @@ def discover_python(repo: Path, index: PyIndex | None = None, budget_seconds: fl
                             and node.parent is not None and node.parent.type == "call" and node.parent.child_by_field_name("function") == node:
                         record(node, fr, "getattr with a request-chosen name, then called")
                         return
+                    if _cwe == 89 and name == "extra" and ".objects" in recv_text or (_cwe == 89 and name == "extra" and any(k in kw for k in ("where", "select", "tables", "order_by"))):
+                        for k in ("where", "select", "tables", "order_by"):
+                            v = kw.get(k)
+                            items = v.items if hasattr(v, "items") and isinstance(getattr(v, "items"), list) else (list(v.entries.values()) if hasattr(v, "entries") else [v])
+                            if v is not None and any(classify(x) == "tainted" for x in items):
+                                record(node, fr, f"{k}= of QuerySet.extra() built from the request")
+                                return
                     if _cwe == 915:
                         if "**" in kw and _X.whole_body(kw["**"]) and (name[:1].isupper() or name in _MASS_METHODS):
                             record(node, fr, f"every request field passed as keyword arguments to {name}")

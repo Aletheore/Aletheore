@@ -80,3 +80,21 @@ def test_django_redirect_view_url_from_the_request(tmp_path):
     guarded = v.replace("self.url = self.request.GET.get('next', '/')", "self.url = self.request.GET.get('next', '/')\n        if not url_has_allowed_host_and_scheme(self.url, None):\n            self.url = '/'")
     (tmp_path / "views.py").write_text(guarded)
     assert [f for f in discover_repo(tmp_path) if "redirect" in f["rule_id"]] == []
+
+
+def _sql(tmp_path, name, text):
+    (tmp_path / name).write_text(text)
+    return [f["line"] for f in discover_repo(tmp_path) if "sql" in f["rule_id"]]
+
+
+def test_squirrel_builder_strings(tmp_path):
+    base = 'package main\nimport ("net/http";sq "github.com/Masterminds/squirrel")\nfunc h(w http.ResponseWriter, r *http.Request){ %s }\n'
+    assert _sql(tmp_path, "a.go", base % 'sq.Select("*").From("t").OrderBy(r.URL.Query().Get("s")).ToSql()') == [3]
+    (tmp_path / "b").mkdir()
+    assert _sql(tmp_path / "b", "a.go", base % 'sq.Select("*").From("t").Where("n = ?", r.URL.Query().Get("n")).ToSql()') == []
+
+
+def test_django_queryset_extra(tmp_path):
+    assert _sql(tmp_path, "v.py", "def i(request):\n    User.objects.extra(where=[request.GET['w']])\n") == [2]
+    (tmp_path / "b").mkdir()
+    assert _sql(tmp_path / "b", "v.py", "def i(request):\n    User.objects.extra(where=['a = %s'], params=[request.GET['a']])\n") == []
