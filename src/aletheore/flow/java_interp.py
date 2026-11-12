@@ -12,6 +12,8 @@ later reads are not trusted. A finding is only dropped on a proof.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from aletheore.flow.budget import STEPS as _STEPS
 
 from dataclasses import dataclass, field
@@ -152,6 +154,7 @@ def _t(node: Node | None) -> str:
     return node.text.decode("utf-8", "replace") if node is not None else ""
 
 
+@lru_cache(maxsize=65536)
 def _unescape(raw: str) -> str:
     out, i = [], 0
     while i < len(raw):
@@ -246,8 +249,8 @@ class Interp:
             return UNKNOWN
         self._tick()
         val = self._eval(node, fr)
-        key = self._key(fr, node)
-        if key in self.probe_keys:
+        key = self._key(fr, node) if self.probe_keys else None  # (nothing to record in a normal scan)
+        if key is not None and key in self.probe_keys:
             # Classified now: a later call that is handed the same container must not change what
             # the sink saw.
             self.probes.setdefault(key, []).append((val, classify(val)))

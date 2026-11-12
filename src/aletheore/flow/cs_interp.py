@@ -5,6 +5,8 @@ blocks, string interpolation and `string.Format`."""
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from aletheore.flow.budget import STEPS as _STEPS
 
 from dataclasses import dataclass, field
@@ -47,6 +49,7 @@ def _s(v: object) -> str:
     return "" if v is None else ("True" if v is True else "False" if v is False else str(v))
 
 
+@lru_cache(maxsize=65536)
 def _unquote(raw: str) -> str:
     if raw.startswith('@"') or raw.startswith('$@"') or raw.startswith('@$"'):
         return raw[raw.index('"') + 1:-1].replace('""', '"')
@@ -147,8 +150,8 @@ class CsInterp:
             return UNKNOWN
         self._tick()
         val = self._eval(node, fr)
-        key = self._key(fr, node)
-        if key in self.probe_keys:
+        key = self._key(fr, node) if self.probe_keys else None  # (nothing to record in a normal scan)
+        if key is not None and key in self.probe_keys:
             self.probes.setdefault(key, []).append((val, classify(val)))
         return val
 

@@ -107,6 +107,7 @@ class GoIndex:
         self._resolved: dict[Path, Path] = {}  # raw path -> Path.resolve(), which walks the filesystem
         self._files: dict[Path, GoFile] = {}
         self._by_dir: dict[Path, list[Path]] | None = None
+        self._pkg: dict[Path, tuple] = {}  # directory -> (files, function / method / value / assigned tables), built once
         self._parser = Parser(GO_LANGUAGE)
 
     def file(self, path: Path) -> GoFile | None:
@@ -136,24 +137,46 @@ class GoIndex:
                 self._by_dir.setdefault(p.parent, []).append(p)
         return self._by_dir
 
+    def _package(self, directory: Path) -> tuple:
+        """The files of a package and one table per kind of declaration, built once: every lookup below is a dict read, not a walk
+        over the package's files (and a `Path.resolve()` per call, which touches the filesystem)."""
+        got = self._pkg.get(directory)
+        if got is None:
+            files = [f for f in (self.file(p) for p in self._dirs().get(directory.resolve(), [])) if f is not None]
+            values: dict = {}
+            functions: dict = {}
+            methods: dict = {}
+            assigned: set = set()
+            for f in files:
+                for k, v in f.values.items():
+                    values.setdefault(k, []).append((f, v))
+                for k, v in f.functions.items():
+                    functions.setdefault(k, []).append((f, v))
+                for k, v in f.methods.items():
+                    methods.setdefault(k, []).append((f, v))
+                assigned |= f.assigned
+            got = (files, values, functions, methods, assigned)
+            self._pkg[directory] = got
+        return got
+
     def package_files(self, directory: Path) -> list[GoFile]:
-        return [f for f in (self.file(p) for p in self._dirs().get(directory.resolve(), [])) if f is not None]
+        return self._package(directory)[0]
 
     def package_value(self, name: str, from_file: GoFile):
         """A package-level const or var of the same package: (file, initializer node) or None when absent or ambiguous."""
-        hits = [(f, f.values[name]) for f in self.package_files(from_file.path.parent) if name in f.values]
+        hits = self._package(from_file.path.parent)[1].get(name, ())
         return hits[0] if len(hits) == 1 else None
 
     def package_assigned(self, name: str, from_file: GoFile) -> bool:
-        return any(name in f.assigned for f in self.package_files(from_file.path.parent))
+        return name in self._package(from_file.path.parent)[4]
 
     def function(self, name: str, from_file: GoFile):
         """A function of the same package: (file, node) or None when absent or ambiguous."""
-        hits = [(f, f.functions[name]) for f in self.package_files(from_file.path.parent) if name in f.functions]
+        hits = self._package(from_file.path.parent)[2].get(name, ())
         return hits[0] if len(hits) == 1 else None
 
     def method(self, recv_type: str, name: str, from_file: GoFile):
-        hits = [(f, f.methods[(recv_type, name)]) for f in self.package_files(from_file.path.parent) if (recv_type, name) in f.methods]
+        hits = self._package(from_file.path.parent)[3].get((recv_type, name), ())
         return hits[0] if len(hits) == 1 else None
 
     def is_request_type(self, ttext: str, from_file: GoFile) -> bool:

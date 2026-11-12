@@ -19,6 +19,8 @@ Sanitizers here are qualified (`re.escape`), so `html.escape` does not count as 
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import re
 
 ANY = ("any",)
@@ -390,7 +392,8 @@ _PARENS = re.compile(r"\([^()]*\)|\[[^\[\]]*\]|<[^<>]*>")
 _SPLIT = re.compile(r"\s*(?:\.|::|->|\?\.|&\.)\s*")
 
 
-def _segments(recv: str) -> list[str]:
+@lru_cache(maxsize=65536)
+def _segments(recv: str) -> tuple[str, ...]:
     s = recv or ""
     for _ in range(6):
         t = _PARENS.sub("", s)
@@ -398,7 +401,7 @@ def _segments(recv: str) -> list[str]:
             break
         s = t
     s = s.strip().lstrip("$@:&*!")
-    return [p for p in _SPLIT.split(s) if p]
+    return tuple(p for p in _SPLIT.split(s) if p)
 
 
 def _match(rule, recv: str) -> bool:
@@ -557,12 +560,19 @@ def origin_checked(node) -> bool:
     return False
 
 
+_SANITIZES: dict = {}
+
+
 def sanitizes(lang: str, cwes, name: str, recv: str) -> bool:
     """A qualified sanitizer for one of the new classes (`re.escape(x)` for a regex built from x)."""
-    table = SANITIZERS_Q.get(lang, {})
-    segs = _segments(recv)
-    b = segs[-1] if segs else ""
-    return any((b, name) in table.get(c, ()) for c in cwes)
+    key = (lang, name, recv, cwes if isinstance(cwes, (tuple, frozenset)) else frozenset(cwes))
+    got = _SANITIZES.get(key)
+    if got is None:
+        table = SANITIZERS_Q.get(lang, {})
+        segs = _segments(recv)
+        b = segs[-1] if segs else ""
+        got = _SANITIZES[key] = any((b, name) in table.get(c, ()) for c in cwes)
+    return got
 
 
 # Classes a driver detects with its own logic (no table rule): Python `Model(**request.json)`, Ruby `params.permit!`,

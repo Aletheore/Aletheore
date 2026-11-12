@@ -162,8 +162,8 @@ class RbInterp:
             return UNKNOWN
         self._tick()
         val = self._eval(node, fr)
-        key = self._key(fr, node)
-        if key in self.probe_keys:
+        key = self._key(fr, node) if self.probe_keys else None  # (nothing to record in a normal scan)
+        if key is not None and key in self.probe_keys:
             self.probes.setdefault(key, []).append((val, classify(val)))
         return val
 

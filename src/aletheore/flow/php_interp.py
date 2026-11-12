@@ -34,6 +34,8 @@ ARRAY_FUNCS = {"array_merge", "array_values", "array_unique", "array_slice", "ar
                "array_flip", "array_diff", "array_intersect", "array_replace", "array_column", "array_merge_recursive", "array_pad", "array_chunk"}
 SOURCE_FUNCS = {"getallheaders", "apache_request_headers", "filter_input", "filter_input_array", "readline", "fgets", "fgetc", "stream_get_contents",
                 "http_get_request_body", "get_headers_x"}
+_SAN_LOWER: dict = {}
+_NEVER_TAINTED = frozenset((Const, type(SAFE), type(UNKNOWN)))
 TERMINATORS = {"die", "exit"}
 CALLBACK_BUILTINS = {"call_user_func", "call_user_func_array", "array_map", "array_walk", "array_filter", "usort", "uasort", "uksort"}
 SAFE_REGEX = re.compile(r"^/\^?\[([^\]]+)\][+*]?\$?/[a-zA-Z]*$|^/\^\\(?:d|w)[+*]?\$/[a-zA-Z]*$")
@@ -99,6 +101,7 @@ class PhpInterp:
         self.dead: list[tuple] = []
         self._active: set[int] = set()
         self._tid = 0
+        self._san: dict = {}
         self.parents: dict[int, frozenset[int]] = {}
 
     # ------------------------------------------------------------------ helpers
@@ -129,6 +132,8 @@ class PhpInterp:
         return all(self._safe_tid(p, fr, depth + 1) for p in ps)
 
     def _revalidate(self, v: Val, fr: "PFrame") -> Val:
+        if type(v) in _NEVER_TAINTED:  # (most values: constants and "safe"/"unknown" markers)
+            return v
         if isinstance(v, Tainted):
             return SAFE if v.tid and self._safe_tid(v.tid, fr) else v
         if isinstance(v, Choice) and any(isinstance(a, Tainted) for a in v.alts):
@@ -149,9 +154,19 @@ class PhpInterp:
             self.dead.append(self._key(fr, n))
 
     def _sanitizer(self, name: str, recv: str = "") -> bool:
+        key = (name, recv)
+        got = self._san.get(key)
+        if got is None:
+            got = self._san[key] = self._sanitizer_uncached(name, recv)
+        return got
+
+    def _sanitizer_uncached(self, name: str, recv: str) -> bool:
         low = name.lower()
         for c in self.cwes:
-            if low in {x.lower() for x in SANITIZERS.get(c, ())}:
+            lows = _SAN_LOWER.get(c)
+            if lows is None:
+                lows = _SAN_LOWER[c] = frozenset(x.lower() for x in SANITIZERS.get(c, ()))
+            if low in lows:
                 return True
             pat = NAME_SANITIZERS.get(c)
             if pat is not None and pat.match(low):
@@ -200,8 +215,8 @@ class PhpInterp:
             return UNKNOWN
         self._tick()
         val = self._revalidate(self._eval(node, fr), fr)
-        key = self._key(fr, node)
-        if key in self.probe_keys:
+        key = self._key(fr, node) if self.probe_keys else None  # (nothing to record in a normal scan)
+        if key is not None and key in self.probe_keys:
             self.probes.setdefault(key, []).append((val, classify(val)))
         return val
 
