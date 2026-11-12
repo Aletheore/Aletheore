@@ -42,6 +42,9 @@ class PyFile:
     # local name -> (module dotted name or "", symbol or None, relative level)
     imports: dict[str, tuple[str, str | None, int]] = field(default_factory=dict)
     constants: dict[str, Node] = field(default_factory=dict)
+    # module-level container name -> contributions: (kind, key node, value node, def node, env)
+    # kind "value": evaluate `value`; "func": the function `def`; env maps registrar parameter -> argument node
+    registry: dict[str, list] = field(default_factory=dict)
 
 
 def _decorated(node: Node) -> Node:
@@ -82,6 +85,7 @@ def _scan(file: PyFile) -> None:
 
     top(file.root)
     _collect_imports(file)
+    _collect_registry(file)
 
 
 def _collect_imports(file: PyFile) -> None:
@@ -215,3 +219,154 @@ class PyIndex:
         if attr in mod.classes:
             return "class", mod.classes[attr], mod
         return None
+
+
+def _params(fn: Node) -> list[str]:
+    ps = fn.child_by_field_name("parameters")
+    out = []
+    if ps is not None:
+        for p in ps.named_children:
+            if p.type == "identifier":
+                out.append(_t(p))
+            elif p.type in ("default_parameter", "typed_parameter", "typed_default_parameter"):
+                nm = p.child_by_field_name("name") or (p.named_children[0] if p.named_children else None)
+                if nm is not None and nm.type == "identifier":
+                    out.append(_t(nm))
+    return out
+
+
+def _registrar_specs(file: PyFile, name: str) -> list[tuple]:
+    """What a module-level function does to module-level containers: (container, key, value param, owner),
+    where key is ("param", name), ("const", node) or None, and owner is "outer" when the registered value is a
+    parameter of the function itself (a plain registrar) or "inner" when it is a parameter of a function nested in
+    it (a decorator factory)."""
+    fn = file.functions.get(name)
+    if fn is None:
+        return []
+    outer = _params(fn)
+    specs: list[tuple] = []
+
+    def note(container: str, key_n: Node | None, val_n: Node, scopes: list[list[str]]) -> None:
+        if container not in file.constants or container in outer or val_n.type != "identifier":
+            return
+        v = _t(val_n)
+        owner = "outer" if v in outer and len(scopes) == 1 else ("inner" if len(scopes) > 1 and v in scopes[-1] else None)
+        if owner is None:
+            return
+        key = None
+        if key_n is not None:
+            if key_n.type == "identifier" and _t(key_n) in outer:
+                key = ("param", _t(key_n))
+            elif key_n.type == "string":
+                key = ("const", key_n)
+        specs.append((container, key, v, owner))
+
+    def walk(n: Node, scopes: list[list[str]]) -> None:
+        if n.type == "function_definition" and n is not fn:
+            scopes = scopes + [_params(n)]
+        if n.type == "call":
+            f = n.child_by_field_name("function")
+            a = n.child_by_field_name("arguments")
+            if f is not None and f.type == "attribute" and a is not None and a.named_children:
+                obj = f.child_by_field_name("object")
+                meth = _t(f.child_by_field_name("attribute"))
+                if obj is not None and obj.type == "identifier" and meth in ("append", "add"):
+                    note(_t(obj), None, a.named_children[0], scopes)
+        elif n.type == "assignment":
+            left, right = n.child_by_field_name("left"), n.child_by_field_name("right")
+            if left is not None and left.type == "subscript" and right is not None:
+                base = left.child_by_field_name("value")
+                idx = left.children_by_field_name("subscript")
+                if base is not None and base.type == "identifier" and idx:
+                    note(_t(base), idx[0], right, scopes)
+        for c in n.named_children:
+            walk(c, scopes)
+
+    body = fn.child_by_field_name("body")
+    if body is not None:
+        walk(body, [outer])
+    return specs
+
+
+def _args_env(call: Node | None, params: list[str]) -> dict[str, Node]:
+    env: dict[str, Node] = {}
+    a = call.child_by_field_name("arguments") if call is not None else None
+    if a is None:
+        return env
+    i = 0
+    for c in a.named_children:
+        if c.type == "keyword_argument":
+            nm = c.child_by_field_name("name")
+            vv = c.child_by_field_name("value")
+            if nm is not None and vv is not None:
+                env[_t(nm)] = vv
+        elif i < len(params):
+            env[params[i]] = c
+            i += 1
+    return env
+
+
+def _collect_registry(file: PyFile) -> None:
+    """Module-level statements that fill a module-level list or dict: `REG.append(f)`, `TABLE['k'] = f`,
+    `register(f)` and `@register` / `@on('k')` on a function."""
+    cache: dict[str, list] = {}
+
+    def specs(name: str) -> list:
+        if name not in cache:
+            cache[name] = _registrar_specs(file, name)
+        return cache[name]
+
+    def add(container: str, entry: tuple) -> None:
+        file.registry.setdefault(container, []).append(entry)
+
+    def call_site(call: Node, defn: Node | None, bare: bool) -> None:
+        f = call if bare else call.child_by_field_name("function")
+        if f is None or f.type != "identifier":
+            return
+        reg = _t(f)
+        fn = file.functions.get(reg)
+        if fn is None:
+            return
+        outer = _params(fn)
+        for container, key, vparam, owner in specs(reg):
+            if defn is None:
+                if owner != "outer":
+                    continue
+                env = _args_env(call, outer)
+                if vparam in env:
+                    add(container, ("value", key, env[vparam], None, env))
+            else:
+                if bare and owner == "outer":
+                    add(container, ("func", key, None, defn, {vparam: None}))
+                elif not bare and owner == "inner":
+                    add(container, ("func", key, None, defn, _args_env(call, outer)))
+
+    for c in file.root.named_children:
+        d = _decorated(c)
+        if c.type == "decorated_definition" and d is not None and d.type == "function_definition":
+            for dec in c.named_children:
+                if dec.type != "decorator" or not dec.named_children:
+                    continue
+                e = dec.named_children[0]
+                if e.type == "identifier":
+                    call_site(e, d, True)
+                elif e.type == "call":
+                    call_site(e, d, False)
+        elif c.type == "expression_statement":
+            for a in c.named_children:
+                if a.type == "call":
+                    f = a.child_by_field_name("function")
+                    args = a.child_by_field_name("arguments")
+                    if f is not None and f.type == "attribute" and args is not None and args.named_children:
+                        obj = f.child_by_field_name("object")
+                        if obj is not None and obj.type == "identifier" and _t(f.child_by_field_name("attribute")) in ("append", "add"):
+                            add(_t(obj), ("value", None, args.named_children[0], None, {}))
+                    elif f is not None and f.type == "identifier":
+                        call_site(a, None, False)
+                elif a.type == "assignment":
+                    left, right = a.child_by_field_name("left"), a.child_by_field_name("right")
+                    if left is not None and left.type == "subscript" and right is not None:
+                        base = left.child_by_field_name("value")
+                        idx = left.children_by_field_name("subscript")
+                        if base is not None and base.type == "identifier" and idx:
+                            add(_t(base), ("value", idx[0], right, None, {}))

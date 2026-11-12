@@ -725,10 +725,14 @@ class CsInterp:
         if tname == "ZipArchive":
             return _zip_archive(fr)
         if tname in ("List", "ArrayList", "HashSet", "Queue", "Stack", "Collection", "LinkedList", "SortedSet"):
-            return ListV(list(args[0].items) if args and isinstance(args[0], ListV) else [], birth_depth=fr.branch,
-                         dirty=bool(args and not isinstance(args[0], (ListV, Const))))
+            lv = ListV(list(args[0].items) if args and isinstance(args[0], ListV) else [], birth_depth=fr.branch,
+                       dirty=bool(args and not isinstance(args[0], (ListV, Const))))
+            self._collection_initializer(lv, n, fr)
+            return lv
         if tname in ("Dictionary", "Hashtable", "SortedDictionary", "NameValueCollection", "ConcurrentDictionary"):
-            return MapV({}, birth_depth=fr.branch, dirty=bool(args and not isinstance(args[0], Const)))
+            mv = MapV({}, birth_depth=fr.branch, dirty=bool(args and not isinstance(args[0], Const)))
+            self._collection_initializer(mv, n, fr)
+            return mv
         if tname == "StringBuilder":
             return BuilderV(list(args[:1]) if args and not (isinstance(args[0], Const) and isinstance(args[0].value, int)) else [], birth_depth=fr.branch)
         if tname == "String" and args:
@@ -764,6 +768,35 @@ class CsInterp:
         except (BudgetExceeded, RecursionError):
             pass
         return obj
+
+    def _collection_initializer(self, coll: Val, n: Node, fr: CFrame) -> None:
+        """`new List<string> { a, b }` and `new Dictionary<K, V> { { k, v }, [k] = v }`."""
+        init = n.child_by_field_name("initializer") or next((c for c in n.children if c.type == "initializer_expression"), None)
+        if init is None:
+            return
+        for c in init.named_children:
+            if isinstance(coll, ListV):
+                coll.items.append(self.eval(c, fr))
+                continue
+            key = val = None
+            if c.type == "initializer_expression" and len(c.named_children) == 2:
+                key, val = self.eval(c.named_children[0], fr), self.eval(c.named_children[1], fr)
+            elif c.type == "assignment_expression":
+                left = c.child_by_field_name("left")
+                idx = next((x for x in (left.named_children if left is not None else []) if x.type in ("bracketed_argument_list", "argument")), None)
+                inner = idx.named_children[-1] if idx is not None and idx.named_children else None
+                if inner is not None and inner.type == "argument":
+                    inner = inner.named_children[-1] if inner.named_children else None
+                if inner is not None:
+                    key = self.eval(inner, fr)
+                val = self.eval(c.child_by_field_name("right"), fr)
+            if val is None:
+                coll.dirty = True
+            elif isinstance(key, Const):
+                coll.entries[key.value] = val
+            else:
+                coll.entries[("*", id(c))] = val
+                coll.dirty = True
 
     def _apply_initializer(self, obj: Obj, init: Node | None, fr: CFrame) -> None:
         for c in (init.named_children if init is not None else []):

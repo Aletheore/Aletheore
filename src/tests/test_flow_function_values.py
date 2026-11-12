@@ -344,3 +344,56 @@ def test_rust_function_in_a_map_and_a_vec(tmp_path):
 
 def test_rust_closure_that_ignores_its_argument_is_quiet(tmp_path):
     assert _cmd(tmp_path, "main.rs", RS_HEAD + "    let f = |s: &str| {};\n    f(&x);\n" + RS_TAIL) == []
+
+
+REG = "REG = []\ndef register(f):\n    REG.append(f)\n    return f\n"
+DECO = "HANDLERS = {}\ndef on(name):\n    def deco(f):\n        HANDLERS[name] = f\n        return f\n    return deco\n\n"
+
+
+def test_py_registry_filled_by_a_register_call(tmp_path):
+    body = REG + "register(sink)\n\n" + ROUTE + "    for f in REG:\n        f(request.args.get('x'))\n"
+    assert _lines(tmp_path, body) == [6]
+
+
+def test_py_registry_of_safe_functions_stays_quiet(tmp_path):
+    body = REG + "def clean(x):\n    pass\nregister(clean)\n\n" + ROUTE + "    for f in REG:\n        f(request.args.get('x'))\n"
+    assert _lines(tmp_path, body) == []
+
+
+def test_py_decorator_registry_with_a_key(tmp_path):
+    body = DECO + "@on('go')\ndef go(x):\n    os.system('echo ' + x)\n\n" + ROUTE + "    HANDLERS['go'](request.args.get('x'))\n"
+    assert len(_lines(tmp_path, body)) == 1
+
+
+def test_py_decorator_registry_other_key_stays_quiet(tmp_path):
+    body = (DECO + "def clean(x):\n    pass\n\n@on('safe')\ndef c2(x):\n    clean(x)\n\n@on('go')\ndef go(x):\n    os.system('echo ' + x)\n\n"
+            + ROUTE + "    HANDLERS['safe'](request.args.get('x'))\n")
+    assert _lines(tmp_path, body) == []
+
+
+def test_py_bare_decorator_registers_the_function(tmp_path):
+    body = REG + "@register\ndef go(x):\n    os.system('echo ' + x)\n\n" + ROUTE + "    for f in REG:\n        f(request.args.get('x'))\n"
+    assert len(_lines(tmp_path, body)) == 1
+
+
+def test_py_direct_append_and_item_assignment(tmp_path):
+    body = "REG = []\nREG.append(sink)\nT = {}\nT['k'] = sink\n\n" + ROUTE + "    REG[0](request.args.get('x'))\n"
+    assert _lines(tmp_path, body) == [6]
+    body = "T = {}\nT['k'] = sink\n\n" + ROUTE + "    T['k'](request.args.get('x'))\n"
+    assert _lines(tmp_path, body) == [6]
+
+
+def test_cs_collection_initializers(tmp_path):
+    cases = [
+        '    var m = new Dictionary<string, Action<string>>{{"go", Sink}};\n    m["go"](x);\n',
+        '    var m = new Dictionary<string, Action<string>>{["go"] = Sink};\n    m["go"](x);\n',
+        "    new List<string>{x}.ForEach(s => Sink(s));\n",
+        "    new List<string>{x}.ForEach(Sink);\n",
+    ]
+    for body in cases:
+        assert _cmd(tmp_path, "A.cs", CS_HEAD + body + CS_TAIL) == [6], body
+
+
+def test_cs_collection_initializer_of_safe_values_stays_quiet(tmp_path):
+    body = '    var m = new Dictionary<string, string>{{"a", "1"}};\n    Sink(m["a"]);\n    new List<string>{"k"}.ForEach(s => Sink(s));\n'
+    assert _cmd(tmp_path, "A.cs", CS_HEAD + body + CS_TAIL) == []

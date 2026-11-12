@@ -251,6 +251,7 @@ class PyInterp:
             self._active.add(id(const))
             try:
                 v = self.eval(const, PFrame(fr.file, None, None, fr.depth + 1))
+                v = self._with_registry(v, name, fr.file, fr.depth)
             finally:
                 self._active.discard(id(const))
             return v if classify(v) == "safe" else UNKNOWN
@@ -262,6 +263,7 @@ class PyInterp:
                 self._active.add(id(node))
                 try:
                     v = self.eval(node, PFrame(mod, None, None, fr.depth + 1))
+                    v = self._with_registry(v, imp[1], mod, fr.depth)
                 finally:
                     self._active.discard(id(node))
                 return v if classify(v) == "safe" else UNKNOWN
@@ -269,6 +271,37 @@ class PyInterp:
         if hit is not None and hit[0] == "function":
             return FuncV(hit[1], hit[2], name=name)
         return UNKNOWN
+
+    def _with_registry(self, v: Val, name: str, file: PyFile, depth: int) -> Val:
+        """Add what module-level `register(f)`, `NAME.append(f)`, `NAME[k] = f` and decorators put into the
+        container `name`. A fresh container is built on every read, so this mutates it in place."""
+        sites = file.registry.get(name)
+        if not sites or not isinstance(v, (ListV, MapV)) or depth > self.MAX_DEPTH:
+            return v
+        mod = PFrame(file, None, None, depth + 1)
+        for kind, key, val_n, defn, env in sites:
+            if kind == "func":
+                item: Val = FuncV(defn, file, name=_t(defn.child_by_field_name("name")))
+            else:
+                item = self.eval(val_n, mod)
+            if isinstance(v, ListV):
+                v.items.append(item)
+            else:
+                k = None
+                if key is not None:
+                    if isinstance(key, tuple) and key[0] == "param":
+                        kn = env.get(key[1])
+                        k = self.eval(kn, mod) if kn is not None else None
+                    elif isinstance(key, tuple):
+                        k = self.eval(key[1], mod)
+                    else:
+                        k = self.eval(key, mod)
+                if isinstance(k, Const):
+                    v.entries[k.value] = item
+                else:
+                    v.entries[("*", id(val_n or defn))] = item
+                    v.dirty = True
+        return v
 
     def _attr(self, n: Node, fr: PFrame) -> Val:
         obj_n, attr = n.child_by_field_name("object"), _t(n.child_by_field_name("attribute"))
