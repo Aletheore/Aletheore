@@ -965,14 +965,16 @@ def _query_batch(pins: list[tuple[str, str, str]], timeout: int) -> list[dict]:
     request = urllib.request.Request(
         OSV_BATCH_URL, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
-    with urllib.request.urlopen(request, timeout=timeout, context=_tls_context()) as response:
+    # B310: the URL is the fixed https OSV endpoint above, never a file: or custom scheme
+    with urllib.request.urlopen(request, timeout=timeout, context=_tls_context()) as response:  # nosec B310
         return json.loads(response.read())["results"]
 
 
 def _fetch_vuln_detail(vuln_id: str, timeout: int) -> dict:
     request = urllib.request.Request(OSV_VULN_URL_TEMPLATE.format(vuln_id=vuln_id))
     try:
-        with urllib.request.urlopen(request, timeout=timeout, context=_tls_context()) as response:
+        # B310: the URL is built from the fixed https OSV template, never a file: or custom scheme
+        with urllib.request.urlopen(request, timeout=timeout, context=_tls_context()) as response:  # nosec B310
             return json.loads(response.read())
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
         # One advisory's detail lookup failing isn't the same as the whole
