@@ -65,7 +65,7 @@ def _tainted_string(v) -> bool:
 
 
 def _is_controller(cls: RbClass) -> bool:
-    return any(b.endswith("Controller") or b in ("ActionController::Base", "Sinatra::Base", "Grape::API") for b in cls.bases) or cls.name.endswith("Controller")
+    return b"Hanami::Action" in cls.node.text or any(b.endswith("Controller") or b in ("ActionController::Base", "Sinatra::Base", "Grape::API") for b in cls.bases) or cls.name.endswith("Controller")
 
 
 def _sinatra_blocks(cls: RbClass):

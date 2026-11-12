@@ -79,6 +79,9 @@ def _rel_parts(path: Path, repo: Path) -> tuple:
         return path.resolve().relative_to(repo.resolve()).parts
 
 
+_FALCON_VERBS = frozenset(f"on_{v}" for v in ("get", "post", "put", "patch", "delete", "head", "options"))
+
+
 def _public_py(cls, fn) -> bool:
     name = fn.child_by_field_name("name").text.decode("utf-8", "replace")
     if cls is not None and (cls.name.startswith("_") or cls.name.startswith("Test")):
@@ -97,9 +100,12 @@ def _entries(pf: PyFile, index: PyIndex | None = None):
 
     for fn in pf.functions.values():
         yield None, fn, is_route(fn)
+    verbs = {"get", "post", "put", "patch", "delete", "head", "options", "prepare", "open", "on_message", "list", "create", "retrieve", "update", "destroy"}
     for cls in pf.classes.values():
+        handler = PyInterp.handler_class(cls)
         for fn in cls.methods.values():
-            yield cls, fn, is_route(fn)
+            nm = fn.child_by_field_name("name").text.decode("utf-8", "replace")
+            yield cls, fn, is_route(fn) or (handler and (nm in verbs or nm.startswith("on_"))) or nm in _FALCON_VERBS
         # A method a subclass inherits runs on the subclass: that is where its constructor set the fields the method reads.
         seen, own = {id(cls)}, set(cls.methods)
         todo = list(cls.bases)

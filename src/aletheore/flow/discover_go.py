@@ -164,7 +164,7 @@ def discover_go(repo: Path, index: GoIndex | None = None, budget_seconds: float 
                         break
                     interp = GoInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                    this = Obj(type_name=rtype) if rtype else None
+                    this = (Obj(kind="request", type_name=rtype) if rtype and rtype.lstrip("*") in gf.controller_types else Obj(type_name=rtype)) if rtype else None
                     fr = GFrame(gf, this, 0)
                     route_now[0] = is_lib
                     try:

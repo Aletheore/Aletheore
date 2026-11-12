@@ -304,6 +304,10 @@ class PyInterp:
         return v
 
     def _attr(self, n: Node, fr: PFrame) -> Val:
+        obj_n = n.child_by_field_name("object")
+        if obj_n is not None and obj_n.type == "identifier" and _t(obj_n) == "self" and _t(n.child_by_field_name("attribute")) == "request" \
+                and fr.self_obj is not None and "request" not in fr.self_obj.fields and self.handler_class(fr.cls):
+            return Obj(kind="request", type_name="Request")  # self.request in a Tornado handler
         obj_n, attr = n.child_by_field_name("object"), _t(n.child_by_field_name("attribute"))
         base = self.eval(obj_n, fr)
         if isinstance(base, Obj):
@@ -843,7 +847,7 @@ class PyInterp:
             name = _t(name_n)
             if name in ("self", "cls"):
                 fr.env[name] = fr.self_obj or UNKNOWN
-            elif name == "request":
+            elif name == "request" or (name == "req" and route is True):
                 fr.env[name] = Obj(kind="request", type_name="Request")
             elif route == "lib" and t != "list_splat_pattern":
                 fr.env[name] = Tainted("library parameter")  # a public function of a library: its caller chooses the arguments
@@ -860,9 +864,24 @@ class PyInterp:
         e = Tainted("archive.entry")
         return Obj(type_name="ArchiveEntry", fields={"filename": e, "name": e, "orig_filename": e, "path": e, "linkname": e})
 
+    _HANDLER_SOURCES = frozenset((
+        "get_argument", "get_arguments", "get_query_argument", "get_query_arguments", "get_body_argument", "get_body_arguments",
+        "get_cookie", "get_secure_cookie", "get_json_body", "get_param", "get_header", "get_param_as_list", "get_param_as_int",
+    ))
+    _UI_INPUTS = frozenset(("text_input", "text_area", "chat_input", "file_uploader", "data_editor", "code_editor", "text_input_stream"))
+
+    @staticmethod
+    def handler_class(cls) -> bool:
+        """A class that handles requests by being subclassed from a framework handler (Tornado, Falcon resources, ...)."""
+        return cls is not None and any(b.endswith(("RequestHandler", "Handler", "Resource", "WebSocketHandler")) for b in cls.bases)
+
     def _method(self, recv: Val, name: str, args: list[Val], kw: dict, fr: PFrame, recv_text: str) -> Val:
         if isinstance(recv, Choice):
             return join_all(self._method(a, name, args, kw, fr, recv_text) for a in recv.alts)
+        if recv_text == "self" and name in self._HANDLER_SOURCES and self.handler_class(fr.cls):
+            return Tainted("request." + name)  # self.get_argument('d') in a Tornado handler
+        if recv_text in ("st", "streamlit") and name in self._UI_INPUTS:
+            return Tainted("request." + name)  # a Streamlit widget: whatever the visitor typed
         if recv_text not in ("inspect", "self") and not (isinstance(recv, Obj) and (recv.kind == "request" or recv.cls is not None)):
             # zipfile / tarfile: entry names are chosen by whoever made the archive (zip slip)
             if name in ("namelist", "getnames") and not args:

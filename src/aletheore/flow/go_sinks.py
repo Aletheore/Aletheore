@@ -9,7 +9,13 @@ REQUEST_METHODS = {"FormValue", "PostFormValue", "Cookie", "Cookies", "Referer",
                    "Query", "DefaultQuery", "QueryArray", "QueryMap", "Param", "Params", "PostForm", "DefaultPostForm", "GetHeader", "GetRawData",
                    "ShouldBind", "ShouldBindJSON", "ShouldBindQuery", "Bind", "BindJSON", "BindQuery", "QueryParam", "QueryParams", "QueryString",
                    "FormParams", "Header", "Body", "URL", "RequestURI", "Host", "RemoteAddr", "Form", "PostForm", "MultipartForm", "Trailer", "Path",
-                   "Get", "Cookie", "Query"}
+                   "Get", "Cookie", "Query", "PathValue", "GetString", "GetStrings", "GetCookie", "GetFile", "GetFiles", "Input", "Ctx",
+                   "URLParam", "Params_x"}
+# Router packages that read the path variables of a request: chi.URLParam(r, "id"), mux.Vars(r), httprouter.ParamsFromContext(ctx)
+ROUTER_SOURCES = {("chi", "URLParam"), ("chi", "URLParamFromCtx"), ("mux", "Vars"), ("httprouter", "ParamsFromContext"), ("bone", "GetValue"),
+                  ("pat", "Param"), ("goji", "Param"), ("way", "Param"), ("mux", "Var")}
+# A beego controller: its methods are handlers, and `c.GetString("d")` reads the request.
+CONTROLLER_HOLDERS = ("web.Controller", "beego.Controller")
 # Methods that parse the request body or query into the value they are handed (`c.ShouldBindJSON(&req)`):
 # the pointed-to variable then holds request data.
 BINDERS = {"Bind", "BindJSON", "BindQuery", "BindXML", "BindYAML", "BindForm", "BindUri", "BindHeader", "BindWith",
@@ -19,8 +25,8 @@ BINDERS = {"Bind", "BindJSON", "BindQuery", "BindXML", "BindYAML", "BindForm", "
 # Packages whose Unmarshal(data, &v) fills v from data.
 UNMARSHAL_PKGS = {"json", "xml", "yaml", "toml", "msgpack", "jsoniter", "sonic", "easyjson", "proto", "protojson", "ini", "hcl"}
 # A struct that holds one of these is the framework's per-request context.
-REQUEST_HOLDERS = ("http.Request", "gin.Context", "echo.Context", "fiber.Ctx", "fasthttp.RequestCtx", "iris.Context")
-REQUEST_FIELDS = {"Form", "PostForm", "MultipartForm", "Header", "Body", "URL", "RequestURI", "Host", "Referer", "RemoteAddr", "Trailer", "Cookies", "Params"}
+REQUEST_HOLDERS = ("http.Request", "gin.Context", "echo.Context", "fiber.Ctx", "fasthttp.RequestCtx", "iris.Context", "web.Controller", "beego.Controller")
+REQUEST_FIELDS = {"Ctx", "Input", "Form", "PostForm", "MultipartForm", "Header", "Body", "URL", "RequestURI", "Host", "Referer", "RemoteAddr", "Trailer", "Cookies", "Params"}
 
 SANITIZERS: dict[int, set[str]] = {
     79: {"EscapeString", "HTMLEscapeString", "HTMLEscaper", "JSEscapeString", "QueryEscape", "PathEscape", "Sanitize", "SanitizeBytes", "UGCPolicy", "Clean"},

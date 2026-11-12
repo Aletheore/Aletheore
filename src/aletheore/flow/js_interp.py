@@ -583,6 +583,32 @@ class JsInterp:
     def bind_entry(self, fn: Node, fr: JFrame, route: bool) -> None:
         """Entry point: request-like parameters are the request, the second is the response."""
         params = fn.child_by_field_name("parameters")
+        if route == "nest" and params is not None:
+            # NestJS: `@Query('d') d: string`, `@Param()`, `@Body() body`, `@Headers()`, `@Req() req`
+            for p in params.named_children:
+                target = p.child_by_field_name("pattern") if p.type in ("required_parameter", "optional_parameter") else None
+                if target is None or target.type != "identifier":
+                    continue
+                decos = [_t(c).lstrip("@").split("(")[0] for c in p.children if c.type == "decorator"]
+                if any(d in ("Req", "Request") for d in decos):
+                    fr.env[_t(target)] = Obj(kind="request", type_name="Request")
+                elif any(d in ("Query", "Param", "Body", "Headers", "Header", "Cookies", "Ip", "HostParam", "UploadedFile", "UploadedFiles", "Payload", "MessageBody") for d in decos):
+                    fr.env[_t(target)] = Tainted("request.nest")
+                else:
+                    fr.env[_t(target)] = UNKNOWN
+            return
+        if route == "trpc" and params is not None and params.named_children:
+            p = params.named_children[0]
+            pat = p.child_by_field_name("pattern") if p.type in ("required_parameter", "optional_parameter") else p
+            if pat is not None and pat.type == "object_pattern":
+                for c in pat.named_children:
+                    nm = c if c.type == "shorthand_property_identifier_pattern" else c.child_by_field_name("value") if c.type == "pair_pattern" else None
+                    key = _t(c) if c.type == "shorthand_property_identifier_pattern" else _t(c.child_by_field_name("key")) if c.type == "pair_pattern" else ""
+                    if nm is not None and nm.type in ("identifier", "shorthand_property_identifier_pattern"):
+                        fr.env[_t(nm)] = Tainted("request.trpc") if key == "input" else UNKNOWN
+            elif pat is not None and pat.type == "identifier":
+                fr.env[_t(pat)] = Obj(fields={"input": Tainted("request.trpc")}, type_name="TrpcOptions")
+            return
         names: list[str] = []
         if params is None:
             p = fn.child_by_field_name("parameter")

@@ -70,6 +70,12 @@ def _js_files(repo: Path) -> list[Path]:
     return out
 
 
+def _is_bundle(data: bytes) -> bool:
+    """A bundled or minified library (mathjax, react-dom, three): not code anyone wrote or reviews, and the largest cost in a scan."""
+    n = len(data)
+    return n > 600_000 or (n > 60_000 and n / (data.count(b"\n") + 1) > 250)
+
+
 def has_javascript(repo: Path) -> bool:
     return bool(_js_files(repo))
 
@@ -200,6 +206,43 @@ def _route_handlers(jf: JsFile):
         stack.extend(n.children)
 
 
+_NEST_VERBS = {"Get", "Post", "Put", "Delete", "Patch", "All", "Options", "Head", "Sse", "MessagePattern", "EventPattern", "GrpcMethod", "GrpcStreamMethod",
+               "SubscribeMessage", "Query", "Mutation", "Subscription", "ResolveField", "Process"}
+
+
+def _nest_handlers(jf: JsFile):
+    """Methods of a NestJS controller, gateway or resolver: `@Get()`, `@Post()`, `@MessagePattern()`, `@Query()` (GraphQL)."""
+    stack = [jf.root]
+    while stack:
+        n = stack.pop()
+        if n.type == "method_definition":
+            decos = [c.text.decode("utf-8", "replace").lstrip("@").split("(")[0] for c in n.children if c.type == "decorator"]
+            prev = n.prev_sibling  # in a class body the decorators are the siblings just before the method
+            while prev is not None and prev.type == "decorator":
+                decos.append(prev.text.decode("utf-8", "replace").lstrip("@").split("(")[0])
+                prev = prev.prev_sibling
+            if any(d in _NEST_VERBS for d in decos):
+                yield n
+        stack.extend(n.children)
+
+
+def _trpc_handlers(jf: JsFile):
+    """`t.procedure.input(schema).query(({ input }) => ...)` and `.mutation(...)`: the input is whatever the client sent."""
+    stack = [jf.root]
+    while stack:
+        n = stack.pop()
+        if n.type == "call_expression":
+            f = n.child_by_field_name("function")
+            if f is not None and f.type == "member_expression" and f.child_by_field_name("property") is not None \
+                    and f.child_by_field_name("property").text.decode("utf-8", "replace") in ("query", "mutation", "subscription") \
+                    and b"procedure" in f.text.lower() or (f is not None and f.type == "member_expression" and b".input(" in f.text):
+                args = n.child_by_field_name("arguments")
+                fns = [a for a in (args.named_children if args is not None else []) if a.type in FN_TYPES]
+                if fns:
+                    yield fns[-1]
+        stack.extend(n.children)
+
+
 _MCP_REGISTRARS = {"tool", "registerTool", "setRequestHandler", "addTool"}
 
 
@@ -316,6 +359,8 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
                 data = path.read_bytes()
             except OSError:
                 continue
+            if _is_bundle(data):
+                continue
             entry_file = any(w in data for w in _ENTRY_WORDS)
             cwes = [c for c in DISCOVER_CWES_JS if c in present and _X.local_ok(c, data, _SINK_WORDS, "javascript")] if entry_file else [c for c in DISCOVER_CWES_JS if any(w in data for w in _SINK_WORDS[c])]
             cwes = [c for c in cwes if _X.added("javascript", c) == (phase == 1)]
@@ -329,8 +374,11 @@ def discover_javascript(repo: Path, index: JsIndex | None = None, budget_seconds
             nexts = list(_next_route_handlers(jf)) if _next_server_file(path.relative_to(repo).parts) else []
             handler_ids = {id(h) for h in handlers} | {id(h) for h in nexts}
             mcps = [h for h in _mcp_handlers(jf) if id(h) not in handler_ids]
-            entries = [(None, False)] + [(h, True) for h in handlers] + [(h, "next") for h in nexts] + [(h, "mcp") for h in mcps]
-            handler_ids |= {id(h) for h in mcps}
+            nests = [h for h in _nest_handlers(jf) if id(h) not in handler_ids]
+            trpcs = [h for h in _trpc_handlers(jf) if id(h) not in handler_ids and id(h) not in {id(x) for x in mcps}]
+            entries = [(None, False)] + [(h, True) for h in handlers] + [(h, "next") for h in nexts] + [(h, "mcp") for h in mcps] \
+                + [(h, "nest") for h in nests] + [(h, "trpc") for h in trpcs]
+            handler_ids |= {id(h) for h in mcps} | {id(h) for h in nests} | {id(h) for h in trpcs}
             if library:
                 libs = [h for h in _exported_functions(jf) if id(h) not in handler_ids]
                 entries += [(h, "lib") for h in libs]

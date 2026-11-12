@@ -489,6 +489,8 @@ class CsInterp:
             expr, name = func.child_by_field_name("expression"), _t(func.child_by_field_name("name"))
             recv_text = _t(expr)
             args = self._args(args_n, fr)
+            if name in ("MapGet", "MapPost", "MapPut", "MapDelete", "MapPatch", "MapMethods", "Map") and args and isinstance(args[-1], ClosureV):
+                self._run_minimal_api_handler(args[-1], fr)  # app.MapGet("/", (string d) => ...): the parameters are request data
             if self._sanitizer(name, recv_text):
                 self.eval(expr, fr)
                 return SAFE
@@ -519,6 +521,21 @@ class CsInterp:
         if self._callable_part(target):
             return self._call_value(target, args, fr)
         return self._opaque(None, args)
+
+    def _run_minimal_api_handler(self, c: ClosureV, fr: CFrame) -> None:
+        params = c.node.child_by_field_name("parameters") or next((x for x in c.node.children if x.type == "parameter_list"), None)
+        vals: list[Val] = []
+        for p in (params.named_children if params is not None else []):
+            ids = [x for x in p.named_children if x.type == "identifier"]
+            ptype = next((x for x in p.named_children if x.type in ("predefined_type", "identifier", "generic_name", "nullable_type", "qualified_name", "array_type") and x is not (ids[-1] if ids else None)), None)
+            t = _t(ptype).rstrip("?") if ptype is not None else ""
+            if t in ("HttpRequest", "HttpContext"):
+                vals.append(Obj(kind="request", type_name="Request"))
+            elif t in ("string", "String", "string[]", "List<string>", "IEnumerable<string>") or t.endswith("Dto") or t.endswith("Request") or t.endswith("Model"):
+                vals.append(Tainted("route-param"))
+            else:
+                vals.append(UNKNOWN)
+        self._call_closure(c, vals, fr)
 
     def _call_closure(self, c: ClosureV, args: list[Val], fr: CFrame) -> Val:
         if fr.depth + 1 > self.MAX_DEPTH or id(c.node) in self._active:

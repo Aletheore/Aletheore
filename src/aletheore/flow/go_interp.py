@@ -19,7 +19,7 @@ from aletheore.flow import extra_sinks as _X
 from aletheore.flow import guards as G
 from aletheore.flow.go_index import GoFile, GoIndex
 from aletheore.flow.go_sinks import (
-    BINDERS, PURE_PKGS, UNMARSHAL_PKGS, REQUEST_FIELDS, REQUEST_METHODS, REQUEST_PARAM_TYPES, RESPONSE_PARAM_TYPES, SAFE_FUNCS, SANITIZERS,
+    ROUTER_SOURCES, BINDERS, PURE_PKGS, UNMARSHAL_PKGS, REQUEST_FIELDS, REQUEST_METHODS, REQUEST_PARAM_TYPES, RESPONSE_PARAM_TYPES, SAFE_FUNCS, SANITIZERS,
 )
 from aletheore.flow.values import CallableV, add_prefix, SAFE, UNKNOWN, BuilderV, Choice, Const, ListV, MapV, Obj, Tainted, Val, classify, join, join_all
 
@@ -265,6 +265,8 @@ class GoInterp:
         base = self.eval(op_n, fr)
         if isinstance(base, Obj):
             if base.kind == "request":
+                if base.type_name == "GrpcRequest":
+                    return Tainted("request." + field_name)  # every field of a gRPC request message is client data
                 return Tainted("request." + field_name) if field_name in REQUEST_FIELDS else UNKNOWN
             if field_name in base.fields:
                 return base.fields[field_name]
@@ -381,12 +383,19 @@ class GoInterp:
     def _bind_params(self, fn: Node, args: list[Val], inner: GFrame, entry: bool = False, lib: bool = False) -> None:
         params = fn.child_by_field_name("parameters")
         pos = list(args)
+        prev_type = ""
         for p in (params.named_children if params is not None else []):
             if p.type not in ("parameter_declaration", "variadic_parameter_declaration"):
                 continue
             names = [c for c in p.named_children if c.type == "identifier"]
             type_n = p.child_by_field_name("type")
             ttext = _t(type_n).replace(" ", "")
+            if entry and prev_type == "context.Context" and ttext.startswith("*") and names and _t(names[0]) in ("req", "request", "in", "r", "msg"):
+                for nm in names:  # (ctx context.Context, req *pb.Message): a gRPC handler
+                    inner.env[_t(nm)] = Obj(kind="request", type_name="GrpcRequest")
+                prev_type = ttext
+                continue
+            prev_type = ttext
             for nm in names:
                 if lib and ttext in self._LIB_TYPES:
                     inner.env[_t(nm)] = Tainted("library parameter")  # an exported function of a library: its caller chooses the arguments
@@ -517,6 +526,8 @@ class GoInterp:
         return self._opaque(None, args)
 
     def _pkg_call(self, pkg: str, name: str, n: Node, args: list[Val], fr: GFrame) -> Val:
+        if (pkg, name) in ROUTER_SOURCES:
+            return Tainted("request." + name)  # chi.URLParam(r, "id"), mux.Vars(r)
         if pkg in UNMARSHAL_PKGS and name in ("Unmarshal", "UnmarshalStrict") and len(args) >= 2 and classify(args[0]) == "tainted":
             self._taint_pointees(n, fr, "request.body")
             return UNKNOWN
@@ -574,6 +585,8 @@ class GoInterp:
                 if name in BINDERS and args:
                     self._taint_pointees(node, fr, "request.body")
                     return UNKNOWN  # the error result
+                if recv.type_name == "GrpcRequest" and name.startswith("Get"):
+                    return Tainted("request." + name)
                 return Tainted("request." + name) if name in REQUEST_METHODS else UNKNOWN
             if recv.type_name == "TarReader" and name == "Next":
                 return _archive_entry()

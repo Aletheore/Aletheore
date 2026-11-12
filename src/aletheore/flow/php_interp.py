@@ -84,6 +84,10 @@ def _falsy(v: object) -> bool:
     return v is None or v is False or v == 0 or v == "" or v == "0"
 
 
+_HOOK_REGISTRARS = frozenset(("add_action", "add_filter", "add_shortcode", "register_rest_route", "wp_ajax_x"))
+_ROUTE_VERBS = frozenset(("get", "post", "put", "patch", "delete", "options", "any", "map", "match", "head", "route", "add", "group_x"))
+
+
 class PhpInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
@@ -620,6 +624,10 @@ class PhpInterp:
             return UNKNOWN
         if self._sanitizer(low):
             return SAFE
+        if low in _HOOK_REGISTRARS:
+            for a in args:  # add_action('wp_ajax_x', function () {...}): a callback WordPress runs for a request
+                if isinstance(a, ClosureV):
+                    self._call_closure(a, [Obj(kind="request", type_name="Request")], fr)
         hit = self.index.function(name, fr.file)
         if hit is not None:
             self._outs = self._ref_args(args_n) if args_n is not None else None
@@ -755,6 +763,9 @@ class PhpInterp:
         self._hook(n, name, recv_text, args, recv, fr)
         if self._sanitizer(name, recv_text):
             return SAFE
+        if name in _ROUTE_VERBS and args and isinstance(args[-1], ClosureV):
+            # $app->get('/x', function ($request, $response) {...}): Slim, Lumen, Flight, Fat-Free style routes
+            self._call_closure(args[-1], [Obj(kind="request", type_name="Request"), UNKNOWN, UNKNOWN], fr)
         if name in ("getNameIndex", "getNameIndex_x") and not (isinstance(recv, Obj) and recv.cls is not None):
             return Tainted("archive.entry")  # ZipArchive entry name: chosen by whoever made the archive (zip slip)
         if isinstance(recv, Obj) and recv.kind == "request":

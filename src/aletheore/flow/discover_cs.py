@@ -184,6 +184,16 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
                         except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                             coverage.note(path)
                             continue
+                if any(c.type == "global_statement" for c in cf.root.named_children) and not budget.over(budget_seconds):
+                    # C# 9 top-level statements (a minimal-API Program.cs): they are the program's entry point
+                    main = CsClass("<main>", cf.root, cf)
+                    interp = CsInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                    interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)
+                    try:
+                        route_now[0] = False
+                        interp.exec(cf.root, CFrame(cf, main, None, 0))
+                    except Exception:
+                        coverage.note(path)
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
 

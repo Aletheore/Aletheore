@@ -34,6 +34,7 @@ class GoFile:
     functions: dict[str, Node] = field(default_factory=dict)
     methods: dict[tuple[str, str], Node] = field(default_factory=dict)  # (receiver type, name) -> node
     types: set[str] = field(default_factory=set)
+    controller_types: set[str] = field(default_factory=set)  # beego controllers: every method is a handler reading the request
     request_types: set[str] = field(default_factory=set)  # struct types that hold the *http.Request (or a framework context)
     assigned: set[str] = field(default_factory=set)               # names that are assigned after their declaration somewhere in this file
     values: dict[str, Node] = field(default_factory=dict)       # package-level const/var name -> initializer expression
@@ -69,6 +70,8 @@ def _scan(f: GoFile) -> None:
             body = n.child_by_field_name("type")
             if body is not None and body.type == "struct_type" and any(h in _t(body) for h in REQUEST_HOLDERS):
                 f.request_types.add(_t(n.child_by_field_name("name")))
+                if any(h in _t(body) for h in ("web.Controller", "beego.Controller")):
+                    f.controller_types.add(_t(n.child_by_field_name("name")))
         elif t in ("const_spec", "var_spec") and _top_level(n):
             names = [c for c in n.named_children if c.type == "identifier"]
             val_n = n.child_by_field_name("value")

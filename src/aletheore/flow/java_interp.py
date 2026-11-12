@@ -42,7 +42,17 @@ from aletheore.flow.values import (
     join_all,
 )
 
-REQUEST_TYPES = {"HttpServletRequest", "ServletRequest", "HttpServletRequestWrapper", "MultipartHttpServletRequest"}
+REQUEST_TYPES = {"HttpServletRequest", "ServletRequest", "HttpServletRequestWrapper", "MultipartHttpServletRequest",
+                 "RoutingContext", "HttpServerRequest", "HttpRequest", "ServerWebExchange"}
+# Lightweight web frameworks (Javalin, Spark, Vert.x) hand a handler lambda the request or a context that holds it.
+ROUTE_REGISTRATIONS = {"get", "post", "put", "delete", "patch", "head", "options", "handler", "route", "all", "any", "before", "after",
+                       "blockingHandler", "addHandler", "ws", "sse"}
+FRAMEWORK_SOURCES = {
+    "queryParam", "queryParams", "queryParamMap", "queryMap", "pathParam", "pathParams", "formParam", "formParams", "formParamMap",
+    "body", "bodyAsString", "bodyAsJson", "bodyAsClass", "getBodyAsString", "getBodyAsJson", "getBody", "getParam", "getParams", "params",
+    "header", "headers", "cookie", "cookieMap", "splat", "uri", "url", "queryString", "pathInfo", "param", "params", "getFormAttribute",
+    "uploadedFile", "uploadedFiles", "getFileUploads",
+}
 REQUEST_SOURCES = {
     "getParameter", "getParameterValues", "getParameterMap", "getParameterNames", "getHeader", "getHeaders",
     "getHeaderNames", "getQueryString", "getCookies", "getInputStream", "getReader", "getPathInfo",
@@ -82,6 +92,7 @@ MODELED_FACTORIES = {
 ANNOTATED_SOURCE_PARAMS = {
     "RequestParam", "PathVariable", "RequestBody", "RequestHeader", "CookieValue",
     "QueryParam", "PathParam", "FormParam", "HeaderParam", "CookieParam", "BeanParam", "MatrixParam",
+    "QueryValue", "Body", "Header", "Part", "RequestPart",
 }
 # Library classes whose static methods and constructors cannot manufacture request data from safe
 # inputs. Anything outside these lists stays UNKNOWN, so for example a thread-local request holder
@@ -752,6 +763,8 @@ class Interp:
         return None
 
     def _static_call(self, cname: str, name: str, args: list[Val], fr: Frame, node: Node) -> Val:
+        if name in ROUTE_REGISTRATIONS and args and isinstance(args[-1], LambdaV) and len(args) <= 3 and cname in ("Spark", "Javalin", "Routes", "Service"):
+            self._call_callable(args[-1], [Obj(kind="request", type_name="Request"), UNKNOWN], fr)  # Spark.get("/", (req, res) -> ...)
         if (cname, name) in PARSERS:
             return SAFE
         if cname == "UUID" and name == "randomUUID" and not args:
@@ -805,14 +818,19 @@ class Interp:
             return join_all(self._invoke(a, name, args, fr, node) for a in recv.alts)
         if isinstance(recv, (LambdaV, FuncV)) and name not in _FN_OTHER:
             return self._call_callable(recv, args, fr)
+        if name in ROUTE_REGISTRATIONS and args and isinstance(args[-1], LambdaV) and len(args) <= 3:
+            # app.get("/", ctx -> ...) / Spark.get("/", (req, res) -> ...) / router.get("/").handler(ctx -> ...): a request handler
+            self._call_callable(args[-1], [Obj(kind="request", type_name="Request"), UNKNOWN], fr)
         if name in _ELEMENT_CALLBACKS and args and isinstance(args[-1], (LambdaV, FuncV)):
             held = self._element_of(recv)
             if held is not None:
                 self._call_callable(args[-1], [held], fr)
         if isinstance(recv, Obj):
             if recv.kind == "request":
-                if name in REQUEST_SOURCES:
+                if name in REQUEST_SOURCES or name in FRAMEWORK_SOURCES:
                     return Tainted("request." + name)
+                if name == "request" and not args:
+                    return recv  # RoutingContext.request()
                 if name == "getSession":
                     return Obj(type_name="HttpSession")
                 return UNKNOWN
