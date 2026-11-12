@@ -32,6 +32,7 @@
   ],
   "ignored_paths": [
     "src/tests",
+    "council/acceptance",
     "src/aletheore/skills",
     "docs/superpowers/plans",
     "benchmarks/security-scanner-benchmark/secrets/cases",

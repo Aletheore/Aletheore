@@ -1,0 +1,18 @@
+I’ll use the council-control tools to set up the room and report their responses without exposing the invitation link.
+> council_control_start_room {"repo": "/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/codex-council-test-0fwxhtuz/repo", "title": "agent-test"}
+< {"content": [{"type": "text", "text": "{\"room_id\": \"room-2c1f2835\", \"sealed\": true, \"mode\": \"interactive\", \"next\": \"make an invitation link with council_control_make_invite, then tell your person to compare safety words before approving anyone\"}"}], "structured_content": {"result": "{\"room_id\": \"room-2c1f2835\", \"sealed\": true, \"mode\": \"interactive\", \"next\": \"make an invitation link with council_control_make_invite, then tell your person to compare safety words before approving anyone\"}"}}
+> council_control_make_invite {"room_id": "room-2c1f2835"}
+< {"content": [{"type": "text", "text": "{\"link\": \"[link removed] \"expires_in_hours\": 24, \"note\": \"Give this link to one person over a channel you trust; it works once. Nobody gets in on the link alone: the person waiting must read their four safety words to the human host, who compares them and approves in their own terminal. An agent cannot approve.\"}"}], "structured_content": {"result": "{\"link\": \"[link removed]
+> council_control_list_join_requests {"room_id": "room-2c1f2835"}
+< {"content": [{"type": "text", "text": "{\"requests\": [], \"note\": \"Ask each person to read their four safety words aloud to the human host. Only the human host can let them in.\"}"}], "structured_content": {"result": "{\"requests\": [], \"note\": \"Ask each person to read their four safety words aloud to the human host. Only the human host can let them in.\"}"}}
+> council_control_define_area {"room_id": "room-2c1f2835", "name": "docs", "globs": ["docs/**"], "owner": "tester", "agent_id": "tester-codex"}
+< {"content": [{"type": "text", "text": "{\"area\": \"docs\", \"owner\": \"tester\", \"agent_id\": \"tester-codex\", \"globs\": [\"docs/**\"]}"}], "structured_content": {"result": "{\"area\": \"docs\", \"owner\": \"tester\", \"agent_id\": \"tester-codex\", \"globs\": [\"docs/**\"]}"}}
+> council_control_room_status {"room_id": "room-2c1f2835"}
+< {"content": [{"type": "text", "text": "{\"room_id\": \"room-2c1f2835\", \"title\": \"agent-test\", \"host\": \"tester\", \"you_are_host\": true, \"mode\": \"interactive\", \"status\": \"open\", \"sealed\": true, \"members\": [\"tester\"], \"last_seq\": 2, \"areas\": [{\"name\": \"docs\", \"owner\": \"tester\", \"agent_id\": \"tester-codex\", \"globs\": [\"docs/**\"]}], \"pending_join_requests\": 0}"}], "structured_content": {"result": "{\"room_id\": \"room-2c1f2835\", \"title\": \"agent-test\", \"host\": \"tester\", \"you_are_host\": true, \"mode\": \"interactive\", \"status\": \"open\", \"sea
+- **Start room:** Created `agent-test` (`room-2c1f2835`), interactive and sealed.
+- **Make invite:** Created a one-time invitation valid for 24 hours; the link is withheld.
+- **List join requests:** Nobody is waiting.
+- **Define area:** Created `docs` for `docs/**`, owned by `tester` with agent `tester-codex`.
+- **Room status:** Open and sealed; host and sole member is `tester`; zero pending requests.
+
+I cannot approve a joiner. The human host must compare the four safety words and approve them.
