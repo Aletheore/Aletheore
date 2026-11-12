@@ -52,6 +52,24 @@ def _last_ident(text: str) -> str:
     return ids[-1] if ids else ""
 
 
+_ENDS = {
+    "ruby": re.compile(r"(?P<a>[\w:@.\[\]()'\"]+?)\.end_with\?\(\s*(?P<b>\"[^\"]+\"|'[^']+')\s*\)"),
+    "python": re.compile(r"(?P<a>[\w.\[\]()'\"]+?)\.endswith\(\s*(?P<b>\"[^\"]+\"|'[^']+')\s*\)"),
+    "go": re.compile(r"strings\.HasSuffix\(\s*(?P<a>[^,]+?)\s*,\s*(?P<b>\"[^\"]+\")\s*\)"),
+    "java": re.compile(r"(?P<a>[\w.\[\]()\"]+?)\.endsWith\(\s*(?P<b>\"[^\"]+\")\s*\)"),
+    "kotlin": re.compile(r"(?P<a>[\w.\[\]()\"?]+?)\.endsWith\(\s*(?P<b>\"[^\"]+\")"),
+    "javascript": re.compile(r"(?P<a>[\w.\[\]()'\"]+?)\.endsWith\(\s*(?P<b>\"[^\"]+\"|'[^']+')\s*\)"),
+    "csharp": re.compile(r"(?P<a>[\w.\[\]()\"]+?)\.EndsWith\(\s*(?P<b>\"[^\"]+\")"),
+    "php": re.compile(r"str_ends_with\(\s*(?P<a>[^,]+?)\s*,\s*(?P<b>'[^']+'|\"[^\"]+\")\s*\)"),
+}
+_HOST_A = re.compile(r"(host|hostname|netloc|domain|origin|referer|referrer|authority|server_name)", re.I)
+_DOMAIN_LIT = re.compile(r"""^["']([a-z0-9-]+\.)+[a-z]{2,}["']$""", re.I)
+_URL_A = re.compile(r"(^|\W)(next|redirect|return_?url|returnto|return_?to|continue|goto|after_?login|success_?url|back_?url|redirect_?to)\w*\s*$", re.I)
+_REDIRECTS = re.compile(r"(redirect|Redirect|Location|location\.href|sendRedirect|HttpResponseRedirect|http\.Redirect)")
+_SLASH_LIT = re.compile(r"""^\s*["']/["']\s*$""")
+_REDIRECT_SAFE = re.compile(r"""(["']//["']|\\\\|urlparse|urlsplit|netloc|is_safe|allowed_host|\bUri\b|new URL|URL\(|\.host\b|hostname|isLocalUrl|IsLocalUrl|LocalRedirect|Url\.IsLocal|\.scheme)""")
+
+
 def scan(repo: Path) -> list[dict]:
     out: list[dict] = []
     repo_r = repo.resolve()
@@ -74,14 +92,35 @@ def scan(repo: Path) -> list[dict]:
         except OSError:
             continue
         if len(raw) > 600_000 or (b"start_with?" not in raw and b"startswith" not in raw and b"HasPrefix" not in raw and b"startsWith" not in raw
-                                  and b"StartsWith" not in raw and b"strpos" not in raw and b"str_starts_with" not in raw):
+                                  and b"StartsWith" not in raw and b"strpos" not in raw and b"str_starts_with" not in raw
+                                  and b"end_with?" not in raw and b"endswith" not in raw and b"HasSuffix" not in raw and b"endsWith" not in raw
+                                  and b"EndsWith" not in raw and b"str_ends_with" not in raw):
             continue
         lines = raw.decode("utf-8", "replace").splitlines()
         pat = _PATTERNS[lang]
+        ends = _ENDS[lang]
         for i, line in enumerate(lines):
             stripped = line.strip()
             if stripped.startswith(("#", "//", "*", "/*")):
                 continue
+            for m in ends.finditer(line):  # host.endswith("example.com") accepts evilexample.com
+                a, b = m.group("a"), m.group("b")
+                if _HOST_A.search(_last_ident(a) or a) and _DOMAIN_LIT.match(b) and not b[1:].startswith(".") and _GUARD.search(line) \
+                        and _REJECT.search("\n".join(lines[i: i + 4]) + (line if "&&" in line or " and " in line else "")):
+                    out.append({"tool": "aletheore-flow", "rule_id": f"flow.{lang}.host-suffix-check", "severity": "minor", "type": "vulnerability",
+                                "path": str(p.relative_to(repo_r)) if p.is_relative_to(repo_r) else str(p), "line": i + 1, "cwe": ["CWE-601"],
+                                "message": "A host is validated by suffix without a leading dot, so evilexample.com passes a check for example.com. "
+                                           "Compare the whole host or require a dot before the suffix."})
+                    break
+            sl = re.search(r"(?P<a>[\w.\[\]()'\"]+?)\.(startswith|startsWith|start_with\?|StartsWith)\(\s*(?P<b>\"/\"|'/')\s*\)", line) or \
+                re.search(r"strings\.HasPrefix\(\s*(?P<a>[^,]+?)\s*,\s*(?P<b>\"/\")\s*\)", line)
+            if sl and _URL_A.search(sl.group("a")) and _GUARD.search(line) and _REJECT.search("\n".join(lines[i: i + 4])):
+                near = "\n".join(lines[max(0, i - 6): i + 6])
+                if not _REDIRECT_SAFE.search(near) and _REDIRECTS.search("\n".join(lines[max(0, i - 10): i + 12])):
+                    out.append({"tool": "aletheore-flow", "rule_id": f"flow.{lang}.redirect-prefix-check", "severity": "minor", "type": "vulnerability",
+                                "path": str(p.relative_to(repo_r)) if p.is_relative_to(repo_r) else str(p), "line": i + 1, "cwe": ["CWE-601"],
+                                "message": "A redirect target is validated by checking that it starts with /, which accepts //evil.com (a protocol-relative URL) "
+                                           "and /\\evil.com. Parse the URL and compare its host, or reject a leading // and backslash."})
             for m in pat.finditer(line):
                 a, b = m.group("a"), m.group("b")
                 call_open = line.find("(", m.start("b") - 1 - (len(m.group(0)) - len(m.group(0).lstrip())))

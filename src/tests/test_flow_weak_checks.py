@@ -47,3 +47,16 @@ def test_not_canonical_or_not_rejecting_is_not_reported(tmp_path):
 def test_java_nio_path_is_compared_by_component(tmp_path):
     (tmp_path / "A.java").write_text("class A {\n  void f(java.nio.file.Path base, String n) throws Exception {\n    java.nio.file.Path p = base.resolve(n).normalize();\n    if (!p.startsWith(base)) {\n      throw new Exception(\"outside\");\n    }\n  }\n}\n")
     assert scan(tmp_path) == []
+
+
+def test_host_suffix_without_dot_and_redirect_prefix_without_double_slash(tmp_path):
+    (tmp_path / "a.py").write_text("def f(host):\n    if not host.endswith('example.com'):\n        raise ValueError('bad host')\n")
+    assert [f["rule_id"] for f in scan(tmp_path)] == ["flow.python.host-suffix-check"]
+    (tmp_path / "a.py").write_text("def f(host):\n    if not host.endswith('.example.com'):\n        raise ValueError('bad host')\n")
+    assert scan(tmp_path) == []
+    (tmp_path / "a.py").write_text("def f(next_url):\n    if not next_url.startswith('/'):\n        raise ValueError('bad')\n    return redirect(next_url)\n")
+    assert [f["rule_id"] for f in scan(tmp_path)] == ["flow.python.redirect-prefix-check"]
+    (tmp_path / "a.py").write_text("def f(next_url):\n    if not next_url.startswith('/') or next_url.startswith('//'):\n        raise ValueError('bad')\n    return redirect(next_url)\n")
+    assert scan(tmp_path) == []
+    (tmp_path / "a.py").write_text("def f(url):\n    if not url.startswith('/'):\n        raise ValueError('bad')\n    return url\n")  # not a redirect target
+    assert scan(tmp_path) == []
