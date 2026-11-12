@@ -68,7 +68,7 @@ export default function HallbookPage() {
             <li key={t} className="hb-step relative bg-paper">
               <span className="hb-step-n" aria-hidden="true">{i + 1}</span>
               <h3 className="font-display text-[16px] font-bold leading-[1.25]">{t}</h3>
-              <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-[3px] bg-ink px-3 py-2.5 font-display text-[12px] leading-[1.6] text-[#e8e2d4]">{HALLBOOK_LAUNCHED ? cmd : "Available with the next Aletheore release."}</pre>
+              <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-[3px] bg-term border border-line px-3 py-2.5 font-display text-[12px] leading-[1.6] text-ink">{HALLBOOK_LAUNCHED ? cmd : "Available with the next Aletheore release."}</pre>
               <p className="mt-3 text-[13px] leading-[1.6] text-muted">{note}</p>
             </li>
           ))}
@@ -132,22 +132,22 @@ export default function HallbookPage() {
         </div>
       </Section>
 
-      <section id="install" className="mt-10 bg-ink py-16 text-[#e8e2d4]">
+      <section id="install" className="mt-10 bg-ink py-16 text-ink">
         <div className="mx-auto max-w-[1080px] px-8">
-          <p className="font-display text-[12.5px] text-[#e8e2d499]">Use it</p>
+          <p className="font-display text-[12.5px] text-ink/60">Use it</p>
           <h2 className="mt-3 max-w-[24ch] text-balance font-display text-[clamp(26px,3.6vw,40px)] font-bold leading-[1.1] tracking-[-0.02em]">Install it. Then just ask your agent to use the skills.</h2>
           {HALLBOOK_LAUNCHED ? (
             <>
-          <p className="mb-1 mt-8 font-display text-[11.5px] tracking-[0.08em] text-[#e8e2d490]">1 · INSTALL AND START THE SERVER</p>
+          <p className="mb-1 mt-8 font-display text-[11.5px] tracking-[0.08em] text-ink/55">1 · INSTALL AND START THE SERVER</p>
           <Command text="pip install aletheore" /><Command text="aletheore mcp ." />
-          <p className="mb-1 mt-6 font-display text-[11.5px] tracking-[0.08em] text-[#e8e2d490]">2 · SAY IT</p>
+          <p className="mb-1 mt-6 font-display text-[11.5px] tracking-[0.08em] text-ink/55">2 · SAY IT</p>
           <Command text="Use the Aletheore skills available to you for this task." />
-          <p className="mb-1 mt-6 font-display text-[11.5px] tracking-[0.08em] text-[#e8e2d490]">3 · OR MAKE IT AUTOMATIC (CLAUDE CODE PROMPT HOOK)</p>
+          <p className="mb-1 mt-6 font-display text-[11.5px] tracking-[0.08em] text-ink/55">3 · OR MAKE IT AUTOMATIC (CLAUDE CODE PROMPT HOOK)</p>
           <Command text="aletheore hallbook hook" />
-          <p className="mt-6 max-w-[64ch] text-[13px] leading-[1.7] text-[#e8e2d4a0]">Built on MCP, so any MCP agent can call it. We have tried it with OpenCode, Antigravity CLI, Codex CLI and Claude Code subagents. Agents rarely reach for it on their own, so add the line from step 2 or 3 to your agent&apos;s instructions file; most runs on Antigravity and Claude used it that way, and fewer on Codex. Your own skills can be added once and used everywhere. Every skill credits its author and links to its source.</p>
+          <p className="mt-6 max-w-[64ch] text-[13px] leading-[1.7] text-ink/65">Built on MCP, so any MCP agent can call it. We have tried it with OpenCode, Antigravity CLI, Codex CLI and Claude Code subagents. Agents rarely reach for it on their own, so add the line from step 2 or 3 to your agent&apos;s instructions file; most runs on Antigravity and Claude used it that way, and fewer on Codex. Your own skills can be added once and used everywhere. Every skill credits its author and links to its source.</p>
             </>
           ) : (
-            <p className="mt-8 max-w-[64ch] text-[14.5px] leading-[1.7] text-[#e8e2d4c0]">Hallbook arrives with the next Aletheore release. The install and setup commands appear here when it is out; until then they would not work.</p>
+            <p className="mt-8 max-w-[64ch] text-[14.5px] leading-[1.7] text-ink/75">Hallbook arrives with the next Aletheore release. The install and setup commands appear here when it is out; until then they would not work.</p>
           )}
         </div>
       </section>

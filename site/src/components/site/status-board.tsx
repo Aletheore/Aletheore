@@ -9,12 +9,12 @@ import {
 const LOADING: Banner = { state: "loading", title: "Checking status…", subtitle: "Loading the latest results from the public status API." };
 
 const tone: Record<Banner["state"], string> = {
-  ok: "border-success/40 bg-[#EAF1EA]",
-  degraded: "border-[#B7791F]/50 bg-[#FBF1DD]",
-  down: "border-stamp/50 bg-stamp-soft",
+  ok: "border-success/40 bg-success/10",
+  degraded: "border-needs/50 bg-needs-soft",
+  down: "border-error/50 bg-error-soft",
   loading: "border-line bg-raised",
 };
-const dot: Record<Banner["state"], string> = { ok: "bg-success", degraded: "bg-[#B7791F]", down: "bg-stamp", loading: "bg-faint animate-pulse" };
+const dot: Record<Banner["state"], string> = { ok: "bg-success", degraded: "bg-needs", down: "bg-error", loading: "bg-faint animate-pulse" };
 
 export function StatusBoard() {
   const [banner, setBanner] = useState<Banner>(LOADING);
@@ -82,7 +82,7 @@ export function StatusBoard() {
                 <tr key={`${e.method} ${e.path}`} className="border-b border-dashed border-line last:border-b-0">
                   <td className="px-4 py-2.5"><code className="font-display text-[12px]">{e.method} {e.path}</code></td>
                   <td className="px-4 py-2.5">
-                    <span className={cn("inline-block rounded-full px-2.5 py-0.5 font-display text-[11px] font-semibold", e.reachable ? "bg-[#DCEBDD] text-success" : "bg-stamp-soft text-stamp")}>{statusLabel(e)}</span>
+                    <span className={cn("inline-block rounded-full px-2.5 py-0.5 font-display text-[11px] font-semibold", e.reachable ? "bg-success/15 text-success" : "bg-error-soft text-error")}>{statusLabel(e)}</span>
                   </td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{formatLatency(e)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{formatUptime(e)}</td>

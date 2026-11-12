@@ -1,9 +1,9 @@
-import { HALLBOOK_LAUNCHED } from "./launch";
+import { COUNCIL_LAUNCHED, HALLBOOK_LAUNCHED } from "./launch";
 
 export type SiteLink = { label: string; href: string; external?: boolean };
 
 export const internalPaths = [
-  "/", "/pricing", "/developers", "/hallbook", "/benchmarks", "/dogfooding", "/status", "/changelog", "/privacy", "/terms", "/refund", "/security",
+  "/", "/pricing", "/developers", "/hallbook", "/council", "/benchmarks", "/dogfooding", "/status", "/changelog", "/privacy", "/terms", "/refund", "/security",
 ] as const;
 
 /** Pages that exist in this app. Links to the rest are not prefetched (they would 404) until they ship. */
@@ -19,6 +19,8 @@ export const navLinks: SiteLink[] = [
   { label: "Developers", href: "/developers" },
   // Only linked once Hallbook has shipped (see data/launch.ts); the page itself stays reachable by URL, noindex.
   ...(HALLBOOK_LAUNCHED ? [{ label: "Hallbook", href: "/hallbook" }] : []),
+  // Council has its own site; this page introduces it. Only linked once launched (see data/launch.ts).
+  ...(COUNCIL_LAUNCHED ? [{ label: "Council", href: "/council" }] : []),
   { label: "Benchmarks", href: "/benchmarks" },
   { label: "Proof", href: "/dogfooding" },
   { label: "Changelog", href: "/changelog" },

@@ -271,7 +271,7 @@ export default function BenchmarksPage() {
         <ul className="flex flex-col gap-3">
           {B.lose.items.map((t) => (
             <li key={t} className="flex gap-3 border border-line bg-raised p-4 text-[13.5px] leading-[1.65] text-muted">
-              <span className="font-display text-stamp" aria-hidden="true">!</span>
+              <span className="font-display text-needs" aria-hidden="true">!</span>
               <span>{t}</span>
             </li>
           ))}

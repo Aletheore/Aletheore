@@ -44,13 +44,13 @@ export function ToolExplorer({ tools, groups }: { tools: ToolInfo[]; groups: str
         ))}
       </div>
       <div className="order-1 hidden lg:order-2 lg:block">
-        <div className="sticky top-28 overflow-hidden rounded-[6px] bg-ink text-[#e8e2d4]" aria-live="polite">
+        <div className="sticky top-28 overflow-hidden rounded-[6px] bg-term text-ink border border-line" aria-live="polite">
           <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5 font-display text-[11.5px] text-[#9a9384]">
             <span>{tool.group}</span>
             <span>{tool.optional ? "opt-in" : "default"}</span>
           </div>
           <div key={tool.name} className="fade-up p-5">
-            <p className="font-display text-[15px] font-bold text-paper">{tool.name}</p>
+            <p className="font-display text-[15px] font-bold text-ink">{tool.name}</p>
             <p className="mt-3 text-[13.5px] leading-[1.7] text-[#cfc9ba]">{tool.description}</p>
           </div>
         </div>

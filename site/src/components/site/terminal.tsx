@@ -20,7 +20,7 @@ function CopyButton({ text }: { text: string }) {
           /* clipboard unavailable: leave the text selectable */
         }
       }}
-      className="inline-flex items-center gap-1.5 rounded-[3px] px-2 py-1 font-display text-[11px] text-[#bdb6a6] transition-colors hover:text-paper focus-visible:outline-2 focus-visible:outline-stamp"
+      className="inline-flex items-center gap-1.5 rounded-[3px] px-2 py-1 font-display text-[11px] text-[#bdb6a6] transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-stamp"
       aria-label={done ? "Copied" : "Copy commands"}
     >
       {done ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
@@ -31,14 +31,14 @@ function CopyButton({ text }: { text: string }) {
 
 export function Terminal({ terms }: { terms: Term[] }) {
   return (
-    <Tabs.Root defaultValue={terms[0].id} className="overflow-hidden rounded-[6px] bg-ink text-[#e8e2d4] shadow-[0_18px_40px_-24px_rgba(22,20,15,0.6)]">
+    <Tabs.Root defaultValue={terms[0].id} className="overflow-hidden rounded-[6px] bg-term text-ink border border-line shadow-[0_18px_40px_-24px_rgba(0,0,0,0.7)]">
       <div className="flex items-center justify-between border-b border-white/10 px-3 pt-2">
         <Tabs.List aria-label="Terminal examples" className="flex flex-wrap gap-1">
           {terms.map((t) => (
             <Tabs.Trigger
               key={t.id}
               value={t.id}
-              className="rounded-t-[4px] px-3 py-2 font-display text-[11.5px] text-[#9a9384] transition-colors hover:text-paper focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-stamp data-[state=active]:bg-white/10 data-[state=active]:text-paper"
+              className="rounded-t-[4px] px-3 py-2 font-display text-[11.5px] text-[#9a9384] transition-colors hover:text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-stamp data-[state=active]:bg-white/10 data-[state=active]:text-paper"
             >
               {t.label}
             </Tabs.Trigger>
@@ -50,7 +50,7 @@ export function Terminal({ terms }: { terms: Term[] }) {
           <div className="flex justify-end px-3 pt-2 md:absolute md:right-2 md:top-2 md:p-0"><CopyButton text={t.copy} /></div>
           <pre className="overflow-x-auto whitespace-pre-wrap break-words p-5 pt-2 font-display md:whitespace-pre md:break-normal md:pt-5 md:pr-24 text-[12.5px] leading-[1.75]">
             {t.lines.map((l, i) => (
-              <div key={i} className={l.kind === "cmd" ? "term-line text-paper" : "term-line text-[#b6b09f]"} style={{ animationDelay: `${Math.min(i, 24) * 45}ms` }}>
+              <div key={i} className={l.kind === "cmd" ? "term-line text-ink" : "term-line text-[#b6b09f]"} style={{ animationDelay: `${Math.min(i, 24) * 45}ms` }}>
                 {l.kind === "cmd" ? <span className="mr-2 text-stamp" aria-hidden="true">$</span> : null}
                 {l.text}
               </div>

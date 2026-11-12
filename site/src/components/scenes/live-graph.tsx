@@ -32,15 +32,15 @@ export function LiveGraph() {
       ctx.lineWidth = 1;
       for (const [a, b] of sim.edges) {
         const on = h >= 0 && (sim.nodes[h] === a || sim.nodes[h] === b);
-        ctx.strokeStyle = on ? "#A33327" : "rgba(22,20,15,0.22)";
+        ctx.strokeStyle = on ? "#FFFFFF" : "rgba(241,238,230,0.22)";
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       }
       sim.nodes.forEach((n, i) => {
         const near = h >= 0 && (i === h || neighbours[h].has(i));
-        ctx.fillStyle = near ? "#A33327" : h >= 0 ? "rgba(22,20,15,0.35)" : "#16140F";
+        ctx.fillStyle = near ? "#FFFFFF" : h >= 0 ? "rgba(241,238,230,0.38)" : "#F1EEE6";
         ctx.beginPath(); ctx.arc(n.x, n.y, n.hub ? 5.5 : 3.4, 0, Math.PI * 2); ctx.fill();
         if (n.hub || near) {
-          ctx.font = "11px ui-monospace, monospace"; ctx.fillStyle = "#16140F";
+          ctx.font = "11px ui-monospace, monospace"; ctx.fillStyle = "#F1EEE6";
           ctx.fillText(n.label, n.x + 8, n.y - 8);
         }
       });
