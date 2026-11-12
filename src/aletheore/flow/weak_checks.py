@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from aletheore.flow import library as _lib
+from aletheore.flow import redos as _redos
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _EXTS = {".rb": "ruby", ".py": "python", ".go": "go", ".java": "java", ".kt": "kotlin", ".js": "javascript", ".ts": "javascript", ".mjs": "javascript",
@@ -138,9 +139,13 @@ def scan(repo: Path) -> list[dict]:
             raw = p.read_bytes()
         except OSError:
             continue
-        if len(raw) <= 600_000 and lang in _ARCHIVE:
+        if len(raw) <= 600_000:
             text0 = raw.decode("utf-8", "replace")
-            out.extend(_archive(lang, text0, text0.splitlines(), str(p.relative_to(repo_r)) if p.is_relative_to(repo_r) else str(p)))
+            lines0 = text0.splitlines()
+            rel0 = str(p.relative_to(repo_r)) if p.is_relative_to(repo_r) else str(p)
+            if lang in _ARCHIVE:
+                out.extend(_archive(lang, text0, lines0, rel0))
+            out.extend(_redos.scan_lines(lang, lines0, rel0))
         if len(raw) > 600_000 or (b"start_with?" not in raw and b"startswith" not in raw and b"HasPrefix" not in raw and b"startsWith" not in raw
                                   and b"StartsWith" not in raw and b"strpos" not in raw and b"str_starts_with" not in raw
                                   and b"end_with?" not in raw and b"endswith" not in raw and b"HasSuffix" not in raw and b"endsWith" not in raw
