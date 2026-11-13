@@ -38,6 +38,7 @@ class GoFile:
     request_types: set[str] = field(default_factory=set)  # struct types that hold the *http.Request (or a framework context)
     assigned: set[str] = field(default_factory=set)               # names that are assigned after their declaration somewhere in this file
     values: dict[str, Node] = field(default_factory=dict)       # package-level const/var name -> initializer expression
+    embeds: dict[str, list[str]] = field(default_factory=dict)  # struct type -> the types it embeds (their methods are promoted)
 
 
 def _recv_type(method: Node) -> str:
@@ -68,6 +69,12 @@ def _scan(f: GoFile) -> None:
         elif t == "type_spec":
             f.types.add(_t(n.child_by_field_name("name")))
             body = n.child_by_field_name("type")
+            if body is not None and body.type == "struct_type":
+                lst = next((c for c in body.children if c.type == "field_declaration_list"), None)
+                for fd in (lst.named_children if lst is not None else []):
+                    kids = [c for c in fd.named_children]
+                    if fd.type == "field_declaration" and len(kids) == 1 and kids[0].type == "type_identifier":
+                        f.embeds.setdefault(_t(n.child_by_field_name("name")), []).append(_t(kids[0]))
             if body is not None and body.type == "struct_type" and any(h in _t(body) for h in REQUEST_HOLDERS):
                 f.request_types.add(_t(n.child_by_field_name("name")))
                 if any(h in _t(body) for h in ("web.Controller", "beego.Controller")):
@@ -178,9 +185,18 @@ class GoIndex:
         hits = self._package(from_file.path.parent)[2].get(name, ())
         return hits[0] if len(hits) == 1 else None
 
-    def method(self, recv_type: str, name: str, from_file: GoFile):
+    def method(self, recv_type: str, name: str, from_file: GoFile, _seen: frozenset = frozenset()):
         hits = self._package(from_file.path.parent)[3].get((recv_type, name), ())
-        return hits[0] if len(hits) == 1 else None
+        if len(hits) == 1:
+            return hits[0]
+        if hits or recv_type in _seen:
+            return None
+        for f in self._package(from_file.path.parent)[0]:  # a method promoted from an embedded struct
+            for emb in f.embeds.get(recv_type, ()):
+                got = self.method(emb, name, from_file, _seen | {recv_type})
+                if got is not None:
+                    return got
+        return None
 
     def is_request_type(self, ttext: str, from_file: GoFile) -> bool:
         """`*server.Ctx` / `Ctx`: a struct of this repository that holds the request, so a handler taking it is an entry point."""

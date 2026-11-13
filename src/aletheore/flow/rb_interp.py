@@ -106,6 +106,7 @@ class RbInterp:
         self.sink_hook = sink_hook    # hook(node, name, recv_text, args, recv, fr)
         self.store_hook = store_hook  # hook(node, base_text, key, value, fr)
         self.steps = 0
+        self._globals: dict = {}  # constant lists and hashes this run is working with
         self.globals: dict[str, Val] = {}
         self.probes: dict[tuple, list] = {}
         self.probe_keys: set[tuple] = set()
@@ -344,6 +345,9 @@ class RbInterp:
     def _const_value(self, cls: RbClass, name: str, fr: RFrame) -> Val:
         init = cls.consts.get(name)
         key = (id(cls.file), init.start_byte if init is not None else -1)
+        held = self._globals.get(key)
+        if held is not None:
+            return held  # a constant hash or array this run has already read (and perhaps written to)
         if init is None or key in self._active or fr.depth > self.MAX_DEPTH:
             return UNKNOWN
         self._active.add(key)
@@ -351,6 +355,8 @@ class RbInterp:
             v = self.eval(init, RFrame(cls.file, cls, None, fr.depth + 1))
         finally:
             self._active.discard(key)
+        if isinstance(v, (ListV, MapV)) and classify(v) == "safe":
+            self._globals[key] = v
         return v if classify(v) == "safe" else UNKNOWN
 
     def _scope(self, n: Node, fr: RFrame) -> Val:

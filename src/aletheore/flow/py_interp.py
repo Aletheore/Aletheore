@@ -88,6 +88,7 @@ class PyInterp:
         self.store_hook = store_hook    # hook(node, base_text, key, value, frame)
         self.return_hook = return_hook  # hook(node, value, frame)
         self.steps = 0
+        self._globals: dict = {}  # (file, name) -> the module-level list/dict this run is working with
         self.stored_reads = 0  # reads of data that a request stored (second-order flows)
         self._cur_env: dict = {}
         self.probes: dict[tuple, list] = {}
@@ -252,6 +253,9 @@ class PyInterp:
         if name == "request" and "request" not in fr.file.constants and "request" not in fr.file.functions:
             return Obj(kind="request", type_name="Request")
         const = fr.file.constants.get(name)
+        held = self._globals.get((id(fr.file), name))
+        if held is not None:
+            return held  # a module-level list or dict this run has already read (and perhaps written to)
         if const is not None and id(const) not in self._active and fr.depth <= self.MAX_DEPTH:
             self._active.add(id(const))
             try:
@@ -259,6 +263,8 @@ class PyInterp:
                 v = self._with_registry(v, name, fr.file, fr.depth)
             finally:
                 self._active.discard(id(const))
+            if isinstance(v, (ListV, MapV)) and classify(v) == "safe":
+                self._globals[(id(fr.file), name)] = v
             return v if classify(v) == "safe" else UNKNOWN
         imp = fr.file.imports.get(name)
         if imp and imp[1]:
@@ -753,10 +759,37 @@ class PyInterp:
         init = self._find_method(cls, "__init__")
         if init is not None:
             self._run_function(init[0].file, init[1], init[0], obj, args, kw, fr)
+        elif (fields := self._record_fields(cls)) is not None:
+            pos = list(args)
+            for nm, default in fields:  # a dataclass / NamedTuple: arguments become attributes
+                if pos:
+                    obj.fields[nm] = pos.pop(0)
+                elif nm in kw:
+                    obj.fields[nm] = kw[nm]
+                elif default is not None:
+                    obj.fields[nm] = self.eval(default, PFrame(cls.file, None, None, 0))
         else:
             if kw:
                 obj.fields["__kwargs__"] = MapV(dict(kw))  # Model(name=x): kept for .save(); not readable as attributes (a serializer's .data is not its input)
         return obj
+
+    def _record_fields(self, cls: PyClass):
+        """The (name, default node) pairs of a `@dataclass` or `NamedTuple` class, or None for any other class."""
+        node = cls.node
+        parent = node.parent
+        deco = parent is not None and parent.type == "decorated_definition" and any("dataclass" in _t(d) for d in parent.children if d.type == "decorator")
+        if not deco and "NamedTuple" not in cls.bases:
+            return None
+        body = node.child_by_field_name("body")
+        out = []
+        for st in (body.named_children if body is not None else []):
+            a = st.named_children[0] if st.type == "expression_statement" and st.named_children else None
+            if a is None or a.type != "assignment" or a.child_by_field_name("type") is None:
+                continue
+            left = a.child_by_field_name("left")
+            if left is not None and left.type == "identifier":
+                out.append((_t(left), a.child_by_field_name("right")))
+        return out
 
     def make_this(self, cls: PyClass, pf: PyFile) -> Obj:
         try:

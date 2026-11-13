@@ -773,6 +773,12 @@ class CsInterp:
         ctors = [c for c in cls.ctors if self._arity(c) == len(args)]
         if ctors:
             self._run_method(cls, ctors[0], obj, args, fr, ctor=True)
+        elif cls.node.type == "record_declaration":
+            plist = next((c for c in cls.node.children if c.type == "parameter_list"), None)
+            names = [_t(c.child_by_field_name("name")) for c in (plist.named_children if plist is not None else []) if c.type == "parameter"]
+            if len(names) == len(args):
+                for nm, a in zip(names, args):
+                    obj.fields[nm] = a  # a positional record's primary constructor sets each property
         self._apply_initializer(obj, init, fr)
         return obj
 

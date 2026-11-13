@@ -842,6 +842,8 @@ class Interp:
                 if m is not None:
                     owner, methods = m
                     return self._user_call(owner, methods, recv, args, fr)
+                if not args and recv.cls.node.type == "record_declaration" and name in recv.fields:
+                    return recv.fields[name]  # a record's accessor returns the component
             impls = self._maybe_impls(recv)
             if impls:
                 outs = []
@@ -1079,6 +1081,12 @@ class Interp:
         ctors = [c for c in cls.ctors if self._arity(c) == len(args)]
         if ctors:
             self._run_method(cls, ctors[0], obj, args, fr, ctor=True)
+        elif cls.node.type == "record_declaration":
+            comps = cls.node.child_by_field_name("parameters")
+            names = [_t(c.child_by_field_name("name")) for c in (comps.named_children if comps is not None else []) if c.type == "formal_parameter"]
+            if len(names) == len(args):
+                for nm, a in zip(names, args):
+                    obj.fields[nm] = a  # the canonical constructor of a record sets each component
         return obj
 
     # ------------------------------------------------------------------ user-defined calls
