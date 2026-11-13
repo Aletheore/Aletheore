@@ -13,7 +13,7 @@
     "lint:licenses": "cd src && pip-licenses --fail-on \"GPL;AGPL\" --format=plain-vertical"
   },
   "devDependencies": {
-    "cspell": "10.4.0",
+    "cspell": "10.4.1",
     "markdownlint-cli2": "^0.24.0",
     "prettier": "3.9.10"
   },
