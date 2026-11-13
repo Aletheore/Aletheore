@@ -26,7 +26,7 @@ SANITIZERS: dict[int, set[str]] = {
 }
 # Calls whose result is a number, boolean or other benign value derived from the input.
 SAFE_RESULT_CALLS = {"int", "float", "bool", "len", "isinstance", "hasattr", "callable", "id", "hash", "abs", "round",
-                     "ord", "chr", "isdigit", "isalpha", "isalnum", "isnumeric", "startswith", "endswith", "isdecimal"}
+                     "ord", "chr", "UUID", "isdigit", "isalpha", "isalnum", "isnumeric", "startswith", "endswith", "isdecimal"}
 
 ROUTE_MARKERS = (".route(", ".get(", ".post(", ".put(", ".delete(", ".patch(", ".head(", ".options(", ".websocket(",
                  "api_view(", "require_http_methods(", "app.route", "@route", "expose")

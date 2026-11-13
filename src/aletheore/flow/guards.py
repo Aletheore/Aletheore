@@ -85,7 +85,7 @@ def resolve(names: set, cwes: set[int]) -> set[str]:
                 out.add(n[:-6])
             continue
         if n.endswith("@918"):
-            if 918 in cwes:
+            if cwes & {918, 601}:  # an allowed host also settles where a redirect goes
                 out.add(n[:-4])
             continue
         if "#" in n:

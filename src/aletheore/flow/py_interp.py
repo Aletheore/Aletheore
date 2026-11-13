@@ -1320,7 +1320,7 @@ class PyInterp:
 
     def _mark_safe(self, g: str, fr: PFrame) -> None:
         if g.endswith("@918"):
-            if 918 in self.cwes:  # an allowed host proves the URL cannot point elsewhere; it proves nothing about other classes
+            if self.cwes & {918, 601}:  # an allowed host proves the URL (or redirect) cannot point elsewhere; nothing about other classes
                 fr.env[g[:-4]] = SAFE
         else:
             fr.env[g] = SAFE

@@ -1179,7 +1179,7 @@ class PhpInterp:
     def _apply_guard(self, keys: set[str], fr: PFrame) -> None:
         for k in keys:
             if k.endswith("@918"):
-                if 918 in self.cwes:
+                if self.cwes & {918, 601}:
                     ids = self._tids(fr.env.get(k[:-4], UNKNOWN))
                     if ids:
                         fr.validated |= ids

@@ -776,6 +776,10 @@ class Interp:
         cls = self.index.resolve_class(cname, fr.file)
         if cls is not None and name in cls.methods:
             return self._user_call(cls, cls.methods[name], None, args, fr)
+        if cname == "UUID" and name in ("fromString", "nameUUIDFromBytes"):
+            return SAFE  # hex digits and dashes
+        if cls is not None and cls.node.type == "enum_declaration" and name == "valueOf":
+            return SAFE  # one of the enum's constants
         if cname == "String" and name in ("valueOf", "copyValueOf", "format", "join"):
             return self._combine(*args)
         if cname in ("Arrays", "List", "Set") and name in ("asList", "of", "copyOf"):
@@ -870,6 +874,8 @@ class Interp:
             return SAFE
         if name == "getName" and isinstance(recv, Tainted):
             return Tainted("through-call")
+        if name == "getFileName" and not args and 22 in self.cwes:
+            return SAFE  # the last component of a path, as basename is
         return self._opaque(recv, args)
 
     def _maybe_impls(self, recv: Obj) -> list[ClassInfo]:
