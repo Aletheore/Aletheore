@@ -53,3 +53,19 @@ def test_adjacent_overlapping_repeats_are_polynomial(pat):
 @pytest.mark.parametrize("pat", [r"\s*,\s*", r" *, *", r"^.*a.*b", r"(\w+,)+", r"([^,]*,)+", r"[0-9]+-[0-9]+", r"\d+\.\d+"])
 def test_separator_and_dotstar_patterns_stay_quiet(pat):
     assert redos.weakness(pat) is None
+
+
+@pytest.mark.parametrize("pat", [r"(a|aa)+$", r"(a|a)+", r"(\d|\d\d)+", r"(x|y|xy)+", r"(a|aa|b)*c"])
+def test_overlapping_alternatives_in_a_repeated_group_are_exponential(pat):
+    assert redos.weakness(pat) == "exponential"
+
+
+@pytest.mark.parametrize("pat", [r"(a|b)+", r"(a|ab)+", r"(ab|a)+", r"(?:foo|bar)+", r"(?:\.|-)+", r"(a|aa)", r"(a|aa)?"])
+def test_disjoint_or_unrepeated_alternatives_stay_quiet(pat):
+    assert redos.weakness(pat) is None
+
+
+def test_request_controlled_overlap_regex_is_reported(tmp_path):
+    (tmp_path / "app.py").write_text("import re\nfrom flask import request\n\ndef f():\n    return re.fullmatch(r\"(a|aa)+$\", request.args.get('v', ''))\n")
+    got = [f for f in scan(tmp_path) if f["rule_id"].endswith(".redos")]
+    assert len(got) == 1, got

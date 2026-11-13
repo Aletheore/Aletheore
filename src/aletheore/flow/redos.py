@@ -142,11 +142,53 @@ def _adjacent(alts) -> bool:
     return False
 
 
+def _fixed(alt):
+    """The per-position character sets of an alternative made only of single atoms, or None."""
+    out = []
+    for it in alt:
+        if it[0] != "atom" or it[2] != "":
+            return None
+        cs = _chars(it)
+        if cs is None:
+            return None
+        out.append(cs)
+    return out if out and len(out) <= 24 else None
+
+
+def _overlapping_alternatives(alts) -> bool:
+    """`(a|aa)+`, `(\\d|\\d\\d)+`, `(x|x)+`: one alternative can be matched as a run of alternatives (or as a different one), so a repeat of the group splits the same text several ways."""
+    if len(alts) < 2 or len(alts) > 12:
+        return False
+    seqs = [_fixed(a) for a in alts]
+    if any(sq is None for sq in seqs):
+        return False
+    for bi, b in enumerate(seqs):
+        m = len(b)
+        # ways[i]: smallest number of pieces tiling b[:i] (None when impossible); a single piece must be a different alternative
+        ways = [None] * (m + 1)
+        ways[0] = 0
+        for i in range(m):
+            if ways[i] is None:
+                continue
+            for ai, a in enumerate(seqs):
+                j = i + len(a)
+                if j > m or not all(a[k] & b[i + k] for k in range(len(a))):
+                    continue
+                if i == 0 and j == m and ai == bi:
+                    continue
+                n = ways[i] + 1
+                if ways[j] is None or n < ways[j]:
+                    ways[j] = n
+        if ways[m] is not None:
+            return True
+    return False
+
+
 def _walk(alts) -> bool:
     for alt in alts:
         for kind, body, q in alt:
             if kind == "group":
-                if q in _UNB and _ambiguous(body):
+                if q in _UNB and (_ambiguous(body) or _overlapping_alternatives(body)):
                     return True
                 if _walk(body):
                     return True
