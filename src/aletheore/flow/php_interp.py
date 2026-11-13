@@ -226,6 +226,11 @@ class PhpInterp:
 
     def _eval(self, n: Node, fr: PFrame) -> Val:
         t = n.type
+        if t == "yield_expression":
+            vals = [self.eval(c.named_children[-1] if c.type == "array_element_initializer" and c.named_children else c, fr) for c in n.named_children]
+            val = vals[-1] if vals else UNKNOWN
+            fr.rets.append(val)  # a generator hands its yielded values to whoever iterates it
+            return val
         if t == "variable_name":
             return self._var(_vname(n), fr)
         if t in ("string", "encapsed_string", "heredoc", "nowdoc"):
@@ -531,7 +536,7 @@ class PhpInterp:
         elif t in ("list_literal", "array_creation_expression"):
             elems = [c for c in target.named_children]
             for i, el in enumerate(elems):
-                tgt = el.named_children[-1] if el.named_children else None
+                tgt = el if el.type in ("variable_name", "member_access_expression", "subscript_expression", "list_literal", "array_creation_expression") else (el.named_children[-1] if el.named_children else None)
                 src = val.entries.get(i) if isinstance(val, MapV) and not val.dirty else (Tainted("derived") if classify(val) == "tainted" else UNKNOWN)
                 self._bind(tgt, src if src is not None else UNKNOWN, fr)
         elif t == "scoped_property_access_expression":

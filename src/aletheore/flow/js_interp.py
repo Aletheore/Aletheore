@@ -227,6 +227,10 @@ class JsInterp:
             return self._call(n, fr)
         if t == "new_expression":
             return self._new(n, fr)
+        if t == "yield_expression":
+            val = self.eval(n.named_children[-1], fr) if n.named_children else UNKNOWN
+            fr.rets.append(val)  # a generator hands its yielded values to whoever iterates it
+            return val
         if t in ("parenthesized_expression", "await_expression", "non_null_expression", "as_expression", "satisfies_expression", "type_assertion"):
             return self.eval(n.named_children[0], fr) if n.named_children else UNKNOWN
         if t == "binary_expression":

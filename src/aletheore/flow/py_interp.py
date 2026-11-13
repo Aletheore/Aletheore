@@ -213,7 +213,10 @@ class PyInterp:
             self._bind(n.child_by_field_name("name"), val, fr)
             return val
         if t in ("await", "yield"):
-            return self.eval(n.named_children[0], fr) if n.named_children else UNKNOWN
+            val = self.eval(n.named_children[0], fr) if n.named_children else UNKNOWN
+            if t == "yield" and n.named_children:
+                fr.rets.append(val)  # a generator hands its yielded values to whoever iterates it
+            return val
         if t == "lambda":
             return ClosureV(n, fr.file, dict(fr.env))
         if t in ("ellipsis",):

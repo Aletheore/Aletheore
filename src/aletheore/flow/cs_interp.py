@@ -157,6 +157,8 @@ class CsInterp:
 
     def _eval(self, n: Node, fr: CFrame) -> Val:
         t = n.type
+        if t == "tuple_expression":
+            return ListV([self.eval(c.named_children[-1] if c.type == "argument" and c.named_children else c, fr) for c in n.named_children], birth_depth=fr.branch)
         if t in ("string_literal", "verbatim_string_literal", "raw_string_literal"):
             return Const(_unquote(_t(n)))
         if t == "character_literal":
@@ -414,7 +416,9 @@ class CsInterp:
         if target is None:
             return
         t = target.type
-        if t == "identifier":
+        if t == "tuple_expression":
+            self._deconstruct(target, val, fr)
+        elif t == "identifier":
             name = _t(target)
             if name in fr.env or not (fr.this_obj is not None and name in fr.this_obj.fields):
                 fr.env[name] = val
@@ -849,6 +853,20 @@ class CsInterp:
             return UNKNOWN
         return join_all(inner.rets) if inner.rets else Const(None)
 
+    def _deconstruct(self, pat: Node, val: Val, fr: CFrame) -> None:
+        """`var (a, b) = f();` and `(x, y) = f();`: element i of the tuple goes to the i-th name."""
+        items = [c for c in pat.named_children if c.type != "type"]
+        for i, c in enumerate(items):
+            tgt = c.named_children[-1] if c.type in ("argument", "declaration_expression") and c.named_children else c
+            if isinstance(val, ListV) and not val.dirty and i < len(val.items):
+                el = val.items[i]
+            else:
+                el = Tainted("derived") if classify(val) == "tainted" else UNKNOWN
+            if tgt.type in ("tuple_pattern", "tuple_expression"):
+                self._deconstruct(tgt, el, fr)
+            elif tgt.type == "identifier":
+                fr.env[_t(tgt)] = el
+
     def _store_out(self, target: Node, val: Val, fr: CFrame) -> None:
         if target.type == "declaration_expression":
             ident = next((c for c in reversed(target.children) if c.type == "identifier"), None)
@@ -903,6 +921,13 @@ class CsInterp:
                 if vd.type == "variable_declaration":
                     for d in vd.named_children:
                         if d.type == "variable_declarator":
+                            pat = next((c for c in d.named_children if c.type == "tuple_pattern"), None)
+                            if pat is not None:
+                                val_n = d.named_children[-1]
+                                if val_n.type == "equals_value_clause" and val_n.named_children:
+                                    val_n = val_n.named_children[-1]
+                                self._deconstruct(pat, self.eval(val_n, fr) if val_n is not pat else UNKNOWN, fr)
+                                continue
                             name, val_n = _declarator_value(d)
                             fr.env[name] = self.eval(val_n, fr) if val_n is not None else UNKNOWN
             return False
@@ -938,7 +963,11 @@ class CsInterp:
                 else:
                     self.eval(c, fr)
             return False
-        if t in ("break_statement", "continue_statement", "empty_statement", "local_function_statement", "yield_statement", "labeled_statement", "goto_statement"):
+        if t == "yield_statement":
+            if n.named_children:
+                fr.rets.append(self.eval(n.named_children[-1], fr))  # `yield return x`: handed to whoever iterates
+            return False
+        if t in ("break_statement", "continue_statement", "empty_statement", "local_function_statement", "labeled_statement", "goto_statement"):
             return False
         for c in n.named_children:
             if c.type.endswith("statement") or c.type == "block":

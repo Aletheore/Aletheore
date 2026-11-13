@@ -50,6 +50,7 @@ class RFrame:
     branch: int = 0
     last: Val = UNKNOWN
     singleton: bool = False
+    block: tuple | None = None  # (block node, the frame that wrote it) while running a method called with a block
 
 
 def _t(n: Node | None) -> str:
@@ -692,13 +693,13 @@ class RbInterp:
             if hit is None and fr.singleton:
                 hit = self._find_method(fr.cls, name, len(args), singleton=False)
             if hit is not None:
-                return self._run_method(hit[0], hit[1], fr.this_obj, args, fr, singleton=fr.singleton)
+                return self._run_method(hit[0], hit[1], fr.this_obj, args, fr, singleton=fr.singleton, block=block)
             if fr.this_obj is not None and not args and ("@" + name) in fr.this_obj.fields:
                 return fr.this_obj.fields["@" + name]
         if fr.file.main is not None:
             hit = self._find_method(fr.file.main, name, len(args))
             if hit is not None:
-                return self._run_method(hit[0], hit[1], None, args, fr)
+                return self._run_method(hit[0], hit[1], None, args, fr, block=block)
         if name in ("raise", "fail", "exit", "abort", "throw"):
             return UNKNOWN
         if name in DB_FINDERS or name.startswith("find_by"):
@@ -765,7 +766,7 @@ class RbInterp:
                 return self._instantiate(cls, args, fr)
             hit = self._find_method(cls, name, len(args), singleton=True)
             if hit is not None:
-                return self._run_method(hit[0], hit[1], Obj(cls=hit[0], type_name=hit[0].name), args, fr, singleton=True)
+                return self._run_method(hit[0], hit[1], Obj(cls=hit[0], type_name=hit[0].name), args, fr, singleton=True, block=block)
         if cname in ("String",) and name == "new":
             return args[0] if args and isinstance(args[0], Const) else (Const("") if not args else self._combine(*args))
         if cname in ("Array", "Set") and name == "new":
@@ -864,7 +865,7 @@ class RbInterp:
             if recv.cls is not None:
                 m = self._find_method(recv.cls, name, len(args))
                 if m is not None:
-                    return self._run_method(m[0], m[1], recv, args, fr)
+                    return self._run_method(m[0], m[1], recv, args, fr, block=block)
                 if not args and ("@" + name) in recv.fields:
                     return recv.fields["@" + name]
             if recv.type_name == "session":
@@ -1112,12 +1113,14 @@ class RbInterp:
                 if nm is not None:
                     inner.env[_t(nm)] = UNKNOWN
 
-    def _run_method(self, cls: RbClass, m: Node, recv: Obj | None, args: list[Val], fr: RFrame, singleton: bool = False) -> Val:
+    def _run_method(self, cls: RbClass, m: Node, recv: Obj | None, args: list[Val], fr: RFrame, singleton: bool = False, block: Node | None = None) -> Val:
         key = (id(cls.file), m.start_byte)
         if fr.depth + 1 > self.MAX_DEPTH or key in self._active:
             return self._opaque(recv, args)
         body = m.child_by_field_name("body")
         inner = RFrame(cls.file, cls, recv, fr.depth + 1, singleton=singleton)
+        if block is not None:
+            inner.block = (block, fr)
         self._bind_params(m, args, inner)
         self._active.add(key)
         try:
@@ -1188,9 +1191,14 @@ class RbInterp:
             self._run_block(n, [], fr)
             return False
         if t == "yield":
-            for c in n.named_children:
-                self.eval(c, fr)
-            fr.last = UNKNOWN
+            yargs = [self.eval(c, fr) for c in n.named_children]
+            if yargs and len(n.named_children) == 1 and n.named_children[0].type == "argument_list":
+                yargs = [self.eval(c, fr) for c in n.named_children[0].named_children]
+            if fr.block is not None:
+                blk, bfr = fr.block
+                fr.last = self._run_block(blk, yargs, bfr)  # the caller's block runs with what was yielded
+            else:
+                fr.last = UNKNOWN
             return False
         if t in ("method", "singleton_method", "class", "module", "comment", "alias", "undef", "singleton_class"):
             fr.last = Const(None) if t != "comment" else fr.last
