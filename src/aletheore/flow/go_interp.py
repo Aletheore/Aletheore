@@ -892,7 +892,39 @@ class GoInterp:
                 return (local(op), _t(fn.child_by_field_name("field"))) if local(op) else None
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, canon=lambda var: G.canonical_assignment(fr.file.src, var), untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted")
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, call_facts=lambda name, args: self._call_facts(name, args, fr), canon=lambda var: G.canonical_assignment(fr.file.src, var), untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted")
+
+    def _call_facts(self, name: str, args: list, fr: GFrame):
+        """`if !ok(v) { return }` where ok returns a check on its parameter."""
+        if "." in name:
+            return None
+        hit = self.index.function(name, fr.file)
+        if hit is None or id(hit[1]) in self._active:
+            return None
+        gf, fn = hit
+        params_n = fn.child_by_field_name("parameters")
+        names = []
+        for p in (params_n.named_children if params_n is not None else []):
+            ids = [c for c in p.named_children if c.type == "identifier"]
+            names.extend(_t(i) for i in ids) if ids else names.append("")
+        body = fn.child_by_field_name("body")
+        rets, stack = [], [body] if body is not None else []
+        while stack:
+            cur = stack.pop()
+            if cur.type == "return_statement" and cur.named_children:
+                lst = cur.named_children[0]
+                rets.append(lst.named_children[0] if lst.type == "expression_list" and lst.named_children else lst)
+            elif cur.type != "func_literal":
+                stack.extend(cur.children)
+        if len(rets) != 1:
+            return None
+        cf = GFrame(gf, None, fr.depth + 1, env={x: Tainted("param") for x in names if x})
+        self._active.add(id(fn))
+        try:
+            facts = self._engine(cf).facts(rets[0])
+        finally:
+            self._active.discard(id(fn))
+        return G.map_facts(facts, args, names, lambda n: _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None)
 
     def _narrow(self, names: set, fr: GFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)

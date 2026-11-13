@@ -311,3 +311,19 @@ def strip_call_is_safe(call_text: str, cwes: set[int] | None = None) -> bool:
     for tok in sorted(allowed, key=len, reverse=True):
         rest = rest.replace(tok, "")
     return rest == ""
+
+
+def map_facts(facts: Facts, args: list, params: list[str], local) -> Facts:
+    """Facts about a callee's parameters, restated for the caller's variables passed in those positions (`local(node)` names one)."""
+    def one(names):
+        out = set()
+        for nm in names:
+            m = re.match(r"^([A-Za-z_$][\w$]*)([@#].*)?$", nm)
+            if not m or m.group(1) not in params:
+                continue
+            i = params.index(m.group(1))
+            v = local(args[i]) if i < len(args) else None
+            if v:
+                out.add(v + (m.group(2) or ""))
+        return out
+    return one(facts[0]), one(facts[1])

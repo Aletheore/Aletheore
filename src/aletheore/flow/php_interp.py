@@ -1071,7 +1071,58 @@ class PhpInterp:
                 key = self._expr_key(args[0], fr)
                 if key and any(k in _t(args[1]) for k in ("FILTER_VALIDATE_INT", "FILTER_VALIDATE_FLOAT", "FILTER_VALIDATE_BOOL", "FILTER_VALIDATE_IP")):
                     return {key}
+            got = self._call_guard(cond, args, fr)
+            if got:
+                return got
         return set()
+
+    def _call_guard(self, cond: Node, args: list, fr: PFrame) -> set[str]:
+        """`if (ok($v))` where ok returns a check on its parameter: $v has passed it when the call is true."""
+        name = _t(cond.child_by_field_name("function"))
+        hit = self.index.function(name, fr.file) if name and "\\" not in name else None
+        if hit is None:
+            return set()
+        fnode = hit[1] if isinstance(hit, tuple) else hit
+        if id(fnode) in self._active:
+            return set()
+        body = fnode.child_by_field_name("body")
+        params = fnode.child_by_field_name("parameters")
+        names = []
+        for p in (params.named_children if params is not None else []):
+            nm = p.child_by_field_name("name")
+            names.append(_vname(nm) if nm is not None and nm.type == "variable_name" else "")
+        rets, stack = [], [body] if body is not None else []
+        while stack:
+            cur = stack.pop()
+            if cur.type == "return_statement" and cur.named_children:
+                rets.append(cur.named_children[0])
+            elif cur.type not in ("anonymous_function", "anonymous_function_creation_expression", "arrow_function", "function_definition", "class_declaration"):
+                stack.extend(cur.children)
+        if len(rets) != 1:
+            return set()
+        e = rets[0]
+        while e.type == "parenthesized_expression" and e.named_children:
+            e = e.named_children[0]
+        if e.type == "binary_expression" and _t(e.child_by_field_name("operator")) in ("===", "==", "!==", "!="):
+            l, r = e.child_by_field_name("left"), e.child_by_field_name("right")
+            if "1" in (_t(l), _t(r)) and (l.type == "function_call_expression" or r.type == "function_call_expression") and _t(e.child_by_field_name("operator")) in ("===", "=="):
+                e = l if l.type == "function_call_expression" else r  # preg_match(...) === 1
+        cf = PFrame(hit[0] if isinstance(hit, tuple) else fr.file, None, None, fr.depth + 1, env={x: Tainted("param") for x in names if x})
+        self._active.add(id(fnode))
+        try:
+            got = self._guard_keys(e, cf, False)
+        finally:
+            self._active.discard(id(fnode))
+        out: set[str] = set()
+        for key in got:
+            base = key.split("@")[0].split("[")[0]
+            if base in names:
+                i = names.index(base)
+                if i < len(args):
+                    k2 = self._expr_key(args[i], fr)
+                    if k2:
+                        out.add(k2 + key[len(base):])
+        return out
 
     def _safe_regex(self, pattern: str) -> bool:
         """An anchored pattern made only of simple character classes (identifier-like text), so a match proves the value harmless."""

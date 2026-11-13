@@ -780,6 +780,8 @@ class Interp:
             return self._combine(*args)
         if cname in ("Arrays", "List", "Set") and name in ("asList", "of", "copyOf"):
             return ListV(list(args), birth_depth=fr.branch)
+        if cname == "Map" and name == "of" and len(args) % 2 == 0 and all(isinstance(a, Const) for a in args[0::2]):
+            return MapV({a.value: v for a, v in zip(args[0::2], args[1::2])}, birth_depth=fr.branch)  # Map.of(k1, v1, k2, v2, ...)
         return self._opaque(None, args, pure=cname in PURE_STATIC_CLASSES or (cname, name) in PURE_STATIC_METHODS)
 
     def _unqualified(self, name: str, args: list[Val], fr: Frame) -> Val:
@@ -1261,6 +1263,34 @@ class Interp:
             if v in fr.env:
                 fr.env[v] = SAFE
 
+    def _call_facts(self, name: str, args: list, fr: Frame):
+        """`if (!ok(v))` where ok returns a check on its parameter."""
+        if fr.cls is None:
+            return None
+        hit = self._find_method(fr.cls, name, len(args))
+        if hit is None or id(hit[1][0]) in self._active:
+            return None
+        owner, m = hit[0], hit[1][0]
+        params_n = m.child_by_field_name("parameters")
+        names = [_t(p.child_by_field_name("name")) for p in (params_n.named_children if params_n is not None else []) if p.type == "formal_parameter"]
+        body = m.child_by_field_name("body")
+        rets, stack = [], [body] if body is not None else []
+        while stack:
+            cur = stack.pop()
+            if cur.type == "return_statement" and cur.named_children:
+                rets.append(cur.named_children[0])
+            elif cur.type not in ("lambda_expression", "class_body"):
+                stack.extend(cur.children)
+        if len(rets) != 1:
+            return None
+        cf = Frame(owner.file, owner, None, fr.depth + 1, env={x: Tainted("param") for x in names if x})
+        self._active.add(id(m))
+        try:
+            facts = self._facts(rets[0], cf)
+        finally:
+            self._active.discard(id(m))
+        return G.map_facts(facts, args, names, lambda n: _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None)
+
     def _facts(self, cond: Node | None, fr: Frame) -> G.Facts:
         """What a condition proves about local variables on each outcome (see guards.py)."""
         if cond is None:
@@ -1284,6 +1314,10 @@ class Interp:
         obj = cond.child_by_field_name("object")
         args_n = cond.child_by_field_name("arguments")
         args = list(args_n.named_children) if args_n is not None else []
+        if obj is None or _t(obj) == "this":
+            got = self._call_facts(name, args, fr)
+            if got is not None and got != G.EMPTY:
+                return got
 
         def local(n: Node | None) -> str | None:
             return _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None

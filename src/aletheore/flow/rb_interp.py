@@ -1349,7 +1349,38 @@ class RbInterp:
                     return (local(first), m)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted", canon=lambda var: G.canonical_assignment(fr.file.src, var))
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, call_facts=lambda name, args: self._call_facts(name, args, fr), untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted", canon=lambda var: G.canonical_assignment(fr.file.src, var))
+
+    def _call_facts(self, name: str, args: list, fr: RFrame):
+        """`halt 400 unless ok?(v)` where ok? returns a check on its parameter."""
+        hit = None
+        if fr.cls is not None:
+            hit = self._find_method(fr.cls, name, len(args), singleton=fr.singleton) or (self._find_method(fr.cls, name, len(args)) if fr.singleton else None)
+        if hit is None and fr.file.main is not None:
+            hit = self._find_method(fr.file.main, name, len(args))
+        if hit is None or id(hit[1]) in self._active:
+            return None
+        owner, m = hit
+        p = _params(m)
+        names = [_t(c) if c.type == "identifier" else "" for c in (p.named_children if p is not None else [])]
+        body = m.child_by_field_name("body")
+        if body is None:
+            return None
+        stmts = [c for c in body.named_children if c.type != "comment"] if body.type in ("body_statement", "begin") else [body]
+        if len(stmts) != 1:
+            return None
+        e = stmts[0]
+        if e.type == "return" and e.named_children:
+            e = e.named_children[0]
+            if e.type == "argument_list" and e.named_children:
+                e = e.named_children[0]
+        cf = RFrame(owner.file, owner, None, fr.depth + 1, env={x: Tainted("param") for x in names if x})
+        self._active.add(id(m))
+        try:
+            facts = self._engine(cf).facts(e)
+        finally:
+            self._active.discard(id(m))
+        return G.map_facts(facts, args, names, lambda n: _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None)
 
     def _narrow(self, names: set, fr: RFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)

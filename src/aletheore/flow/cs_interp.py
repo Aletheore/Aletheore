@@ -987,6 +987,42 @@ class CsInterp:
         return False
 
     # ------------------------------------------------------------------ guards
+    def _call_facts(self, name: str, args: list, fr: CFrame):
+        """`if (Ok(v))` where Ok returns a check on its parameter."""
+        if fr.cls is None or "." in name:
+            return None
+        hit = self._find_method(fr.cls, name, len(args))
+        if hit is None or id(hit[1]) in self._active:
+            return None
+        owner, m = hit
+        params = m.child_by_field_name("parameters") or next((c for c in m.children if c.type == "parameter_list"), None)
+        names = []
+        for p in (params.named_children if params is not None else []):
+            ids = [c for c in p.named_children if c.type == "identifier"]
+            names.append(_t(ids[-1]) if ids else "")
+        body = m.child_by_field_name("body") or next((c for c in m.children if c.type in ("block", "arrow_expression_clause")), None)
+        if body is None:
+            return None
+        if body.type == "arrow_expression_clause":
+            rets = [body.named_children[-1]] if body.named_children else []
+        else:
+            rets, stack = [], [body]
+            while stack:
+                cur = stack.pop()
+                if cur.type == "return_statement" and cur.named_children:
+                    rets.append(cur.named_children[0])
+                elif cur.type not in ("lambda_expression", "local_function_statement"):
+                    stack.extend(cur.children)
+        if len(rets) != 1:
+            return None
+        cf = CFrame(owner.file, owner, None, fr.depth + 1, env={p: Tainted("param") for p in names if p})
+        self._active.add(id(m))
+        try:
+            facts = self._engine(cf).facts(rets[0])
+        finally:
+            self._active.discard(id(m))
+        return G.map_facts(facts, args, names, lambda n: _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None)
+
     def _engine(self, fr: CFrame) -> G.GuardEngine:
         def norm(n):
             t = n.type
@@ -1054,7 +1090,7 @@ class CsInterp:
                     return (local(inner), nm)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, canon=lambda var: G.canonical_assignment(fr.file.src, var), untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted")
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, call_facts=lambda name, args: self._call_facts(name, args, fr), canon=lambda var: G.canonical_assignment(fr.file.src, var), untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted")
 
     def _guard_facts(self, cond: Node | None, fr: CFrame):
         return self._engine(fr).facts(cond)
