@@ -36,3 +36,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    exclude-paths:
+      # Semgrep's pins are a hash-locked set resolved together (pip install --require-hashes); bumping single
+      # packages in it breaks the install, so it is regenerated from requirements-semgrep.txt, not by Dependabot.
+      - "requirements-semgrep.lock.txt"
