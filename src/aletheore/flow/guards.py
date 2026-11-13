@@ -278,6 +278,7 @@ def apply(names: set, cwes: set[int], env: dict, safe_value) -> None:
 
 _STRIP_CALL = re.compile(
     r"""(?:\.\s*(?:replace|replaceAll|gsub|ReplaceAll|replaceAll_)\s*\(\s*(?:/(?P<j>(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\n])+)/(?P<f>[a-z]*)|(?P<q>["'])(?P<s>(?:\\.|(?!(?P=q)).)*)(?P=q))\s*,\s*(?P<r>""|'')\s*\)"""
+    r"""|\.\s*replace\s*\(\s*(?:Regex\s*\(\s*"(?P<k>(?:\\.|[^"\\])*)"\s*\)|"(?P<k2>(?:\\.|[^"\\])*)"\s*\.toRegex\(\))\s*,\s*""\s*\)"""
     r"""|\bpreg_replace\s*\(\s*(?P<pq>["'])/(?P<p>(?:\\.|[^/\\])+)/[a-z]*(?P=pq)\s*,\s*(?P<pr>""|'')\s*,"""
     r"""|\bRegex\s*\.\s*Replace\s*\(\s*[^,]+,\s*@?"(?P<c>(?:\\.|[^"\\])*)"\s*,\s*"")""")
 
@@ -297,6 +298,8 @@ def strip_call_is_safe(call_text: str, cwes: set[int] | None = None) -> bool:
         pat = m.group("s")
         if ".replace(" in call_text[: m.start() + 10] and ".replaceAll" not in call_text[: m.start() + 12]:
             return False  # a string pattern in String.replace is literal text (JS), not a regex
+    elif m.group("k") is not None or m.group("k2") is not None:
+        pat = m.group("k") if m.group("k") is not None else m.group("k2")
     elif m.group("p") is not None:
         pat = m.group("p")
     else:

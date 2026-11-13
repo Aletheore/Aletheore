@@ -1092,7 +1092,37 @@ class RsInterp:
                 return (v, _t(fn.child_by_field_name("field"))) if v else None
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted", canon=lambda var: G.canonical_assignment(fr.file.src, var))
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr, call_facts=lambda name, args: self._call_facts(name, args, fr), untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted", canon=lambda var: G.canonical_assignment(fr.file.src, var))
+
+    def _call_facts(self, name: str, args: list, fr: SFrame):
+        """`if !ok(&v)` where ok returns a check on its parameter."""
+        hit = self.index.free_fn(name, fr.file)
+        if hit is None or id(hit[1]) in self._active:
+            return None
+        owner, fn = hit
+        pl = fn.child_by_field_name("parameters")
+        names = []
+        for p in (pl.named_children if pl is not None else []):
+            pat = p.child_by_field_name("pattern") if p.type == "parameter" else None
+            names.append(_t(pat) if pat is not None and pat.type == "identifier" else "")
+        body = fn.child_by_field_name("body")
+        if body is None or body.type != "block":
+            return None
+        stmts = [c for c in body.named_children if c.type not in ("line_comment", "block_comment")]
+        if len(stmts) != 1:
+            return None
+        e = stmts[0]
+        if e.type in ("return_expression", "expression_statement") and e.named_children:
+            e = e.named_children[0]
+            if e.type == "return_expression" and e.named_children:
+                e = e.named_children[0]
+        cf = SFrame(owner.file if hasattr(owner, "file") else fr.file, None, None, fr.depth + 1, env={x: Tainted("param") for x in names if x})
+        self._active.add(id(fn))
+        try:
+            facts = self._engine(cf).facts(e)
+        finally:
+            self._active.discard(id(fn))
+        return G.map_facts(facts, args, names, lambda n: _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None)
 
     def _narrow(self, names: set, fr: SFrame) -> None:
         G.apply(names, self.cwes, fr.env, SAFE)

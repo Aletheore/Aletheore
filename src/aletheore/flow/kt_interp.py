@@ -973,6 +973,46 @@ class KtInterp:
         fr.env = out
 
     # ------------------------------------------------------------------ guards
+    def _call_facts(self, name: str, args: list, fr: KFrame):
+        """`if (!ok(v))` where ok returns a check on its parameter."""
+        if name.startswith("!"):  # the grammar folds the `!` into the callee's name
+            got = self._call_facts(name.lstrip("!").strip(), args, fr)
+            return G.negate(got) if got is not None else None
+        hit = self._find_fn(fr.cls, name) if fr.cls is not None else None
+        if hit is None and fr.file.main is not None and fr.file.main.funcs.get(name):
+            hit = (fr.file.main, fr.file.main.funcs[name][0])
+        if hit is None or id(hit[1]) in self._active:
+            return None
+        owner, fn = hit
+        pl = next((c for c in fn.children if c.type == "function_value_parameters"), None)
+        names = []
+        for p in (pl.named_children if pl is not None else []):
+            ident = next((c for c in p.children if c.type == "identifier"), None)
+            names.append(_t(ident) if p.type == "parameter" and ident is not None else "")
+        body = next((c for c in fn.children if c.type == "function_body"), None)
+        if body is None:
+            return None
+        expr = [c for c in body.named_children if c.type != "block"]
+        if expr:
+            rets = [expr[-1]]  # `fun ok(v: String) = ...`
+        else:
+            rets, stack = [], [body]
+            while stack:
+                cur = stack.pop()
+                if cur.type == "return_expression" and cur.named_children:
+                    rets.append(cur.named_children[-1])
+                elif cur.type not in ("lambda_literal", "annotated_lambda"):
+                    stack.extend(cur.children)
+        if len(rets) != 1:
+            return None
+        cf = KFrame(owner.file, owner, None, fr.depth + 1, env={x: Tainted("param") for x in names if x})
+        self._active.add(id(fn))
+        try:
+            facts = self._engine(cf).facts(rets[0])
+        finally:
+            self._active.discard(id(fn))
+        return G.map_facts(facts, args, names, lambda n: _t(n) if n is not None and n.type == "identifier" and _t(n) in fr.env else None)
+
     def _engine(self, fr: KFrame) -> G.GuardEngine:
         def norm(n):
             t = n.type
@@ -1072,7 +1112,7 @@ class KtInterp:
                     return (local(kids[-1]), nm)
             return None
 
-        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, anchored=("matches",), attr=attr, canon=lambda var: G.canonical_assignment(fr.file.src, var), untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted")
+        return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, anchored=("matches",), attr=attr, call_facts=lambda name, args: self._call_facts(name, args, fr), canon=lambda var: G.canonical_assignment(fr.file.src, var), untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted")
 
     def _regex_arg(self, call: Node, fr: KFrame) -> str | None:
         va = next((c for c in call.children if c.type == "value_arguments"), None)

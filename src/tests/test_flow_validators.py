@@ -72,3 +72,38 @@ def test_length_only_validator_still_reports(tmp_path, name, tpl, strong, weak):
 def test_java_map_of_lookup_is_a_constant(tmp_path):
     (tmp_path / "App.java").write_text("import org.springframework.web.bind.annotation.*;\nimport java.util.*;\n@RestController public class App {\n  static final Map<String,String> CMDS=Map.of(\"a\",\"echo a\",\"b\",\"echo b\");\n  @GetMapping(\"/r\") public String r(@RequestParam String q) throws Exception { Runtime.getRuntime().exec(CMDS.get(q)); return \"ok\"; }\n}\n")
     assert discover_repo(tmp_path) == []
+
+
+KT = "import org.springframework.web.bind.annotation.*\n\nfun ok(v: String): Boolean {{\n    return {check}\n}}\n\n@RestController\nclass App {{\n    @GetMapping(\"/r\")\n    fun r(@RequestParam q: String): String {{\n        if (!ok(q)) return \"no\"\n        Runtime.getRuntime().exec(\"echo \" + q)\n        return \"ok\"\n    }}\n}}\n"
+RS = "use axum::{{extract::Query, routing::get, Router}};\nuse std::{{collections::HashMap, process::Command}};\nfn ok(v: &str) -> bool {{\n    {check}\n}}\nasync fn r(Query(q): Query<HashMap<String, String>>) -> String {{\n    let v = q[\"q\"].clone();\n    if !ok(&v) {{ return \"no\".into(); }}\n    Command::new(\"sh\").arg(\"-c\").arg(format!(\"echo {{}}\", v)).status().unwrap();\n    \"ok\".into()\n}}\n#[tokio::main]\nasync fn main() {{ let _ = Router::new().route(\"/r\", get(r)); }}\n"
+
+
+def test_kotlin_validator_function(tmp_path):
+    (tmp_path / "App.kt").write_text(KT.format(check='v.matches(Regex("[a-z0-9]+"))'))
+    assert discover_repo(tmp_path) == []
+    (tmp_path / "App.kt").write_text(KT.format(check="v.length < 10"))
+    assert len(discover_repo(tmp_path)) == 1
+
+
+def test_rust_validator_function(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.rs").write_text(RS.format(check="v.chars().all(|c| c.is_ascii_alphanumeric())"))
+    assert discover_repo(tmp_path) == []
+    (tmp_path / "src" / "main.rs").write_text(RS.format(check="v.len() < 10"))
+    assert len(discover_repo(tmp_path)) == 1
+
+
+def test_kotlin_process_builder_with_a_constant_program_has_no_shell(tmp_path):
+    body = "import org.springframework.web.bind.annotation.*\n\n@RestController\nclass App {{\n    @GetMapping(\"/r\")\n    fun r(@RequestParam q: String): String {{\n        ProcessBuilder({args}).start()\n        return \"ok\"\n    }}\n}}\n"
+    (tmp_path / "App.kt").write_text(body.format(args='"echo", q'))
+    assert discover_repo(tmp_path) == []
+    (tmp_path / "App.kt").write_text(body.format(args='"sh", "-c", q'))
+    assert len(discover_repo(tmp_path)) == 1
+
+
+def test_kotlin_regex_replace_that_strips_unsafe_characters(tmp_path):
+    body = "import org.springframework.web.bind.annotation.*\n\n@RestController\nclass App {{\n    @GetMapping(\"/r\")\n    fun r(@RequestParam q: String): String {{\n        Runtime.getRuntime().exec(\"echo \" + q.replace({a}))\n        return \"ok\"\n    }}\n}}\n"
+    (tmp_path / "App.kt").write_text(body.format(a='Regex("[^a-z0-9]"), ""'))
+    assert discover_repo(tmp_path) == []
+    (tmp_path / "App.kt").write_text(body.format(a='Regex("[<>]"), ""'))
+    assert len(discover_repo(tmp_path)) == 1

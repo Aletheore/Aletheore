@@ -15,7 +15,7 @@ from aletheore.flow import coverage
 from aletheore.flow import library as _lib
 from aletheore.flow import extra_sinks as _X
 from aletheore.flow.prefilter import classes_present
-from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, Obj, Tainted, classify
+from aletheore.flow.values import host_is_fixed, path_prefix_safe, Choice, Const, ListV, Obj, Tainted, classify
 from aletheore.scanner.detect import IGNORED_DIRS
 
 _SINK_WORDS = {
@@ -146,6 +146,14 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                         ext = bool(positions)
                         if not positions:
                             return
+                    if _cwe == 78 and args and name in ("ProcessBuilder", "<new>", "exec"):
+                        first = args[0]
+                        if len(args) == 1 and isinstance(first, ListV) and len(first.items) >= 2 and not first.dirty and not first.opaque:
+                            first, multi = first.items[0], True
+                        else:
+                            multi = len(args) >= 2
+                        if multi and isinstance(first, Const) and str(first.value).lower().rsplit("/", 1)[-1] not in ("sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "pwsh", "dash", "ksh", "csh"):
+                            return  # a constant program with separate arguments: no shell, no second command
                     for i in positions:
                         if _cwe in (918, 601) and 0 <= i < len(args) and (host_is_fixed(args[i]) or path_prefix_safe(args[i])):
                             continue  # a fixed scheme://host/ prefix: only the path is attacker data
