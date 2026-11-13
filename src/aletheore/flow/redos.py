@@ -94,6 +94,51 @@ def _ambiguous(body) -> bool:
             return True
         if len(alt) == 1 and first[0] == "group" and _ambiguous(first[1]):
             return True
+        if len(alt) > 1 and last[0] == "atom" and last[2] in _UNB:
+            # the body ends in a repeat the next iteration can start with (optional leading items are skipped)
+            for it in alt[:-1]:
+                if it[0] != "atom":
+                    break
+                if it[2] in ("?", "*"):
+                    if it[2] == "*" and _overlap(it, last):
+                        return True
+                    continue
+                if _overlap(it, last):
+                    return True
+                break
+            else:
+                return True
+        if len(alt) > 1 and last[0] == "atom" and last[2] == "" and first[0] == "atom" and first[2] in _UNB:
+            cf, cl = _chars(first), _chars(last)
+            if cf is not None and cl is not None and cl <= cf:
+                return True  # `(.*,)+`: the separator is itself matched by the repeat before it
+    return False
+
+
+def _adjacent(alts) -> bool:
+    """Two unbounded repeats side by side over the same characters, with only characters from that set between them (`\\s*\\n\\s*`, `\\S+@\\S+`): quadratic."""
+    for alt in alts:
+        body = [x for x in alt if x[0] != "anchor"]
+        for i, x in enumerate(body):
+            if x[0] != "atom" or x[2] not in _UNB or x[1] == ".":
+                continue
+            cx = _chars(x)
+            if cx is None:
+                continue
+            for y in body[i + 1:]:
+                if y[0] != "atom":
+                    break
+                cy = _chars(y)
+                if cy is None:
+                    break
+                if y[2] in _UNB and cx & cy and y[1] != ".":
+                    return True
+                if y[2] == "" and cy <= cx:
+                    continue
+                break
+        for x in alt:
+            if x[0] == "group" and _adjacent(x[1]):
+                return True
     return False
 
 
@@ -121,6 +166,8 @@ def weakness(pattern: str) -> str | None:
         return None
     if _walk(alts):
         return "exponential"
+    if _adjacent(alts):
+        return "polynomial"
     return None
 
 
@@ -174,7 +221,7 @@ def scan_lines(lang: str, lines: list[str], rel: str) -> list[dict]:
                               "cwe": ["CWE-1333", "CWE-730"],
                               "message": ("A regular expression repeats a group whose body can match the same text in several ways, so a crafted string makes it backtrack exponentially (ReDoS). "
                                           if kind == "exponential" else
-                                          "A regular expression ends in trailing-whitespace repetition without a start anchor, so a long run of whitespace not at the end is retried from every position (quadratic ReDoS). ")
+                                          "A regular expression has two adjacent repeats over overlapping characters, so a long run of them that then fails to match is retried from every split point (quadratic ReDoS). ")
                               + "Rewrite it without nested repetition or bound the input length."})
                 break
         if len(found) >= 3:

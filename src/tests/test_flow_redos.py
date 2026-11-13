@@ -38,3 +38,18 @@ def test_vendored_and_go_are_skipped(tmp_path):
     (tmp_path / "public" / "lib.js").write_text("const re = /^(a+)+$/;\n")
     (tmp_path / "x.go").write_text("package x\nimport \"regexp\"\nvar r = regexp.MustCompile(`(a+)+`)\n")
     assert [f for f in scan(tmp_path) if f["rule_id"].endswith(".redos")] == []
+
+
+@pytest.mark.parametrize("pat", [r"^(.*,)+(.+)?$", r"^(?:\.?[a-zA-Z_][a-zA-Z_0-9]*)+$", r"(?:\.?\d+)+"])
+def test_group_that_ends_in_what_the_next_round_starts_with_is_exponential(pat):
+    assert redos.weakness(pat) == "exponential"
+
+
+@pytest.mark.parametrize("pat", [r"\s*\n\s*", r"\S+@\S+\.\S+", r"^(\-|\+)?([1-9]+[0-9]*)$"])
+def test_adjacent_overlapping_repeats_are_polynomial(pat):
+    assert redos.weakness(pat) == "polynomial"
+
+
+@pytest.mark.parametrize("pat", [r"\s*,\s*", r" *, *", r"^.*a.*b", r"(\w+,)+", r"([^,]*,)+", r"[0-9]+-[0-9]+", r"\d+\.\d+"])
+def test_separator_and_dotstar_patterns_stay_quiet(pat):
+    assert redos.weakness(pat) is None
