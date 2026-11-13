@@ -6,25 +6,49 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+_RETRY_OPEN = os.name == "nt"
+
 
 @contextmanager
 def file_lock(path: Path, timeout: float = 0.25):
     """Yield whether a bounded OS lock was acquired; process exit releases it automatically."""
     path.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
-    with os.fdopen(os.open(path, flags, 0o600), "r+b") as handle:
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            descriptor = os.open(path, flags, 0o600)
+            break
+        except PermissionError:
+            # Windows: several openers creating the same lock file at once can get a sharing violation for a few
+            # milliseconds. That is contention, not a real refusal, so keep trying within the time budget (the same
+            # budget the lock itself waits); elsewhere, or once the budget is spent, the error is real and is raised.
+            if not _RETRY_OPEN or time.monotonic() >= end:
+                raise
+            time.sleep(0.005)
+    with os.fdopen(descriptor, "r+b") as handle:
         if os.name == "nt":
             import msvcrt
 
-            try:
-                if handle.seek(0, 2) == 0:
-                    handle.write(b"\0")
-                    handle.flush()
-            except PermissionError:
-                # Windows refuses a write into a byte another opener already locked. That is only benign when the byte
-                # exists; if the file is still empty the error is a real one (read-only file, restrictive ACL), so raise.
-                if handle.seek(0, 2) == 0:
-                    raise
+            # The lock byte goes in through the raw descriptor, not the buffered handle: a refused buffered write stays
+            # in the buffer, so every later seek or flush on the handle would raise the same error again.
+            descriptor = handle.fileno()
+            while True:
+                try:
+                    if os.fstat(descriptor).st_size == 0:
+                        os.write(descriptor, b"\0")
+                        os.lseek(descriptor, 0, os.SEEK_SET)
+                    break
+                except PermissionError:
+                    # Windows refuses a write into a byte another opener already locked. That is benign once the byte
+                    # exists. While the file is still empty it is either openers creating the lock file together (gone
+                    # in milliseconds, so keep trying within the time budget) or a real refusal (read-only file,
+                    # restrictive ACL), which still raises once the budget is spent.
+                    if os.fstat(descriptor).st_size > 0:
+                        break
+                    if time.monotonic() >= end:
+                        raise
+                    time.sleep(0.005)
 
             def lock():
                 handle.seek(0)
@@ -42,7 +66,6 @@ def file_lock(path: Path, timeout: float = 0.25):
             def unlock():
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
-        end = time.monotonic() + timeout
         acquired = False
         while True:
             try:
