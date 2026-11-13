@@ -1187,6 +1187,8 @@ class PyInterp:
             for c in n.named_children:
                 self.eval(c, fr)
                 if c.type == "call":
+                    for g in self._call_post_guards(c, fr):
+                        self._mark_safe(g, fr)  # the callee raised or returned early unless the value passed its checks
                     f = c.child_by_field_name("function")
                     last = _t(f).rsplit(".", 1)[-1] if f is not None and f.type in ("identifier", "attribute") else ""
                     ends = ends or last in self._NO_RETURN
@@ -1232,6 +1234,89 @@ class PyInterp:
         for k in set(a) | set(b):
             out[k] = join(a[k], b[k]) if (k in a and k in b) else (a[k] if k in a else b[k])
         fr.env = out
+
+    def _callee(self, call: Node, fr: PFrame):
+        """The (function node, file) a plain `name(args)` call runs, or None."""
+        f = call.child_by_field_name("function")
+        if f is None or f.type != "identifier":
+            return None
+        nm = _t(f)
+        if nm in fr.env or nm in fr.local_funcs:
+            return (fr.local_funcs[nm], fr.file) if nm in fr.local_funcs else None
+        hit = self.index.lookup(nm, fr.file)
+        return (hit[1], hit[2]) if hit is not None and hit[0] == "function" else None
+
+    @staticmethod
+    def _param_names(fnode: Node) -> list[str]:
+        params = fnode.child_by_field_name("parameters")
+        out = []
+        for p in (params.named_children if params is not None else []):
+            n = p if p.type == "identifier" else p.child_by_field_name("name") if p.type in ("default_parameter", "typed_default_parameter") \
+                else (p.named_children[0] if p.type == "typed_parameter" and p.named_children else None)
+            out.append(_t(n) if n is not None else "")
+        return out
+
+    def _map_args(self, call: Node, fnode: Node, names: set[str]) -> set[str]:
+        """Parameter names the callee proved safe -> the caller's variables passed in those positions."""
+        args_n = call.child_by_field_name("arguments")
+        args = [a for a in (args_n.named_children if args_n is not None else [])]
+        params = self._param_names(fnode)
+        out: set[str] = set()
+        for i, a in enumerate(args):
+            if a.type == "identifier" and i < len(params) and params[i] in names:
+                out.add(_t(a))
+        return out
+
+    def _call_guard(self, call: Node, fr: PFrame) -> set[str]:
+        """`if is_ok(v):` where is_ok returns a check on its parameter: v has passed it when the call is true."""
+        hit = self._callee(call, fr)
+        if hit is None:
+            return set()
+        fnode, file = hit
+        body = fnode.child_by_field_name("body")
+        rets = []
+        stack = [body] if body is not None else []
+        while stack:
+            cur = stack.pop()
+            if cur.type == "return_statement":
+                rets.append(cur)
+            elif cur.type not in ("function_definition", "lambda", "class_definition"):
+                stack.extend(cur.children)
+        if len(rets) != 1 or not rets[0].named_children or id(fnode) in self._active:
+            return set()
+        self._active.add(id(fnode))
+        try:
+            names = self._guarded_names(rets[0].named_children[0], PFrame(file, None, None, fr.depth + 1), negated=False)
+        finally:
+            self._active.discard(id(fnode))
+        return self._map_args(call, fnode, names)
+
+    def _call_post_guards(self, call: Node, fr: PFrame) -> set[str]:
+        """`validate(v)` as a statement: when the callee starts with `if not check(p): raise/return/abort`, p has passed on every path that comes back."""
+        hit = self._callee(call, fr)
+        if hit is None:
+            return set()
+        fnode, file = hit
+        body = fnode.child_by_field_name("body")
+        if body is None or id(fnode) in self._active:
+            return set()
+        names: set[str] = set()
+        cf = PFrame(file, None, None, fr.depth + 1)
+        self._active.add(id(fnode))
+        try:
+            for st in body.named_children:
+                if st.type == "if_statement" and not any(c.type in ("elif_clause", "else_clause") for c in st.named_children):
+                    block = st.child_by_field_name("consequence")
+                    last = block.named_children[-1] if block is not None and block.named_children else None
+                    ends = last is not None and (last.type in ("raise_statement", "return_statement") or (last.type == "expression_statement" and last.named_children
+                            and last.named_children[0].type == "call" and _t(last.named_children[0].child_by_field_name("function")).rsplit(".", 1)[-1] in self._NO_RETURN))
+                    if ends:
+                        names |= self._guarded_names(st.child_by_field_name("condition"), cf, negated=True)
+                elif st.type == "assert_statement" and st.named_children:
+                    names |= self._guarded_names(st.named_children[0], cf, negated=False)
+        finally:
+            self._active.discard(id(fnode))
+        return self._map_args(call, fnode, names)
 
     def _mark_safe(self, g: str, fr: PFrame) -> None:
         if g.endswith("@918"):
@@ -1341,6 +1426,13 @@ class PyInterp:
             return left | right if holds_for_both else left & right
         if t == "call":
             f = cond.child_by_field_name("function")
+            if f is not None and f.type == "identifier" and _t(f) == "bool":
+                cargs = cond.child_by_field_name("arguments")
+                return self._guarded_names(cargs.named_children[0], fr, negated) if cargs is not None and cargs.named_children else set()
+            if not negated and f is not None and f.type == "identifier":
+                got = self._call_guard(cond, fr)
+                if got:
+                    return got
             if not negated and f is not None and f.type == "attribute" and _t(f.child_by_field_name("object")).isidentifier() \
                     and _t(f.child_by_field_name("attribute")) in self._CLASS_CALLS:
                 return {_t(f.child_by_field_name("object"))}
@@ -1364,6 +1456,8 @@ class PyInterp:
             ops = " ".join(_t(c) for c in cond.children if not c.is_named)
             if len(operands) != 2:
                 return set()
+            if operands[0].type == "call" and operands[1].type == "none" and ops in ("is not", "!=", "is", "=="):
+                return self._guarded_names(operands[0], fr, negated if ops in ("is not", "!=") else not negated)
             if 22 in self.cwes and ((ops == "==" and not negated) or (ops == "!=" and negated)):
                 common = self._commonpath_check(operands, fr)
                 if common:
