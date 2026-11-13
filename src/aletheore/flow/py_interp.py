@@ -79,6 +79,7 @@ def _s(v: object) -> str:
 class PyInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
+    _NO_RETURN = frozenset(("abort", "exit", "_exit", "quit"))
 
     def __init__(self, index: PyIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None, return_hook=None, stash: set | None = None):
         self.index = index
@@ -1182,9 +1183,14 @@ class PyInterp:
                     return True
             return False
         if t == "expression_statement":
+            ends = False
             for c in n.named_children:
                 self.eval(c, fr)
-            return False
+                if c.type == "call":
+                    f = c.child_by_field_name("function")
+                    last = _t(f).rsplit(".", 1)[-1] if f is not None and f.type in ("identifier", "attribute") else ""
+                    ends = ends or last in self._NO_RETURN
+            return ends  # abort(400) / sys.exit(1): nothing after it runs
         if t == "return_statement":
             val = self.eval(n.named_children[0], fr) if n.named_children else Const(None)
             fr.rets.append(val)
@@ -1338,6 +1344,16 @@ class PyInterp:
             if not negated and f is not None and f.type == "attribute" and _t(f.child_by_field_name("object")).isidentifier() \
                     and _t(f.child_by_field_name("attribute")) in self._CLASS_CALLS:
                 return {_t(f.child_by_field_name("object"))}
+            if not negated and f is not None and f.type == "attribute" and _t(f.child_by_field_name("object")) == "re" \
+                    and _t(f.child_by_field_name("attribute")) in ("fullmatch", "match", "search"):
+                # re.fullmatch(r"[a-z0-9]+", v): the value is harmless text when the pattern is anchored and only admits plain characters
+                cargs = [a for a in (cond.child_by_field_name("arguments").named_children if cond.child_by_field_name("arguments") is not None else []) if a.type != "keyword_argument"]
+                if len(cargs) >= 2 and cargs[1].type == "identifier":
+                    rx = self.eval(cargs[0], fr)
+                    if isinstance(rx, Const) and isinstance(rx.value, str):
+                        full = _t(f.child_by_field_name("attribute")) == "fullmatch"
+                        if G.safe_regex(rx.value, self.cwes, implicit_anchor=full):
+                            return {_t(cargs[1])}
             if not negated and 22 in self.cwes and f is not None and f.type == "attribute":
                 canon = self._canonical_check(f, cond, fr)
                 if canon:
