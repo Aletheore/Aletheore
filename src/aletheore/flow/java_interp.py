@@ -683,6 +683,10 @@ class Interp:
         return [self.eval(c, fr) for c in node.named_children]
 
     def _call(self, node: Node, fr: Frame) -> Val:
+        if G.strip_call_is_safe(_t(node), self.cwes):
+            for c in node.named_children:  # (evaluated for what they do; the result is harmless text either way)
+                self.eval(c, fr)
+            return SAFE
         name = _t(node.child_by_field_name("name"))
         obj_n = node.child_by_field_name("object")
         args_n = node.child_by_field_name("arguments")

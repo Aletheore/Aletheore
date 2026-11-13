@@ -20,6 +20,7 @@ from aletheore.flow.php_index import PhpClass, PhpFile, PhpIndex
 from aletheore.flow.php_sinks import (
     CAST_SAFE, INCLUDE_KINDS, NAME_SANITIZERS, SAFE_FUNCS, SANITIZERS, SERVER_TAINTED_PREFIXES, SUPERGLOBALS,
 )
+from aletheore.flow import guards as G
 from aletheore.flow.values import ClosureV, FuncV, add_prefix, SAFE, UNKNOWN, Choice, Const, MapV, Obj, Tainted, Val, classify, join, join_all
 
 PROPAGATING = {
@@ -608,6 +609,10 @@ class PhpInterp:
             self.sink_hook(node, name, recv_text, args, recv, fr)
 
     def _call(self, n: Node, fr: PFrame) -> Val:
+        if G.strip_call_is_safe(_t(n), self.cwes):
+            for c in n.named_children:  # (evaluated for what they do; the result is harmless text either way)
+                self.eval(c, fr)
+            return SAFE
         fn_n = n.child_by_field_name("function")
         args_n = n.child_by_field_name("arguments")
         if fn_n is None:

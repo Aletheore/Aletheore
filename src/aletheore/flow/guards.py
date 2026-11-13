@@ -138,7 +138,9 @@ class GuardEngine:
     pattern_source(node)  -> constant regex text the node stands for (a compiled pattern constant), else None
     """
 
-    def __init__(self, norm, local, const, safe, safe_collection, pattern_source, cwes, anchored=(), attr=None, canon=None, untainted=None):
+    def __init__(self, norm, local, const, safe, safe_collection, pattern_source, cwes, anchored=(), attr=None, canon=None, untainted=None, call_facts=None):
+        # call_facts(name, recv_node, arg_nodes) -> Facts | None: what a call to a function of this program proves about the arguments
+        self.call_facts = call_facts
         self.canon = canon or (lambda var: False)  # canon(var): was the variable produced by a canonicalising call
         # untainted(node): the value is not attacker data (a root directory the server chose, even if not a constant)
         self.untainted = untainted or safe
@@ -193,6 +195,10 @@ class GuardEngine:
         if k != "call":
             return EMPTY
         _, name, recv, args, recv_text = n
+        if self.call_facts is not None and recv is None:
+            got = self.call_facts(name, args)
+            if got is not None and got != EMPTY:
+                return got
         if name in EQUALS:
             ops = ([recv] if recv is not None else []) + list(args)
             if len(ops) == 2:
@@ -268,3 +274,40 @@ def apply(names: set, cwes: set[int], env: dict, safe_value) -> None:
     for v in resolve(names, cwes):
         if v in env:
             env[v] = safe_value
+
+
+_STRIP_CALL = re.compile(
+    r"""(?:\.\s*(?:replace|replaceAll|gsub|ReplaceAll|replaceAll_)\s*\(\s*(?:/(?P<j>(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\n])+)/(?P<f>[a-z]*)|(?P<q>["'])(?P<s>(?:\\.|(?!(?P=q)).)*)(?P=q))\s*,\s*(?P<r>""|'')\s*\)"""
+    r"""|\bpreg_replace\s*\(\s*(?P<pq>["'])/(?P<p>(?:\\.|[^/\\])+)/[a-z]*(?P=pq)\s*,\s*(?P<pr>""|'')\s*,"""
+    r"""|\bRegex\s*\.\s*Replace\s*\(\s*[^,]+,\s*@?"(?P<c>(?:\\.|[^"\\])*)"\s*,\s*"")""")
+
+
+def strip_call_is_safe(call_text: str, cwes: set[int] | None = None) -> bool:
+    """`x.replace(/[^a-z0-9]/g, "")`, `preg_replace('/[^\\w]/', '', $x)`, `Regex.Replace(x, "[^a-z0-9]", "")`: deleting everything outside
+    a harmless set leaves only harmless text, whatever `x` was."""
+    m = _STRIP_CALL.search(call_text)
+    if not m:
+        return False
+    if m.group("j") is not None:
+        pat = m.group("j")
+        name_replace_all = ".replaceAll" in call_text[: m.start() + 12]
+        if "g" not in (m.group("f") or "") and not name_replace_all and ".gsub" not in call_text[: m.start() + 6]:
+            return False  # a JS replace without /g removes only the first match
+    elif m.group("s") is not None:
+        pat = m.group("s")
+        if ".replace(" in call_text[: m.start() + 10] and ".replaceAll" not in call_text[: m.start() + 12]:
+            return False  # a string pattern in String.replace is literal text (JS), not a regex
+    elif m.group("p") is not None:
+        pat = m.group("p")
+    else:
+        pat = m.group("c")
+    mm = re.fullmatch(r"\[\^([^\]]+)\][+*]?", pat)
+    if not mm:
+        return False
+    allowed = [t for t in _ALLOWED_CLASS if t != " "]
+    if not set(cwes or ()) & {89, 78, 88, 943, 90, 643}:
+        allowed.append(" ")
+    rest = mm.group(1)
+    for tok in sorted(allowed, key=len, reverse=True):
+        rest = rest.replace(tok, "")
+    return rest == ""

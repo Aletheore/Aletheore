@@ -651,6 +651,10 @@ class JsInterp:
             self.sink_hook(node, name, recv_text, args, recv, fr)
 
     def _call(self, n: Node, fr: JFrame) -> Val:
+        if G.strip_call_is_safe(_t(n), self.cwes):
+            for c in n.named_children:  # (evaluated for what they do; the result is harmless text either way)
+                self.eval(c, fr)
+            return SAFE
         func = n.child_by_field_name("function")
         args_n = n.child_by_field_name("arguments")
         if func is None:
@@ -1031,6 +1035,8 @@ class JsInterp:
         if t == "expression_statement":
             for c in n.named_children:
                 self.eval(c, fr)
+                if c.type == "call_expression":
+                    self._narrow(self._call_post_names(c, fr), fr)
             return False
         if t == "return_statement":
             fr.rets.append(self.eval(n.named_children[0], fr) if n.named_children else Const(None))
@@ -1073,6 +1079,107 @@ class JsInterp:
         fr.env = out
 
     # ------------------------------------------------------------------ guards
+    def _callee_fn(self, name: str, fr: JFrame):
+        held = fr.env.get(name)
+        if held is not None and isinstance(held, CallableV) and getattr(held, "node", None) is not None and getattr(held, "file", None) is not None:
+            return held.node, held.file  # a function held in a variable
+        if name in fr.env or name in fr.funcs:
+            return (fr.funcs[name], fr.file) if name in fr.funcs and name not in fr.env else None
+        hit = self.index.lookup(name, fr.file)
+        return (hit[1], hit[2]) if hit is not None and hit[0] == "function" else None
+
+    @staticmethod
+    def _param_list(fn: Node) -> list[str]:
+        params = fn.child_by_field_name("parameters")
+        if params is None:
+            p = fn.child_by_field_name("parameter")
+            return [_t(p)] if p is not None and p.type == "identifier" else []
+        out = []
+        for p in params.named_children:
+            tgt = p if p.type == "identifier" else (p.child_by_field_name("pattern") or (p.named_children[0] if p.named_children else None))
+            out.append(_t(tgt) if tgt is not None and tgt.type == "identifier" else "")
+        return out
+
+    def _return_exprs(self, fn: Node) -> list[Node]:
+        body = fn.child_by_field_name("body")
+        if body is None:
+            return []
+        if body.type != "statement_block":
+            return [body]  # an arrow function with an expression body
+        out, stack = [], [body]
+        while stack:
+            cur = stack.pop()
+            if cur.type == "return_statement":
+                if cur.named_children:
+                    out.append(cur.named_children[0])
+            elif cur.type not in FN_TYPES:
+                stack.extend(cur.children)
+        return out
+
+    def _map_facts(self, facts, args: list[Node], params: list[str], fr: JFrame):
+        """Facts about a callee's parameters, restated for the variables the caller passed in those positions."""
+        def one(names):
+            out = set()
+            for nm in names:
+                m = re.match(r"^([A-Za-z_$][\w$]*)([@#].*)?$", nm)
+                if not m or m.group(1) not in params:
+                    continue
+                i = params.index(m.group(1))
+                if i < len(args) and args[i].type == "identifier" and _t(args[i]) in fr.env:
+                    out.add(_t(args[i]) + (m.group(2) or ""))
+            return out
+        return one(facts[0]), one(facts[1])
+
+    def _call_facts(self, name: str, args: list[Node], fr: JFrame):
+        """`if (isOk(v))` where isOk returns a check on its parameter."""
+        hit = self._callee_fn(name, fr)
+        if hit is None or id(hit[0]) in self._active:
+            return None
+        fn, file = hit
+        rets = self._return_exprs(fn)
+        if len(rets) != 1:
+            return None
+        params = self._param_list(fn)
+        cf = JFrame(file, None, None, fr.depth + 1, env={p: Tainted("param") for p in params if p})
+        self._active.add(id(fn))
+        try:
+            facts = self._engine(cf).facts(rets[0])
+        finally:
+            self._active.discard(id(fn))
+        return self._map_facts(facts, args, params, fr)
+
+    def _call_post_names(self, call: Node, fr: JFrame) -> set:
+        """`validate(v);` as a statement: when the callee begins with `if (!check(p)) throw/return`, p has passed on every path that comes back."""
+        fnode = call.child_by_field_name("function")
+        if fnode is None or fnode.type != "identifier":
+            return set()
+        hit = self._callee_fn(_t(fnode), fr)
+        if hit is None or id(hit[0]) in self._active:
+            return set()
+        fn, file = hit
+        body = fn.child_by_field_name("body")
+        if body is None or body.type != "statement_block":
+            return set()
+        params = self._param_list(fn)
+        cf = JFrame(file, None, None, fr.depth + 1, env={p: Tainted("param") for p in params if p})
+        args_n = call.child_by_field_name("arguments")
+        args = list(args_n.named_children) if args_n is not None else []
+        names: set = set()
+        self._active.add(id(fn))
+        try:
+            for st in body.named_children:
+                if st.type != "if_statement" or st.child_by_field_name("alternative") is not None:
+                    continue
+                cons = st.child_by_field_name("consequence")
+                last = cons.named_children[-1] if cons is not None and cons.type == "statement_block" and cons.named_children else cons
+                if last is None or last.type not in ("throw_statement", "return_statement"):
+                    continue
+                facts = self._engine(cf).facts(st.child_by_field_name("condition"))
+                names |= self._map_facts(facts, args, params, fr)[1]
+        finally:
+            self._active.discard(id(fn))
+        return names
+
     def _engine(self, fr: JFrame) -> G.GuardEngine:
         def norm(n):
             t = n.type
@@ -1134,6 +1241,7 @@ class JsInterp:
             return None
 
         return G.GuardEngine(norm, local, const, safe, coll, pattern_source, self.cwes, attr=attr,
+                             call_facts=lambda name, args: self._call_facts(name, args, fr),
                              canon=lambda var: G.canonical_assignment(fr.file.src, var, r"\bresolve\("),
                              untainted=lambda n: n is not None and classify(self.eval(n, fr)) != "tainted")
 

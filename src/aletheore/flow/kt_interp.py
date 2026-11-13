@@ -483,6 +483,10 @@ class KtInterp:
             self.sink_hook(node, name, recv_text, args, recv, fr)
 
     def _call(self, n: Node, fr: KFrame) -> Val:
+        if G.strip_call_is_safe(_t(n), self.cwes):
+            for c in n.named_children:  # (evaluated for what they do; the result is harmless text either way)
+                self.eval(c, fr)
+            return SAFE
         callee = n.children[0] if n.children else None
         if callee is None:
             return UNKNOWN

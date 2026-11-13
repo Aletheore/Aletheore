@@ -469,6 +469,10 @@ class CsInterp:
             self.sink_hook(node, name, recv_text, args, recv, fr)
 
     def _invoke(self, n: Node, fr: CFrame) -> Val:
+        if G.strip_call_is_safe(_t(n), self.cwes):
+            for c in n.named_children:  # (evaluated for what they do; the result is harmless text either way)
+                self.eval(c, fr)
+            return SAFE
         func = n.child_by_field_name("function")
         args_n = n.child_by_field_name("arguments")
         if func is None:

@@ -618,6 +618,10 @@ class RbInterp:
             self.sink_hook(node, name, recv_text, args, recv, fr)
 
     def _call(self, n: Node, fr: RFrame) -> Val:
+        if G.strip_call_is_safe(_t(n), self.cwes):
+            for c in n.named_children:  # (evaluated for what they do; the result is harmless text either way)
+                self.eval(c, fr)
+            return SAFE
         recv_n = n.child_by_field_name("receiver")
         meth_n = n.child_by_field_name("method")
         args_n = n.child_by_field_name("arguments")
