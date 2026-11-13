@@ -59,7 +59,7 @@ dependencies = [
     "openai>=2.0,<4.0",
     "python-toon>=0.2.0,<0.3",
     "pyyaml>=6.0,<7.0",
-    "typer>=0.24,<0.29",
+    "typer>=0.24,<0.30",
     # click only ever arrives transitively via typer, but pinned explicitly
     # here because 8.5.0 has a real, verified regression: typer.Argument's
     # own help= text (e.g. the query command's `kind` argument) stops
