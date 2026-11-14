@@ -20,6 +20,7 @@
     "docs/**/*.md"
   ],
   "words": [
+    "Actix",
     "Trendshift",
     "phuryn",
     "qdrant",
