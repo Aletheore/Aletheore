@@ -246,3 +246,49 @@ def test_ruby_def_nested_only_in_a_lambda_literal_is_not_public(tmp_path):
     modules, _, _ = build_module_graph(repo)
     func = modules[0]["symbols"]["functions"][0]
     assert func["is_public"] is False
+
+
+def _ruby_edges(tmp_path, files):
+    from aletheore.scanner.graph import build_module_graph
+
+    repo = tmp_path / "rbp"
+    for rel, body in files.items():
+        f = repo / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body)
+    modules, _, _ = build_module_graph(repo)
+    return {m["path"]: set(m["imports"]) for m in modules}
+
+
+def test_require_of_a_path_built_from_a_local_variable_and_file_join(tmp_path):
+    imp = _ruby_edges(tmp_path, {
+        "lib/httparty.rb": "module HTTParty; end\n",
+        "examples/basic.rb": (
+            "dir = File.expand_path(File.join(File.dirname(__FILE__), '..', 'lib'))\n"
+            "require File.join(dir, 'httparty')\n"),
+    })
+    assert imp["examples/basic.rb"] == {"lib/httparty.rb"}
+
+
+def test_require_file_expand_path_with_file_as_the_base(tmp_path):
+    imp = _ruby_edges(tmp_path, {
+        "config/environment.rb": "ENV['A'] = '1'\n",
+        "app/boot.rb": "require File.expand_path('../../config/environment', __FILE__)\n",
+    })
+    assert imp["app/boot.rb"] == {"config/environment.rb"}
+
+
+def test_require_file_join_with_dunder_dir(tmp_path):
+    imp = _ruby_edges(tmp_path, {
+        "lib/tool/core.rb": "module Core; end\n",
+        "lib/tool.rb": "require File.join(__dir__, 'tool', 'core')\n",
+    })
+    assert imp["lib/tool.rb"] == {"lib/tool/core.rb"}
+
+
+def test_a_require_of_an_unknown_expression_adds_nothing(tmp_path):
+    imp = _ruby_edges(tmp_path, {
+        "lib/a.rb": "module A; end\n",
+        "run.rb": "name = ENV['X']\nrequire File.join(name, 'a')\n",
+    })
+    assert imp["run.rb"] == set()

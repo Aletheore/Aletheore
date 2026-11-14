@@ -2894,8 +2894,74 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
     def text(n: Node) -> str:
         return source[n.start_byte:n.end_byte].decode(errors="ignore")
 
+    env: dict[str, tuple[str, list[str]]] = {}  # file-level `name = <path expression>` assignments, in source order
+
+    def normalise(segments: list[str]) -> list[str]:
+        out: list[str] = []
+        for seg in segments:
+            if seg in ("", "."):
+                continue
+            if seg == "..":
+                if out and out[-1] not in ("..", "<file>"):
+                    out.pop()
+                elif out and out[-1] == "<file>":
+                    out.pop()
+                else:
+                    out.append("..")
+            else:
+                out.append(seg)
+        return out
+
+    def eval_path(n: Node) -> tuple[str, list[str]] | None:
+        """A path expression as (anchor, segments): anchor "dir" is relative to the file's directory (`<file>` stands for
+        the file itself, which a later `..` removes), "lit" is a plain relative string. None when it cannot be known."""
+        if n.type == "string":
+            if any(c.type == "interpolation" for c in n.children):
+                return None
+            value = "".join(text(c) for c in n.children if c.type == "string_content")
+            return None if value.startswith("/") else ("lit", [x for x in value.split("/") if x])
+        if n.type == "identifier":
+            name = text(n)
+            if name == "__FILE__":
+                return ("dir", ["<file>"])
+            if name == "__dir__":
+                return ("dir", [])
+            return env.get(name)
+        if n.type == "parenthesized_statements" and n.named_child_count == 1:
+            return eval_path(n.named_children[0])
+        if n.type == "call":
+            receiver, method = n.child_by_field_name("receiver"), n.child_by_field_name("method")
+            args_node = n.child_by_field_name("arguments")
+            if receiver is None or method is None or text(receiver) not in ("File", "Pathname") or args_node is None:
+                return None
+            args = [a for a in args_node.children if a.type not in ("(", ")", ",")]
+            name = text(method)
+            values = [eval_path(a) for a in args]
+            if name == "dirname" and len(values) == 1 and values[0] and values[0][0] == "dir":
+                return ("dir", normalise(values[0][1] + [".."]))
+            if name == "join" and values and all(values) and values[0][0] == "dir":
+                return ("dir", normalise([seg for v in values for seg in v[1]]))
+            if name in ("expand_path", "absolute_path", "realpath") and len(values) == 1 and values[0] and values[0][0] == "dir":
+                return ("dir", normalise(values[0][1]))
+            if name in ("expand_path", "absolute_path") and len(values) == 2 and all(values) and values[1][0] == "dir" and values[0][0] == "lit":
+                return ("dir", normalise(values[1][1] + values[0][1]))
+        return None
+
+    def collect_assignments(root: Node):
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type == "assignment":
+                left, right = n.child_by_field_name("left"), n.child_by_field_name("right")
+                if left is not None and right is not None and left.type == "identifier":
+                    value = eval_path(right)
+                    if value is not None and value[0] == "dir":
+                        env[text(left)] = value
+            stack.extend(reversed(n.children))
+
     def walk(root: Node):
         # Iterative, not recursive - see _extract_python's walk for why.
+        collect_assignments(root)
         stack = [root]
         while stack:
             n = stack.pop()
@@ -2910,6 +2976,13 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
                     if method_name in ("require", "require_relative", "require_all", "autoload"):
                         args_node = n.child_by_field_name("arguments")
                         if args_node is not None:
+                            first = next((a for a in args_node.children if a.type not in ("(", ")", ",")), None)
+                            if method_name in ("require", "require_relative") and first is not None and first.type != "string":
+                                value = eval_path(first)
+                                if value is not None and value[0] == "dir" and value[1] and "<file>" not in value[1]:
+                                    # `require File.join(__dir__, "x")` / `File.expand_path("../x", __FILE__)`: a path
+                                    # anchored on this file, so it resolves like require_relative
+                                    imports.append(("require_relative", "/".join(value[1])))
                             for arg in args_node.children:
                                 if arg.type == "string":
                                     for part in arg.children:
