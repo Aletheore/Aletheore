@@ -115,3 +115,27 @@ def test_a_part_that_names_its_own_partial_type_in_its_body_depends_on_every_par
     }
     got = _imports(tmp_path, files, "Db.Async.cs")
     assert {"Db.cs", "Db.Other.cs"} <= got
+
+
+def test_a_partial_part_in_an_if_split_file_still_finds_its_sibling_in_the_recovered_namespace(tmp_path):
+    split = (
+        "#if NET20\nusing System.Collections;\n#else\nusing System.Collections.Generic;\n#endif\n"
+        "namespace App\n{\n"
+        "#if NET20\n    public partial class Db\n    {\n#else\n    public partial class Db\n    {\n#endif\n"
+        "        public void ComputeTotal() { }\n    }\n}\n"
+    )
+    files = {
+        "Db.Split.cs": split,
+        "Db.cs": "namespace App\n{\n    public partial class Db { void Run() { ComputeTotal(); } }\n}\n",
+    }
+    assert "Db.Split.cs" in _imports(tmp_path, files, "Db.cs")
+
+
+def test_two_partial_blocks_of_one_type_in_a_file_keep_both_blocks_members(tmp_path):
+    files = {
+        "A.cs": ("namespace App;\npublic partial class Db { void One() { } }\n"),
+        "Parts.cs": ("namespace App;\npublic partial class Db { public void AlphaMember() { } }\n"
+                     "public partial class Db { public void BetaMember() { } }\n"),
+        "UsesBeta.cs": "namespace App;\npublic partial class Db { void Go() { BetaMember(); } }\n",
+    }
+    assert "Parts.cs" in _imports(tmp_path, files, "UsesBeta.cs")

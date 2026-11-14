@@ -3515,7 +3515,14 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
                 if name_node is not None:
                     type_name = text(name_node)
                     if any(m.type == "modifier" and text(m) == "partial" for m in c.children):
-                        partial[type_name] = {"ns": ns, **_csharp_partial_facts(c, source)}
+                        facts = _csharp_partial_facts(c, source)
+                        if type_name in partial:
+                            # the same type declared in several top-level blocks of one file (`#if` / `#else` branches)
+                            merged = partial[type_name]
+                            merged["nested"] = sorted(set(merged["nested"]) | set(facts["nested"]))
+                            merged["members"] = sorted(set(merged["members"]) | set(facts["members"]))
+                        else:
+                            partial[type_name] = {"ns": ns, **facts}
                     types.setdefault(type_name, ns)
                     members.setdefault(type_name, {}).update(_csharp_value_members(c, source))
                     bases.setdefault(type_name, set()).update(_csharp_base_names(c, source))
@@ -3534,6 +3541,9 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
             for type_name, type_ns in list(types.items()):
                 if type_ns == "":
                     types[type_name] = found_ns[0]
+            for facts in partial.values():
+                if facts["ns"] == "":
+                    facts["ns"] = found_ns[0]  # keep the partial index in step with the recovered namespace
     # `public static partial class FooExtensions` is as much a static class as `public static class` is
     ext_found = _CSHARP_EXTENSION_RE.findall(decoded) if types and re.search(r"\bstatic\s+(?:\w+\s+)*?class\b", decoded) else []
     ext_methods = sorted({name for name, _generic in ext_found})
