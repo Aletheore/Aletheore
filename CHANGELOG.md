@@ -5,7 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- Added: Actix routes are composed through nested `web::scope` prefixes and `web::resource` registrations. On the RealWorld Actix app, 0 of the spec's 19 routes matched; now all 19.
+- Added: Actix routes are composed through nested `web::scope` prefixes and `web::resource` registrations, and `#[get("/x")]` style attribute routes are found (without a surrounding scope prefix, which is noted). On the RealWorld Actix app, 0 of the spec's 19 routes matched; now all 19.
 
 ## 0.13.0 - 2026-11-14
 

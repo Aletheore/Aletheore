@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -968,6 +969,9 @@ def _extract_axum_routes(root: Node, source: bytes, rel_path: str) -> list[dict]
     return entries
 
 
+_ACTIX_ATTRIBUTE_ROUTE = re.compile(
+    r'#\[\s*(get|post|put|delete|patch|head)\s*\(\s*"([^"]*)"[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?async\s+fn\s+(\w+)'
+)
 _ACTIX_METHODS = {"get", "post", "put", "delete", "patch", "head"}
 
 
@@ -1075,6 +1079,21 @@ def _extract_actix_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                 for arg in named:
                     if arg.type == "call_expression":
                         evaluate(arg, prefix, depth + 1)
+
+    text = source.decode(errors="replace")
+    for m in _ACTIX_ATTRIBUTE_ROUTE.finditer(text):
+        entries.append(
+            {
+                "method": m.group(1).upper(),
+                "path": m.group(2) or "/",
+                "framework": "actix",
+                "file": rel_path,
+                "line": text.count("\n", 0, m.start()) + 1,
+                "handler": m.group(3),
+                "unresolved": False,
+                "note": "attribute route: a surrounding web::scope prefix is not applied",
+            }
+        )
 
     for n in _walk_tree(root):
         if n.type != "call_expression" or any(a <= n.start_byte and n.end_byte <= b for a, b in covered):

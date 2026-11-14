@@ -54,3 +54,16 @@ fn cfg(c: &mut web::ServiceConfig) {
 def test_axum_still_used_without_actix(tmp_path):
     code = 'fn r() { Router::new().route("/x", get(h)); }\n'
     assert _routes(tmp_path, code) == [("GET", "/x")]
+
+
+def test_attribute_macro_routes(tmp_path):
+    code = """
+use actix_web::{get, post, HttpResponse};
+
+#[get("/health")]
+async fn health() -> HttpResponse { HttpResponse::Ok().finish() }
+
+#[post("/items/{id}")]
+pub async fn make(id: String) -> HttpResponse { HttpResponse::Ok().finish() }
+"""
+    assert _routes(tmp_path, code) == [("GET", "/health"), ("POST", "/items/{id}")]
