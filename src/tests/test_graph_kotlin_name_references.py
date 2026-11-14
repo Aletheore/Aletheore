@@ -200,3 +200,13 @@ def test_a_qualified_name_inside_a_string_literal_is_not_a_reference(tmp_path):
         MP + "main/kotlin/b/Use.kt": 'package b\nval message = "see a.Thing for details"\nval raw = """a.Thing"""\n',
     })
     assert MP + "main/kotlin/a/Thing.kt" not in mods[MP + "main/kotlin/b/Use.kt"]["imports"]
+
+
+def test_an_explicitly_imported_short_function_name_is_still_linked(tmp_path):
+    mods = _modules(tmp_path, {
+        MP + "main/kotlin/a/Util.kt": "package a\nfun get(x: Int) = x\n",
+        MP + "main/kotlin/b/User.kt": "package b\nimport a.get\nfun f() = get(1)\n",
+    })
+    user = mods[MP + "main/kotlin/b/User.kt"]
+    assert MP + "main/kotlin/a/Util.kt" in user["imports"]
+    assert user.get("import_confidence", {}).get(MP + "main/kotlin/a/Util.kt") is None

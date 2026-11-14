@@ -6232,9 +6232,10 @@ def _add_kotlin_name_edges(repo_path: Path, modules: list[dict]) -> None:
             if (pkg, last) in value_index:
                 explicit_values[alias or last] = (pkg, last)
         for name in sorted(entry["lower_refs"]):
-            if name in entry["declared_values"] or len(name) < 4:
-                continue
             exact = name in explicit_values
+            # an explicit import is authoritative whatever the name's length; the length filter is for the name-only guess
+            if name in entry["declared_values"] or (len(name) < 4 and not exact):
+                continue
             if exact:
                 owners = value_index.get(explicit_values[name], set())
             else:
