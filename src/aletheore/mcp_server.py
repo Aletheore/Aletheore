@@ -721,7 +721,21 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path, only
             # generic query-wrapper tool gets it now, not just the no-target
             # ones - including the "requires a target" and "optional target"
             # branches below, which previously had no cap whatsoever.
-            def budgeted(result, target):
+            def budgeted(result, target, section=None, offset=0, limit=None, filter=None):  # noqa: A002
+                if section is not None or offset or limit is not None or filter is not None:
+                    # A client written before paging moved to aletheore_page: honour the four arguments it still sends
+                    # (they are not in the published schema) exactly as aletheore_page would.
+                    return _metered_budget(
+                        repo_path, result,
+                        record=False,
+                        budget_chars=query_budget_chars,
+                        section=section,
+                        offset=offset,
+                        limit=limit,
+                        filter=filter,
+                        sort_by=_QUERY_BUDGET_SORT_BY.get(kind),
+                        scope=(target or "repo-wide") if kind in optional_target_kinds else None,
+                    )
                 return _metered_budget(
                     repo_path, result,
                     budget_chars=query_budget_chars,
@@ -731,31 +745,34 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path, only
 
             if requires_target:
 
-                def tool(target: str) -> str:
+                def tool(target: str, section: str | None = None, offset: int = 0, limit: int | None = None,
+                         filter: str | None = None) -> str:  # noqa: A002
                     evidence = read_evidence(repo_path)
                     try:
                         result = func(evidence, target)
                     except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
                         return _error_result({"error": str(exc)})
-                    return budgeted(result, target)
+                    return budgeted(result, target, section, offset, limit, filter)
 
                 return tool, True
 
             if kind in optional_target_kinds:
 
-                def tool(target: str | None = None) -> str:
+                def tool(target: str | None = None, section: str | None = None, offset: int = 0,
+                         limit: int | None = None, filter: str | None = None) -> str:  # noqa: A002
                     evidence = read_evidence(repo_path)
                     try:
                         result = func(evidence, target)
                     except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
                         return _error_result({"error": str(exc)})
-                    return budgeted(result, target)
+                    return budgeted(result, target, section, offset, limit, filter)
 
                 return tool, True
 
-            def tool() -> str:
+            def tool(section: str | None = None, offset: int = 0, limit: int | None = None,
+                     filter: str | None = None) -> str:  # noqa: A002
                 evidence = read_evidence(repo_path)
-                return budgeted(func(evidence, None), None)
+                return budgeted(func(evidence, None), None, section, offset, limit, filter)
 
             return tool, True
 
@@ -767,6 +784,7 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path, only
         )
 
     _reject_unknown_arguments(mcp_instance, set(_TOOL_NAME_TO_QUERY_KIND))
+    _hide_legacy_paging_arguments(mcp_instance, set(_TOOL_NAME_TO_QUERY_KIND))
 
     pageable = {
         name: (*QUERY_FUNCTIONS[kind], kind in optional_target_kinds, kind)
@@ -801,6 +819,29 @@ def _reject_unknown_arguments(mcp_instance: MCPServer, tool_names: set[str]) -> 
             arg_model.model_rebuild(force=True)
         except Exception:  # noqa: BLE001 - same reason: skip this tool, keep the others
             logging.getLogger(__name__).warning("could not reject unknown arguments for %s", tool.name)
+
+
+_LEGACY_PAGING_ARGUMENTS = ("section", "offset", "limit", "filter")
+
+
+def _hide_legacy_paging_arguments(mcp_instance: MCPServer, tool_names: set[str]) -> None:
+    """Keep accepting section, offset, limit and filter on the evidence tools, but leave them out of the published schema.
+
+    Paging moved to aletheore_page to save about 1,900 tokens a turn in tool definitions, which rejected every client
+    still sending those arguments. They are declared on the tools so they validate and work, and removed from the schema
+    here, so an agent is not told about them (the saving stays) while an older client keeps working. Any other unknown
+    argument is still rejected (see `_reject_unknown_arguments`). Reaches the tool's public `parameters` schema."""
+    try:
+        tools = list(mcp_instance._tool_manager.list_tools())
+    except Exception:  # noqa: BLE001 - same reason as _reject_unknown_arguments
+        logging.getLogger(__name__).warning("could not hide the legacy paging arguments: FastMCP internals differ")
+        return
+    for tool in tools:
+        if tool.name not in tool_names:
+            continue
+        properties = tool.parameters.get("properties") or {}
+        for name in _LEGACY_PAGING_ARGUMENTS:
+            properties.pop(name, None)
 
 
 def _how_to_page(tool_name: str, target: str | None) -> str:
