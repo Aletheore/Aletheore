@@ -309,3 +309,27 @@ def test_rust_test_target_in_a_subdirectory_resolves_crate_paths_to_its_main_rs(
         "tests/builder/arg.rs": "use crate::util::helper;\n",
     })
     assert ("tests/builder/arg.rs", "tests/builder/util.rs") in edges_of(repo)
+
+
+def test_rust_standalone_test_crate_is_not_mapped_to_a_siblings_modules(tmp_path):
+    repo = write(tmp_path / "flat", {
+        "Cargo.toml": pkg("app"),
+        "src/lib.rs": "pub fn run() {}\n",
+        "tests/tests.rs": "mod util;\nmod binary;\n",
+        "tests/util.rs": "pub fn helper() {}\n",
+        "tests/binary.rs": "use crate::util::helper;\n",
+        "tests/standalone.rs": "use crate::util::helper;\n",  # its own crate, never declares `mod util;`
+    })
+    edges = edges_of(repo)
+    assert ("tests/binary.rs", "tests/util.rs") in edges
+    assert ("tests/standalone.rs", "tests/util.rs") not in edges
+
+
+def test_rust_package_root_bin_path_without_a_src_directory(tmp_path):
+    repo = write(tmp_path / "rootbin", {
+        "Cargo.toml": '[package]\nname = "app"\nversion = "0.1.0"\n[[bin]]\nname = "app"\npath = "main.rs"\n',
+        "main.rs": "mod util;\nfn main() {}\n",
+        "util.rs": "pub fn helper() {}\n",
+        "other.rs": "use crate::util::helper;\n",
+    })
+    assert ("main.rs", "util.rs") in edges_of(repo)

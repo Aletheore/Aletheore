@@ -1575,6 +1575,13 @@ def _rust_test_target_dir(from_file: Path, rest: list[str]) -> Path | None:
     else:
         return None
     wanted = re.compile(rf"\bmod\s+{re.escape(rest[0])}\s*;")
+    as_module = re.compile(rf"\bmod\s+{re.escape(from_file.stem)}\s*;")
+    try:
+        own = rust_resolve.clean_source(from_file.read_text(encoding="utf-8", errors="ignore"))
+    except OSError:
+        own = ""
+    if wanted.search(own):
+        return directory  # the file is its own crate root and declares the module itself
     try:
         siblings = sorted(directory.glob("*.rs"))
     except OSError:
@@ -1586,7 +1593,9 @@ def _rust_test_target_dir(from_file: Path, rest: list[str]) -> Path | None:
             text = rust_resolve.clean_source(sibling.read_text(encoding="utf-8", errors="ignore"))
         except OSError:
             continue
-        if wanted.search(text):
+        # in a directory of independent test crates, only the root that declares both the module being named and
+        # this file as one of its own modules is this file's crate root
+        if wanted.search(text) and as_module.search(text):
             return directory
     return None
 

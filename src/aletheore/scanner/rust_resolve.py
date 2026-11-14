@@ -111,7 +111,9 @@ def manifest_root_dirs(manifest_dir: str) -> tuple[str, ...]:
         if not isinstance(value, str) or os.path.basename(value) not in ("lib.rs", "main.rs"):
             continue
         directory = os.path.realpath(os.path.join(base, os.path.dirname(value)))
-        if directory != default_src and directory.startswith(base + os.sep) and directory not in out:
+        # `[[bin]] path = "main.rs"` / `[lib] path = "lib.rs"` at the package root puts the crate root in the package
+        # directory itself, which is as valid as a subdirectory
+        if directory != default_src and (directory == base or directory.startswith(base + os.sep)) and directory not in out:
             out.append(directory)
     return tuple(out)
 
