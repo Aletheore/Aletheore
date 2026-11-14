@@ -1564,7 +1564,15 @@ def _rust_test_target_dir(from_file: Path, rest: list[str]) -> Path | None:
     from aletheore.scanner import rust_resolve
 
     directory = from_file.parent
-    if not rest or directory.name not in ("tests", "examples", "benches") or not (directory.parent / "Cargo.toml").is_file():
+    if not rest:
+        return None
+    harness = ("tests", "examples", "benches")
+    # tests/foo.rs (siblings in tests/) or tests/foo/main.rs (siblings in tests/foo/)
+    if directory.name in harness and (directory.parent / "Cargo.toml").is_file():
+        pass
+    elif directory.parent.name in harness and (directory.parent.parent / "Cargo.toml").is_file():
+        pass
+    else:
         return None
     wanted = re.compile(rf"\bmod\s+{re.escape(rest[0])}\s*;")
     try:

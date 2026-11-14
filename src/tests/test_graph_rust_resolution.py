@@ -298,3 +298,14 @@ def test_rust_use_crate_item_follows_the_root_pub_use_to_its_defining_file(tmp_p
     imports = edges_of(repo)
     assert ("src/serde_impl.rs", "src/glob.rs") in imports
     assert ("src/serde_impl.rs", "src/lib.rs") in imports
+
+
+def test_rust_test_target_in_a_subdirectory_resolves_crate_paths_to_its_main_rs(tmp_path):
+    repo = write(tmp_path / "sub", {
+        "Cargo.toml": pkg("app"),
+        "src/lib.rs": "pub fn run() {}\n",
+        "tests/builder/main.rs": "mod util;\nmod arg;\n",
+        "tests/builder/util.rs": "pub fn helper() {}\n",
+        "tests/builder/arg.rs": "use crate::util::helper;\n",
+    })
+    assert ("tests/builder/arg.rs", "tests/builder/util.rs") in edges_of(repo)
