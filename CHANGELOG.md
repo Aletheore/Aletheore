@@ -5,7 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- Fixed: a bare angle include of a project's own public header (`#include <jansson.h>` with the header under `src/`) now links that header, marked inferred because it depends on the build's include paths. Standard and POSIX header names never bind, and two same-named headers stay unresolved. Also: a unity-build `#include "src/a.cc"` of a C/C++ source file now resolves (the path-suffix fallback only knew headers). Edge F1 against an independent reference: jansson 0.809 to 1.000, googletest 0.946 to 1.000, yaml-cpp 0.973 to 1.000, lz4 0.987 to 1.000.
+- Fixed: a bare angle include of a project's own public header (`#include <foo.h>` with the header under `src/`) now links that header, marked inferred because it depends on the build's include paths. Standard and POSIX header names never bind, and two same-named headers stay unresolved. Also: a unity-build `#include "src/a.cc"` of a C/C++ source file now resolves (the path-suffix fallback only knew headers). Edge F1 against an independent reference: a JSON library 0.809 to 1.000, googletest 0.946 to 1.000, yaml-cpp 0.973 to 1.000, lz4 0.987 to 1.000.
 
 ## 0.13.0 - 2026-11-14
 
