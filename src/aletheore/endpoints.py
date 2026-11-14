@@ -1461,10 +1461,10 @@ def _rails_enclosing_url_prefix(call_node: Node, source: bytes) -> list[str]:
                             segment = path_override
                         else:
                             first_string = next(
-                                (a for a in block_args.named_children if a.type == "string"), None
+                                (a for a in block_args.named_children if a.type in ("string", "simple_symbol")), None
                             )
                             if first_string is not None:
-                                segment = _ruby_string_content(first_string, source)
+                                segment = _rails_symbol_text(first_string, source)  # `scope "/logs"` and `scope :api`
                     if segment:
                         segments.append(segment)
         node = node.parent
@@ -1480,6 +1480,139 @@ def _apply_rails_url_prefix(path: str, url_prefix: list[str]) -> str:
     return "/".join([*cleaned, tail]) if tail else "/".join(cleaned)
 
 
+_RAILS_RESOURCE_ROUTES = (
+    ("index", "GET", ""), ("create", "POST", ""), ("new", "GET", "/new"), ("show", "GET", "/:id"),
+    ("edit", "GET", "/:id/edit"), ("update", "PATCH", "/:id"), ("update", "PUT", "/:id"), ("destroy", "DELETE", "/:id"),
+)
+_RAILS_SINGULAR_ROUTES = (
+    ("show", "GET", ""), ("create", "POST", ""), ("new", "GET", "/new"), ("edit", "GET", "/edit"),
+    ("update", "PATCH", ""), ("update", "PUT", ""), ("destroy", "DELETE", ""),
+)
+
+
+def _rails_symbol_text(node: Node | None, source: bytes) -> str | None:
+    if node is None:
+        return None
+    if node.type == "simple_symbol":
+        return source[node.start_byte : node.end_byte].decode().lstrip(":")
+    if node.type == "string":
+        return _ruby_string_content(node, source)
+    return None
+
+
+def _rails_option_node(args: Node | None, source: bytes, key: str) -> Node | None:
+    if args is None:
+        return None
+    for arg in args.named_children:
+        if arg.type == "pair":
+            k = arg.child_by_field_name("key")
+            if k is not None and source[k.start_byte : k.end_byte].decode().rstrip(":").lstrip(":") == key:
+                return arg.child_by_field_name("value")
+    return None
+
+
+def _rails_symbol_list(node: Node | None, source: bytes) -> list[str] | None:
+    """[:a, :b] or :a as a list of names; None when it is anything else."""
+    if node is None:
+        return None
+    single = _rails_symbol_text(node, source)
+    if single is not None:
+        return [single]
+    if node.type == "array":
+        out = []
+        for el in node.named_children:
+            text = _rails_symbol_text(el, source)
+            if text is None:
+                return None
+            out.append(text)
+        return out
+    return None
+
+
+def _rails_singular(name: str) -> str:
+    if name.endswith("ies"):
+        return name[:-3] + "y"
+    return name[:-1] if name.endswith("s") and not name.endswith("ss") else name
+
+
+def _rails_call_head(call: Node, source: bytes) -> str | None:
+    method_node = call.child_by_field_name("method")
+    if call.type != "call" or method_node is None or method_node.type != "identifier":
+        return None
+    return source[method_node.start_byte : method_node.end_byte].decode()
+
+
+def _rails_resource_of(call: Node, source: bytes) -> dict | None:
+    """The resource a `resources :x` / `resource :x` call declares: kind, name, path segment, param, controller and the
+    selected actions (None for `actions` when only/except is not a literal list)."""
+    head = _rails_call_head(call, source)
+    if head not in ("resources", "resource"):
+        return None
+    args = call.child_by_field_name("arguments")
+    first = args.named_children[0] if args is not None and args.named_children else None
+    name = _rails_symbol_text(first, source)
+    if name is None:
+        return None
+    path_node = _rails_option_node(args, source, "path")
+    path = _rails_symbol_text(path_node, source) if path_node is not None else None
+    param_node = _rails_option_node(args, source, "param")
+    param = _rails_symbol_text(param_node, source) if param_node is not None else None
+    controller_node = _rails_option_node(args, source, "controller")
+    controller = _rails_symbol_text(controller_node, source) if controller_node is not None else None
+    table = _RAILS_RESOURCE_ROUTES if head == "resources" else _RAILS_SINGULAR_ROUTES
+    actions: list[str] | None = [a for a, _m, _p in table]
+    for key, keep in (("only", True), ("except", False)):
+        node = _rails_option_node(args, source, key)
+        if node is not None:
+            listed = _rails_symbol_list(node, source)
+            if listed is None:
+                actions = None
+                break
+            actions = [a for a in actions if (a in listed) == keep]
+    return {"kind": head, "name": name, "segment": path or name, "param": param or "id",
+            "controller": controller or (name if head == "resources" else name + "s"), "actions": actions, "table": table}
+
+
+def _rails_enclosing_resources(call_node: Node, source: bytes) -> list[Node]:
+    """`resources` / `resource` calls whose do-block contains call_node, outermost first."""
+    found: list[Node] = []
+    node = call_node.parent
+    while node is not None:
+        if node.type == "do_block" and node.parent is not None and node.parent.type == "call":
+            if _rails_call_head(node.parent, source) in ("resources", "resource"):
+                found.append(node.parent)
+        node = node.parent
+    return list(reversed(found))
+
+
+def _rails_resource_base(resource_calls: list[Node], source: bytes) -> str | None:
+    """The URL path of the innermost resource in a chain of nested ones (without any scope/namespace prefix):
+    parent resources contribute `segment/:singular_param`, a singular parent just its segment."""
+    parts: list[str] = []
+    for index, call in enumerate(resource_calls):
+        info = _rails_resource_of(call, source)
+        if info is None:
+            return None
+        last = index == len(resource_calls) - 1
+        parts.append(info["segment"])
+        if info["kind"] == "resources" and not last:
+            parts.append(f":{_rails_singular(info['name'])}_{info['param']}")
+    return "/".join(parts)
+
+
+def _rails_member_collection_scope(call_node: Node, source: bytes) -> str | None:
+    node = call_node.parent
+    while node is not None:
+        if node.type == "do_block" and node.parent is not None and node.parent.type == "call":
+            head = _rails_call_head(node.parent, source)
+            if head in ("member", "collection"):
+                return head
+            if head in ("resources", "resource"):
+                return None
+        node = node.parent
+    return None
+
+
 def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
@@ -1489,7 +1622,40 @@ def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict
             args = n.child_by_field_name("arguments")
             if method_node is not None and method_node.type == "identifier":
                 method_name = source[method_node.start_byte : method_node.end_byte].decode()
-                if method_name in _RAILS_ROUTE_METHODS or method_name == "root":
+                nested = _rails_enclosing_resources(n, source) if method_name in _RAILS_ROUTE_METHODS else []
+                first_arg = args.named_children[0] if args is not None and args.named_children else None
+                if (
+                    nested and method_name in _RAILS_ROUTE_METHODS and _rails_option_node(args, source, "to") is None
+                    and _rails_symbol_text(first_arg, source) is not None
+                ):
+                    # `get :feed, on: :collection` / `member do post :publish end` inside a resource block
+                    action = _rails_symbol_text(first_arg, source)
+                    resource_info = _rails_resource_of(nested[-1], source)
+                    base = _rails_resource_base(nested, source)
+                    if resource_info is not None and base is not None:
+                        on_node = _rails_option_node(args, source, "on")
+                        scope = (_rails_symbol_text(on_node, source) if on_node is not None else None) or _rails_member_collection_scope(n, source)
+                        url_prefix = _rails_enclosing_url_prefix(n, source)
+                        module_prefix = _rails_enclosing_module_prefix(n, source)
+                        if scope == "collection" or resource_info["kind"] == "resource":
+                            tail = f"/{action}"
+                        elif scope == "member":
+                            tail = f"/:{resource_info['param']}/{action}"
+                        else:  # a bare verb in a resources block is nested under the member
+                            tail = f"/:{_rails_singular(resource_info['name'])}_{resource_info['param']}/{action}"
+                        entries.append(
+                            {
+                                "method": method_name.upper(),
+                                "path": _apply_rails_url_prefix(base + tail, url_prefix),
+                                "framework": "rails",
+                                "file": rel_path,
+                                "line": n.start_point[0] + 1,
+                                "handler": _apply_rails_module_prefix(f"{resource_info['controller']}#{action}", module_prefix),
+                                "unresolved": False,
+                                "note": None,
+                            }
+                        )
+                elif method_name in _RAILS_ROUTE_METHODS or method_name == "root":
                     path, to_value = _rails_path_and_to(
                         args, source, is_root=(method_name == "root")
                     )
@@ -1508,6 +1674,27 @@ def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                                 "note": None,
                             }
                         )
+                elif method_name in ("resources", "resource") and args is not None and _rails_resource_of(n, source) is not None \
+                        and _rails_resource_of(n, source)["actions"] is not None \
+                        and _rails_resource_base([*_rails_enclosing_resources(n, source), n], source) is not None:
+                    info = _rails_resource_of(n, source)
+                    base = _rails_resource_base([*_rails_enclosing_resources(n, source), n], source)
+                    url_prefix = _rails_enclosing_url_prefix(n, source)
+                    module_prefix = _rails_enclosing_module_prefix(n, source)
+                    for action, http, suffix in info["table"]:
+                        if action in info["actions"]:
+                            entries.append(
+                                {
+                                    "method": http,
+                                    "path": _apply_rails_url_prefix(base + suffix.replace(":id", ":" + info["param"]), url_prefix),
+                                    "framework": "rails",
+                                    "file": rel_path,
+                                    "line": n.start_point[0] + 1,
+                                    "handler": _apply_rails_module_prefix(f"{info['controller']}#{action}", module_prefix),
+                                    "unresolved": False,
+                                    "note": None,
+                                }
+                            )
                 elif method_name == "resources" and args is not None:
                     named = args.named_children
                     if named and named[0].type == "simple_symbol":
