@@ -5420,7 +5420,8 @@ _SYSTEM_HEADERS = frozenset(
     "threads.h time.h uchar.h wchar.h wctype.h unistd.h pthread.h dirent.h fcntl.h netdb.h poll.h regex.h sched.h "
     "semaphore.h strings.h termios.h dlfcn.h glob.h grp.h pwd.h utime.h wordexp.h libgen.h fnmatch.h ftw.h iconv.h "
     "langinfo.h monetary.h nl_types.h spawn.h syslog.h ucontext.h ulimit.h utmpx.h windows.h winsock2.h ws2tcpip.h "
-    "io.h direct.h process.h malloc.h alloca.h endian.h byteswap.h features.h execinfo.h ifaddrs.h ioctl.h".split()
+    "io.h direct.h process.h malloc.h alloca.h endian.h byteswap.h features.h execinfo.h ifaddrs.h ioctl.h "
+    "getopt.h libintl.h memory.h stdbit.h stdckdint.h sys/types.h".split()
 )
 
 
@@ -5489,7 +5490,7 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
                 # `#include <jansson.h>` where jansson.h is the project's own public header under src/: a bare angle
                 # include that is not a standard/POSIX header binds to the single in-repo header of that name. It
                 # depends on the build's -I flags, so the edge is marked inferred.
-                own = by_base.get(spec, [])
+                own = [h for h in by_base.get(spec, []) if h.endswith(_C_HEADER_EXTS)]  # a header, never a unity-build source
                 if len(own) == 1:
                     target, guessed = own[0], True
             if target and target != includer and target not in present:

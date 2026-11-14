@@ -303,3 +303,11 @@ def test_a_unity_build_include_of_a_source_file_links_it(tmp_path):
         "lib/src/all.cc": '#include "src/a.cc"\n#include "src/b.cc"\n',
     })
     assert set(mods["lib/src/all.cc"]["imports"]) == {"lib/src/a.cc", "lib/src/b.cc"}
+
+
+def test_a_bare_angle_include_never_binds_to_a_source_file(tmp_path):
+    mods = _c_repo(tmp_path, {
+        "src/gen.cc": "int g() { return 1; }\n",
+        "src/x.c": "#include <gen.cc>\nint f(void){return 0;}\n",
+    })
+    assert mods["src/x.c"]["imports"] == []
