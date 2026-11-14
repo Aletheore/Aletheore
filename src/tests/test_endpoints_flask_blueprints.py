@@ -161,3 +161,41 @@ def test_module_attribute_blueprint_with_an_aliased_package(tmp_path):
         "pkg/users.py": "from flask import Blueprint\nbp = Blueprint('u', __name__)\n@bp.get('/me')\ndef me(): ...\n",
     })
     assert ("GET", "/u/me") in got
+
+
+def test_blueprint_registration_cycle_does_not_cache_a_truncated_prefix():
+    from aletheore.flask_blueprints import effective_prefixes
+
+    # a registered on b, b registered on a (a cycle), plus b registered on app-level c: the answer for b must not depend on
+    # which key the walk started from
+    facts = [{
+        "defs": {("f.py", "a"): "/a", ("f.py", "b"): "/b", ("f.py", "c"): "/c"}, "factories": {},
+        "regs": [
+            {"target": ("f.py", "a"), "recv": ("f.py", "b"), "prefix": None},
+            {"target": ("f.py", "b"), "recv": ("f.py", "a"), "prefix": None},
+            {"target": ("f.py", "b"), "recv": ("f.py", "c"), "prefix": None},
+        ],
+    }]
+    first, _ = effective_prefixes(facts)
+    reordered = [{**facts[0], "defs": dict(reversed(list(facts[0]["defs"].items())))}]
+    second, _ = effective_prefixes(reordered)
+
+    assert sorted(first[("f.py", "b")]) == sorted(second[("f.py", "b")])
+    assert any(p.startswith("/c") for p in first[("f.py", "b")])
+
+
+def test_literal_handles_combined_string_prefixes_and_rejects_f_strings():
+    from tree_sitter import Parser
+    from aletheore.endpoints import PY_LANGUAGE
+    from aletheore.flask_blueprints import _literal
+
+    parser = Parser()
+    parser.language = PY_LANGUAGE
+
+    def lit(code: str):
+        tree = parser.parse(code.encode())
+        node = tree.root_node.children[0].children[0]
+        return _literal(code.encode(), node)
+
+    assert lit('rb"/x"') == "/x" and lit("u'/y'") == "/y" and lit('"/z"') == "/z"
+    assert lit('rf"/x{a}"') is None and lit('f"/x"') is None

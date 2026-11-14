@@ -29,9 +29,11 @@ def _literal(source: bytes, node: Node | None) -> str | None:
     if node is None or node.type != "string":
         return None
     raw = _text(source, node)
-    if raw[:1] in "rRbB":
+    prefix = ""
+    while raw[:1] and raw[:1] not in "'\"":
+        prefix += raw[:1]
         raw = raw[1:]
-    if raw[:1] == "f" or raw[:1] == "F":
+    if "f" in prefix.lower():
         return None  # an f-string is not a literal
     return raw.strip("'\"")
 
@@ -94,6 +96,7 @@ def collect_file_facts(root: Node, source: bytes, rel_path: str, resolve_import:
             _text(source, a.child_by_field_name("left")) for a in _walk(child)
             if a.type == "assignment" and a.child_by_field_name("left") is not None
             and a.child_by_field_name("right") is not None and a.child_by_field_name("right").type == "call"
+            and a.child_by_field_name("right").child_by_field_name("function") is not None
             and _text(source, a.child_by_field_name("right").child_by_field_name("function")).split(".")[-1] == "Blueprint"
         }
         for r in _walk(child):
@@ -169,12 +172,15 @@ def effective_prefixes(all_facts: list[dict]) -> tuple[dict[tuple[str, str], lis
             by_target.setdefault(target, []).append(reg)
     memo: dict[tuple[str, str], list[str]] = {}
     unresolved: set[tuple[str, str]] = set()
+    cuts = [0]  # how many times a registration cycle was cut short
 
     def eff(key: tuple[str, str], stack: tuple = ()) -> list[str]:
         if key in memo:
             return memo[key]
         if key in stack:
+            cuts[0] += 1
             return [""]
+        cuts_before = cuts[0]
         ctor = defs.get(key)
         registrations = by_target.get(key, [])
         out: list[str] = []
@@ -193,12 +199,16 @@ def effective_prefixes(all_facts: list[dict]) -> tuple[dict[tuple[str, str], lis
                 full = join_prefix(b, own or "")
                 if full not in out:
                     out.append(full)
-        memo[key] = out
+        if cuts[0] == cuts_before:
+            memo[key] = out  # a result computed while a cycle was cut short depends on where the walk started: not cached
         return out
 
+    final: dict[tuple[str, str], list[str]] = {}
     for key in defs:
-        eff(key)
-    return memo, unresolved
+        # each blueprint's answer comes from a walk rooted at that blueprint; only results that did not involve a cut
+        # cycle are shared between walks, so the answer does not depend on the order the blueprints are visited
+        final[key] = memo[key] if key in memo else eff(key)
+    return final, unresolved
 
 
 def extract_add_url_rules(
