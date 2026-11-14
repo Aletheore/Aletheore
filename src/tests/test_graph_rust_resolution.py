@@ -200,3 +200,14 @@ def test_rust_mod_placeholder_in_a_macro_rules_body_is_not_a_module(tmp_path):
         "src/n.rs": "pub struct N;\n",
     })
     assert ("src/lib.rs", "src/n.rs") not in edges_of(repo)
+
+
+def test_rust_mod_text_inside_a_macro_invocation_comment_or_string_is_not_a_module(tmp_path):
+    repo = write(tmp_path / "mac3", {
+        "Cargo.toml": pkg("app"),
+        "src/lib.rs": 'cfg_net! {\n    // mod ghost;\n    pub(crate) mod real;\n    const NOTE: &str = "mod phantom;";\n}\n',
+        "src/real.rs": "pub struct R;\n", "src/ghost.rs": "pub struct G;\n", "src/phantom.rs": "pub struct P;\n",
+    })
+    edges = edges_of(repo)
+    assert ("src/lib.rs", "src/real.rs") in edges
+    assert ("src/lib.rs", "src/ghost.rs") not in edges and ("src/lib.rs", "src/phantom.rs") not in edges

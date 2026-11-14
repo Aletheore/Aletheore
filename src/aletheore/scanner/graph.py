@@ -1470,7 +1470,9 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
                 # declaration; a `$name` placeholder (inside a macro_rules! body) is not, and is never matched.
                 body = next((c for c in n.children if c.type == "token_tree"), None)
                 if body is not None:
-                    body_text = source[body.start_byte:body.end_byte].decode(errors="ignore")
+                    from aletheore.scanner import rust_resolve
+
+                    body_text = rust_resolve.clean_source(source[body.start_byte:body.end_byte].decode(errors="ignore"))  # no comments or strings
                     declared_in = _rust_inline_mod_names(n, source)
                     for mod_name in dict.fromkeys(re.findall(r"(?<![\w$])mod\s+([A-Za-z_]\w*)\s*;", body_text)):
                         imports.append(f"@imod:{'/'.join(declared_in)}|{mod_name}" if declared_in else f"self::{mod_name}")
