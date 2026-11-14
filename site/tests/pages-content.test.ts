@@ -32,7 +32,7 @@ describe("ported policy pages", () => {
   });
   it("keep the dated headers and the 14-day refund window", () => {
     expect(legal.privacy.updated).toBe("Last updated: October 2026");
-    expect(legal.terms.updated).toBe("Last updated: October 2026");
+    expect(legal.terms.updated).toBe("Last updated: November 2026");
     expect(legal.refund.html).toContain("14 days");
   });
   it("state the GitHub App permissions the App actually holds (checked against GitHub's public apps API on 2026-09-27)", () => {
@@ -44,8 +44,8 @@ describe("ported policy pages", () => {
     expect(h).not.toContain("repository contents (read),");
   });
   it("state the current prices in the terms", () => {
-    expect(legal.terms.html).toContain("$10/month");
-    expect(legal.terms.html).toContain("$29.99/month or $299.90/year");
+    expect(legal.terms.html).toContain("$15/month");
+    expect(legal.terms.html).toContain("$40/month or $400/year");
     expect(legal.terms.html).toContain("$6.99/month");
   });
   it("disclose the free-tier provider on the privacy page (PR 811)", () => {

@@ -6,15 +6,15 @@ const flat = JSON.stringify({ plans, credit, footnotes });
 
 describe("pricing data", () => {
   it("has the three published plans at the published prices", () => {
-    expect(plans.map((p) => [p.name, p.price])).toEqual([["Community", "$0"], ["Flash", "$10"], ["AIR", "$29.99"]]);
+    expect(plans.map((p) => [p.name, p.price])).toEqual([["Community", "$0"], ["Flash", "$15"], ["AIR", "$40"]]);
   });
   it("agrees with the published JSON-LD offers", () => {
     const offers = Object.fromEntries((ld.offers as { name: string; price: string }[]).map((o) => [o.name, o.price]));
-    expect(offers["Aletheore Flash"]).toBe("10");
-    expect(offers["Aletheore AIR"]).toBe("29.99");
+    expect(offers["Aletheore Flash"]).toBe("15");
+    expect(offers["Aletheore AIR"]).toBe("40");
   });
   it("states the credit allotments used in the meters", () => {
-    expect(credit.meters.map((m) => m.value)).toEqual([5, 18]);
+    expect(credit.meters.map((m) => m.value)).toEqual([8, 24]);
   });
   it("carries no em or en dashes", () => {
     expect(flat).not.toMatch(/[–—]/);
