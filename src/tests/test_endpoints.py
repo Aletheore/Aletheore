@@ -1870,3 +1870,13 @@ def test_rails_singularizer_handles_common_plurals():
 
     assert [_rails_singular(w) for w in ("articles", "categories", "addresses", "statuses", "boxes", "branches", "people")] == [
         "article", "category", "address", "status", "box", "branch", "person"]
+
+
+def test_extract_rails_only_wins_over_except_and_a_slash_string_is_not_an_action_and_singular_plurals():
+    from aletheore.endpoints import _rails_plural
+
+    root, source = parse_ruby("resources :posts, only: [:index], except: [:index]\nresources :users do\n  get '/health'\nend\n")
+    got = {(e["method"], e["path"]) for e in _extract_rails_routes(root, source, "config/routes.rb")}
+    assert ("GET", "posts") in got                       # only: wins, except: is ignored
+    assert not any("health" in path for _m, path in got)  # a URL, not an action
+    assert [_rails_plural(w) for w in ("profile", "person", "status", "category", "box")] == ["profiles", "people", "statuses", "categories", "boxes"]

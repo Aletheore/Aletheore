@@ -1534,6 +1534,18 @@ _RAILS_IRREGULAR_SINGULARS = {"people": "person", "men": "man", "women": "woman"
                               "analyses": "analysis", "indices": "index", "matrices": "matrix"}
 
 
+def _rails_plural(name: str) -> str:
+    """The controller name Rails derives for a singular `resource :name` (profile -> profiles, person -> people)."""
+    for plural, singular in _RAILS_IRREGULAR_SINGULARS.items():
+        if name == singular:
+            return plural
+    if name.endswith("y") and name[-2:-1] not in ("a", "e", "i", "o", "u"):
+        return name[:-1] + "ies"
+    if name.endswith(("s", "x", "z", "ch", "sh")):
+        return name + "es"
+    return name + "s"
+
+
 def _rails_singular(name: str) -> str:
     """A small ActiveSupport-style singularizer for the names that occur in route files."""
     if name in _RAILS_IRREGULAR_SINGULARS:
@@ -1570,7 +1582,8 @@ def _rails_resource_of(call: Node, source: bytes) -> dict | None:
     controller = _rails_symbol_text(controller_node, source) if controller_node is not None else None
     table = _RAILS_RESOURCE_ROUTES if head == "resources" else _RAILS_SINGULAR_ROUTES
     actions: list[str] | None = [a for a, _m, _p in table]
-    for key, keep in (("only", True), ("except", False)):
+    # Rails honours `only` and ignores `except` when both are given
+    for key, keep in ((("only", True),) if _rails_option_node(args, source, "only") is not None else (("except", False),)):
         node = _rails_option_node(args, source, key)
         if node is not None:
             listed = _rails_symbol_list(node, source)
@@ -1579,7 +1592,7 @@ def _rails_resource_of(call: Node, source: bytes) -> dict | None:
                 break
             actions = [a for a in actions if (a in listed) == keep]
     return {"kind": head, "name": name, "segment": path or name, "param": param or "id",
-            "controller": controller or (name if head == "resources" else name + "s"), "actions": actions, "table": table}
+            "controller": controller or (name if head == "resources" else _rails_plural(name)), "actions": actions, "table": table}
 
 
 def _rails_enclosing_resources(call_node: Node, source: bytes) -> list[Node]:
@@ -1636,6 +1649,7 @@ def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                 if (
                     nested and method_name in _RAILS_ROUTE_METHODS and _rails_option_node(args, source, "to") is None
                     and _rails_symbol_text(first_arg, source) is not None
+                    and not (_rails_symbol_text(first_arg, source) or "").startswith("/")  # `get '/health'` is a URL, not an action
                 ):
                     # `get :feed, on: :collection` / `member do post :publish end` inside a resource block
                     action = _rails_symbol_text(first_arg, source)
