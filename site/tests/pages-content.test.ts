@@ -44,8 +44,8 @@ describe("ported policy pages", () => {
     expect(h).not.toContain("repository contents (read),");
   });
   it("state the current prices in the terms", () => {
-    expect(legal.terms.html).toContain("$10/month");
-    expect(legal.terms.html).toContain("$29.99/month or $299.90/year");
+    expect(legal.terms.html).toContain("$15/month");
+    expect(legal.terms.html).toContain("$40/month or $400/year");
     expect(legal.terms.html).toContain("$6.99/month");
   });
   it("disclose the free-tier provider on the privacy page (PR 811)", () => {

@@ -90,11 +90,11 @@ This is a local process you start and stop. It is not a hosted service, and noth
 
 A free **Community** tier covers the CLI, the GitHub Action, the MCP server, and the local dashboard, permanently and without an account.
 
-**Aletheore Flash: $10/month** (monthly billing only, no annual price yet). Adds a hosted GitHub App:
+**Aletheore Flash: $15/month** (monthly billing only, no annual price yet). Adds a hosted GitHub App:
 
-- **Flash review**: automated PR review on every push to an open pull request, grounded in evidence for the changed files, powered by $5 of AI credit each month (about 400 PR reviews; larger PRs use more, smaller ones less)
+- **Flash review**: automated PR review on every push to an open pull request, grounded in evidence for the changed files, powered by $8 of AI credit each month (about 280 PR reviews; larger PRs use more, smaller ones less)
 
-**Aletheore AIR: $29.99/month** (or $299.90/year), including **3 team members** and $18 of AI credit each month (shared across PR reviews, Docs, managed audits and AIRview; as a guide, about 400 PR reviews alongside typical use of the others, and more reviews if you use less of them). Additional members $6.99/month each. Everything in Flash, plus:
+**Aletheore AIR: $40/month** (or $400/year), including **3 team members** and $24 of AI credit each month (shared across PR reviews, Docs, managed audits and AIRview; as a guide, about 400 PR reviews alongside typical use of the others, and more reviews if you use less of them). Additional members $6.99/month each. Everything in Flash, plus:
 
 - **Managed audits**: LLM-written, evidence-grounded reports, Ed25519-signed with a public verification endpoint
 - **Citation verification**: every finding is checked against real evidence; unverifiable claims are dropped or flagged, and the report's certificate reports whether it is fully evidence-backed
