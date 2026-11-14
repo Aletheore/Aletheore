@@ -328,7 +328,22 @@ async def test_a_client_still_passing_the_old_paging_arguments_gets_the_page_it_
     )
     assert old == new and "error" not in str(old)[:40]
     schema = next(t for t in await server.list_tools() if t.name == "aletheore_endpoints").input_schema
-    assert not {"section", "offset", "limit", "filter"} & set(schema.get("properties", {}))
+    legacy = {"section", "offset", "limit", "filter"}
+    assert not legacy & set(schema.get("properties", {}))
+    assert not legacy & set(schema.get("required", []))
+
+
+@pytest.mark.asyncio
+async def test_old_paging_arguments_page_a_target_tool_and_an_optional_target_tool_like_aletheore_page(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    bloat(repo, 5)
+    server = build_server(repo)
+    for tool, target, sections in (("aletheore_ownership", None, ("$",)), ("aletheore_symbols", "a.py", ("functions",))):
+        base = {"target": target} if target else {}
+        for section in sections:
+            old = tool_result_body(await server.call_tool(tool, {**base, "section": section, "limit": 2}))
+            new = tool_result_body(await server.call_tool("aletheore_page", {"tool": tool, "section": section, "limit": 2, **base}))
+            assert old == new and "error" not in old["result"], (tool, section, old)
 
 
 @pytest.mark.asyncio
