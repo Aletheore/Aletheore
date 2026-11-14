@@ -3451,6 +3451,8 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
 
     namespaces: list[str] = []
     types: dict[str, str] = {}
+    members: dict[str, dict[str, str]] = {}
+    bases: dict[str, set[str]] = {}
 
     def walk(children, ns: str) -> str:
         for c in children:
@@ -3473,7 +3475,10 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
             elif c.type in _CSHARP_TOP_TYPE_DECLS:
                 name_node = c.child_by_field_name("name")
                 if name_node is not None:
-                    types.setdefault(text(name_node), ns)
+                    type_name = text(name_node)
+                    types.setdefault(type_name, ns)
+                    members.setdefault(type_name, {}).update(_csharp_value_members(c, source))
+                    bases.setdefault(type_name, set()).update(_csharp_base_names(c, source))
             elif c.type == "declaration_list":
                 walk(c.children, ns)
         return ns
@@ -3490,6 +3495,8 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
         "ext_generic": ext_generic,
         "ext_ns": next(iter(types.values())) if types else "",
         "global_usings": _CSHARP_GLOBAL_USING_RE.findall(decoded),
+        "members": members,
+        "bases": {name: sorted(parents) for name, parents in bases.items()},
     }
 
 
@@ -3661,6 +3668,120 @@ def _csharp_visible_owners(
     return best
 
 
+def _csharp_simple_type_name(node: Node | None, source: bytes) -> str:
+    """`Foo`, `Foo<T>`, `A.B.Foo`, `Foo?` -> `Foo` (the last simple name); "" when it cannot be read."""
+    while node is not None:
+        if node.type == "identifier":
+            return source[node.start_byte:node.end_byte].decode(errors="ignore")
+        if node.type == "qualified_name":
+            node = node.child_by_field_name("name") or (node.children[-1] if node.children else None)
+        elif node.type in ("generic_name", "nullable_type", "array_type", "pointer_type"):
+            node = next((c for c in node.children if c.type in ("identifier", "qualified_name", "generic_name")), None)
+        else:
+            return ""
+    return ""
+
+
+def _csharp_value_members(type_node: Node, source: bytes) -> dict[str, str]:
+    """Properties and fields declared directly in a type body: name -> simple name of its declared type ("" unknown).
+    Methods are left out: a call never makes a name stand for a type."""
+    body = type_node.child_by_field_name("body")
+    out: dict[str, str] = {}
+    if body is None:
+        return out
+    for member in body.children:
+        if member.type == "property_declaration":
+            name = member.child_by_field_name("name")
+            if name is not None:
+                out[source[name.start_byte:name.end_byte].decode(errors="ignore")] = _csharp_simple_type_name(
+                    member.child_by_field_name("type"), source
+                )
+        elif member.type == "field_declaration":
+            declaration = next((c for c in member.children if c.type == "variable_declaration"), None)
+            if declaration is None:
+                continue
+            declared = _csharp_simple_type_name(declaration.child_by_field_name("type"), source)
+            for declarator in declaration.children:
+                if declarator.type != "variable_declarator":
+                    continue
+                name = declarator.child_by_field_name("name") or next(
+                    (c for c in declarator.children if c.type == "identifier"), None
+                )
+                if name is not None:
+                    out[source[name.start_byte:name.end_byte].decode(errors="ignore")] = declared
+    return out
+
+
+def _csharp_base_names(type_node: Node, source: bytes) -> set[str]:
+    base_list = next((c for c in type_node.children if c.type == "base_list"), None)
+    if base_list is None:
+        return set()
+    names = {_csharp_simple_type_name(c, source) for c in base_list.children if c.type not in (":", ",")}
+    return {n for n in names if n}
+
+
+_CSHARP_TYPE_CONTEXT_PARENTS = frozenset({
+    "object_creation_expression", "variable_declaration", "parameter", "type_argument_list", "base_list", "attribute",
+    "cast_expression", "typeof_expression", "nullable_type", "array_type", "generic_name", "qualified_name",
+    "type_parameter_constraint", "type_constraint", "as_expression", "is_expression", "declaration_pattern",
+    "default_expression", "property_declaration", "method_declaration", "local_function_statement",
+    "delegate_declaration", "event_field_declaration", "conversion_operator_declaration", "operator_declaration",
+    "catch_declaration", "foreach_statement", "implicit_object_creation_expression", "constructor_constraint",
+    "tuple_element", "pointer_type", "ref_type", "type_pattern", "recursive_pattern", "indexer_declaration",
+})
+
+
+def _csharp_type_context_names(root: Node, source: bytes) -> set[str]:
+    """Identifiers that appear where only a type can stand (`new X()`, `X field`, `List<X>`, `: X`, `(X)e`): there a
+    member of the same name is not in play, so the name is a type reference."""
+    out: set[str] = set()
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        if n.type == "identifier" and n.parent is not None and n.parent.type in _CSHARP_TYPE_CONTEXT_PARENTS:
+            parent = n.parent
+            # the declared NAME of a property/method/parameter is not a type use; its `type` child is
+            name_node = parent.child_by_field_name("name")
+            if name_node is None or name_node.id != n.id:
+                out.add(source[n.start_byte:n.end_byte].decode(errors="ignore"))
+        stack.extend(n.children)
+    return out
+
+
+def _csharp_shadowing_members(importer: Path, index: dict) -> set[str]:
+    """Names of properties/fields visible in the importer's own types and their base types (followed by simple
+    name, to a fixed depth). A simple name in an expression binds to such a member before any type. A member whose
+    declared type has the same name (`Foo Foo`) is not listed: the name may then mean the type too."""
+    summaries = index["files"]
+    info = summaries.get(importer) or {}
+    members_of = index.setdefault("members_of", {})
+    bases_of = index.setdefault("bases_of", {})
+    if not members_of and not bases_of:
+        for summary in summaries.values():
+            for type_name, found in (summary.get("members") or {}).items():
+                members_of.setdefault(type_name, {}).update(found)
+            for type_name, parents in (summary.get("bases") or {}).items():
+                bases_of.setdefault(type_name, set()).update(parents)
+        members_of.setdefault("", {})  # marks the maps as built even when empty
+    shadow: set[str] = set()
+    pending = list((info.get("types") or {}).keys())
+    visited: set[str] = set()
+    for _ in range(8):
+        next_round: list[str] = []
+        for type_name in pending:
+            if type_name in visited:
+                continue
+            visited.add(type_name)
+            for member, declared_type in members_of.get(type_name, {}).items():
+                if declared_type != member:
+                    shadow.add(member)
+            next_round.extend(bases_of.get(type_name, ()))
+        pending = next_round
+        if not pending:
+            break
+    return shadow
+
+
 def _csharp_type_reference_targets(
     source: bytes,
     own_types: set[str],
@@ -3701,9 +3822,17 @@ def _csharp_type_reference_targets(
         names = _csharp_code_identifiers(tree_root, source)
     else:
         names = (m.group(0) for m in _IDENTIFIER_RE.finditer(text))
+    shadowing: set[str] = set()
+    type_context: set[str] = set()
+    if scope is not None and tree_root is not None:
+        shadowing = _csharp_shadowing_members(importer, index)
+        if shadowing:
+            type_context = _csharp_type_context_names(tree_root, source)
     for name in names:
         if name in seen or name in own_types:
             continue
+        if name in shadowing and name not in type_context:
+            continue  # binds to an inherited or own member, not to the type of that name
         if len(name) < _CSHARP_MIN_TYPE_NAME:
             # only a unique generic extension called with explicit type arguments (see _build_csharp_index)
             if (
