@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Improved: Kotlin files now depend on each other by the types they name. A file that uses a type declared in another file gets an edge to it with no import needed for the same package, a class may live in a file of any name (`import core.Thing` finds it wherever it is declared), `import a.b as T` aliases are followed, a fully qualified `a.b.Type` counts, and a wildcard `import a.b.*` now links only the files whose types are actually used instead of every file in the package. A type two files both declare is left unresolved. On JetBrains Exposed, edge precision against the Kotlin compiler's own name resolution rose from 0.523 to 0.996 and recall from 0.612 to 0.742; on kotlin-result, from 0 edges to 12 of 18 with none wrong. Functions, properties and members called on a value of an inferred type are not resolved yet.
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.

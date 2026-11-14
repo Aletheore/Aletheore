@@ -2089,12 +2089,9 @@ def _resolve_kotlin_import(
         return [], False
 
     if is_wildcard:
-        matching_roots = [root for root in source_roots if root.joinpath(*segments).is_dir()]
-        if not matching_roots:
-            return [], False
-        directory = matching_roots[0].joinpath(*segments)
-        files = sorted(directory.glob("*.kt")) + sorted(directory.glob("*.kts"))
-        return files, len(matching_roots) > 1
+        # `import a.b.*` makes every top-level name of a.b visible; it is not a dependency on every file there. The
+        # files whose names this file actually uses are linked by _add_kotlin_name_edges.
+        return [], False
 
     matches = [target for root in source_roots if (target := _kotlin_class_file(root, segments)) is not None]
     if matches:
@@ -5341,6 +5338,127 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
                     break
 
 
+_KOTLIN_QUALIFIED_NAME = re.compile(r"\b([a-z_]\w*(?:\.[a-z_]\w*)*)\.([A-Z]\w*)")
+
+
+def _kotlin_type_facts(root: Node, source: bytes) -> dict:
+    """package, imports [(dotted, wildcard, alias)], top-level type names, every type name declared, and the
+    capitalised identifiers used in code (comments, strings, imports and the package line are not code)."""
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
+
+    package = ""
+    imports: list[tuple[str, bool, str | None]] = []
+    top: set[str] = set()
+    declared: set[str] = set()
+    refs: set[str] = set()
+    skip_ids: set[int] = set()
+    for child in root.children:
+        if child.type == "package_header":
+            qn = next((c for c in child.children if c.type == "qualified_identifier"), None)
+            package = text(qn) if qn is not None else ""
+        elif child.type == "import":
+            qn = next((c for c in child.children if c.type == "qualified_identifier"), None)
+            if qn is None:
+                continue
+            wildcard = any(c.type == "*" for c in child.children)
+            alias_node = next((c for c in child.children if c.type == "identifier"), None)
+            imports.append((text(qn), wildcard, text(alias_node) if alias_node is not None else None))
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        t = n.type
+        if t in ("package_header", "import"):
+            continue
+        if t in ("class_declaration", "object_declaration", "type_alias"):
+            name = next((c for c in n.children if c.type == "identifier"), None)
+            if name is not None:
+                skip_ids.add(name.id)
+                declared.add(text(name))
+                if n.parent is not None and n.parent.type == "source_file":
+                    top.add(text(name))
+        elif t == "identifier" and n.id not in skip_ids:
+            value = text(n)
+            if value[:1].isupper():
+                refs.add(value)
+        stack.extend(n.children)
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source.decode(errors="ignore"), flags=re.S)
+    qualified = {(m.group(1), m.group(2)) for m in _KOTLIN_QUALIFIED_NAME.finditer(code)}
+    return {"package": package, "imports": imports, "top": top, "declared": declared, "refs": refs, "qualified": qualified}
+
+
+def _add_kotlin_name_edges(repo_path: Path, modules: list[dict]) -> None:
+    """Edges between Kotlin files that name each other's types.
+
+    Kotlin needs no import for a type in the same package, a class may live in a file of any name, and a wildcard
+    import is a visibility rule, not a dependency. A file depends on the file declaring a type it names (type position,
+    constructor call, supertype, static access) when exactly one file declares a top-level type of that name in
+    the scope it can see: an explicit (or aliased) import, else its own package, else a package it imports with `*`.
+    A name two files declare is left unresolved, a type the file declares itself is never an edge to another file,
+    and comments and strings are not references. Functions and properties are not modelled (that needs types)."""
+    kotlin_modules = [m for m in modules if m.get("language") == "kotlin"]
+    if len(kotlin_modules) < 2:
+        return
+    parser = Parser()
+    parser.language = KOTLIN_LANGUAGE
+    facts: dict[str, dict] = {}
+    index: dict[tuple[str, str], set[str]] = {}
+    for module in kotlin_modules:
+        rel = module["path"]
+        try:
+            file_path = repo_path / rel
+            if file_path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+                continue
+            data = file_path.read_bytes()
+        except OSError:
+            continue
+        facts[rel] = _kotlin_type_facts(parser.parse(data).root_node, data)
+        for name in facts[rel]["top"]:
+            index.setdefault((facts[rel]["package"], name), set()).add(rel)
+    for module in kotlin_modules:
+        rel = module["path"]
+        entry = facts.get(rel)
+        if entry is None:
+            continue
+        explicit: dict[str, tuple[str, str]] = {}
+        wildcard_packages: list[str] = []
+        for dotted, wildcard, alias in entry["imports"]:
+            if wildcard:
+                wildcard_packages.append(dotted)
+                continue
+            parts = dotted.split(".")
+            for k in range(len(parts) - 1, 0, -1):  # the longest package prefix whose next segment is a known type
+                if (".".join(parts[:k]), parts[k]) in index:
+                    explicit[alias or parts[-1] if k == len(parts) - 1 else parts[k]] = (".".join(parts[:k]), parts[k])
+                    if alias and k != len(parts) - 1:
+                        explicit[alias] = (".".join(parts[:k]), parts[k])
+                    break
+        present = set(module.get("imports", []))
+        for pkg, name in sorted(entry["qualified"]):  # `a.b.Type` written out in full needs no import
+            owners = index.get((pkg, name), set())
+            if len(owners) == 1:
+                dest = next(iter(owners))
+                if dest != rel and dest not in present and name not in entry["declared"]:
+                    present.add(dest)
+                    module.setdefault("imports", []).append(dest)
+        for name in sorted(entry["refs"]):
+            if name in entry["declared"]:
+                continue
+            if name in explicit:
+                owners = index.get(explicit[name], set())
+            else:
+                owners = index.get((entry["package"], name), set())
+                if not owners:
+                    owners = set().union(*(index.get((pkg, name), set()) for pkg in wildcard_packages)) if wildcard_packages else set()
+            if len(owners) != 1:
+                continue
+            dest = next(iter(owners))
+            if dest != rel and dest not in present:
+                present.add(dest)
+                module.setdefault("imports", []).append(dest)
+
+
 def _retag_c_headers(modules: list[dict]) -> None:
     """`.h` is parsed with the C++ grammar (a superset) and tagged "cpp" by the shared extension
     map, which mislabels the headers of a C project. Decide per header from the code that uses it,
@@ -5589,6 +5707,17 @@ def _compute_resolution_signatures(
             ns_match = _PHP_NAMESPACE_RE.search(code)
             decls[rel(path)] = [ns_match.group(1) if ns_match else "", sorted({m.group(1) for m in _PHP_DECL_RE.finditer(code)})]
         extras["php"] = [decls, sorted((k, rel(v)) for k, v in php_psr4_map.items())]
+    if "kotlin" in paths_by_language:
+        # a Kotlin file's edges depend on the types every other Kotlin file declares: fingerprint the contents
+        kotlin_digests: dict[str, str] = {}
+        for path in all_source_paths:
+            if path.suffix not in (".kt", ".kts"):
+                continue
+            try:
+                kotlin_digests[rel(path)] = hashlib.blake2b(path.read_bytes(), digest_size=8).hexdigest()
+            except OSError:
+                continue
+        extras["kotlin"] = kotlin_digests
     if "go" in paths_by_language:
         # same-package edges read the declarations of the sibling files, so a sibling that gains or loses one
         # changes this file's edges even though this file did not change
@@ -5967,6 +6096,7 @@ def build_module_graph(
     _add_php_implicit_edges(repo_path, modules, php_psr4_map)
     _add_c_include_edges(repo_path, modules)
     _add_ruby_constant_edges(repo_path, modules)
+    _add_kotlin_name_edges(repo_path, modules)
     _retag_c_headers(modules)
 
     for module in modules:
