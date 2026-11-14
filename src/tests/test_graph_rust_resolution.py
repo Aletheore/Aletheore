@@ -175,3 +175,50 @@ def test_flatten_use_groups_and_aliases():
         "serde_core::Deserialize",
     ]
     assert rust_resolve.flatten_use("crate::a::*") == ["crate::a"]
+
+
+def _facade_workspace(tmp_path, reexport: str):
+    """core crate defines `de`; facade crate re-exports it (`pub use core::de`), directly or inside a macro."""
+    repo = tmp_path / "ws"
+    files = {
+        "Cargo.toml": '[workspace]\nmembers = ["core", "facade", "user"]\n',
+        "core/Cargo.toml": '[package]\nname = "core_lib"\nversion = "0.1.0"\n',
+        "core/src/lib.rs": "pub mod de;\npub mod other;\n",
+        "core/src/de/mod.rs": "pub trait Deserialize {}\npub mod value;\n",
+        "core/src/de/value.rs": "pub struct V;\n",
+        "core/src/other.rs": "pub struct O;\n",
+        "facade/Cargo.toml": '[package]\nname = "facade"\nversion = "0.1.0"\n[dependencies]\ncore_lib = { path = "../core" }\n',
+        "facade/src/lib.rs": reexport,
+        "facade/src/inner.rs": "use crate::de::Deserialize;\npub struct I;\n",
+        "user/Cargo.toml": '[package]\nname = "user"\nversion = "0.1.0"\n[dependencies]\nfacade = { path = "../facade" }\n',
+        "user/src/lib.rs": "use facade::de::Deserialize;\nuse facade::de::value::V;\n",
+    }
+    for rel, body in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+    modules, _, _ = build_module_graph(repo)
+    return {m["path"]: set(m["imports"]) for m in modules}
+
+
+def test_rust_crate_path_follows_a_module_reexported_from_a_sibling_crate(tmp_path):
+    imp = _facade_workspace(tmp_path, "pub use core_lib::{de, other};\nmod inner;\n")
+    assert "core/src/de/mod.rs" in imp["facade/src/inner.rs"]
+
+
+def test_rust_crate_path_follows_a_module_reexported_inside_a_macro(tmp_path):
+    macro = "macro_rules! root {\n    () => {\n        pub use core_lib::{de, other};\n        mod inner;\n    };\n}\nroot!();\n"
+    imp = _facade_workspace(tmp_path, macro)
+    assert "core/src/de/mod.rs" in imp["facade/src/inner.rs"]
+
+
+def test_rust_other_crate_path_adds_the_reexported_module_next_to_the_facade_root(tmp_path):
+    imp = _facade_workspace(tmp_path, "pub use core_lib::{de, other};\nmod inner;\n")
+    # the facade root stays a dependency (the path goes through it); the module is added, not its submodules
+    assert {"facade/src/lib.rs", "core/src/de/mod.rs"} <= imp["user/src/lib.rs"]
+    assert "core/src/de/value.rs" not in imp["user/src/lib.rs"]
+
+
+def test_rust_private_use_is_not_treated_as_a_reexport(tmp_path):
+    imp = _facade_workspace(tmp_path, "use core_lib::{de, other};\nmod inner;\n")
+    assert "core/src/de/mod.rs" not in imp["facade/src/inner.rs"]

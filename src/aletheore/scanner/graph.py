@@ -1653,6 +1653,38 @@ def _rust_reexport_targets(
     return found
 
 
+def _rust_module_reexport_targets(repo_path: Path, from_file: Path, use_path: str) -> list[str]:
+    """`crate::de::Item` / `facade::de::Item` where `de` is no file module of that crate but the crate root
+    re-exports it (`pub use core_lib::de;`, also inside a zero-argument macro): the module file the name really
+    comes from. It is an extra dependency next to the root file the path resolves to (the facade is imported
+    through too). Only the module itself, not the submodules below it. Empty when nothing is re-exported."""
+    from aletheore.scanner import rust_resolve
+
+    segments = use_path.split("::")
+    if len(segments) < 2 or use_path.startswith("@"):
+        return []
+    head, rest = segments[0], segments[1:]
+    if head == "crate":
+        root_file = rust_resolve.crate_root_file(_rust_crate_src_dir(repo_path, from_file))
+    elif head in ("self", "super"):
+        return []
+    else:
+        root_file = rust_resolve.crate_aliases(repo_path, from_file).get(head)
+    if root_file is None or _resolve_rust_module_dir(root_file.parent, rest[0]) is not None:
+        return []  # not a crate, or `rest[0]` is a real module of that crate
+    for reexport in rust_resolve.root_reexports(repo_path, root_file):
+        if reexport.endswith("::*") or "::" not in reexport or reexport.split("::")[-1] != rest[0]:
+            continue
+        resolved = _resolve_rust_path(repo_path, root_file, reexport)
+        if resolved is None or Path(repo_path, resolved) == root_file:
+            continue
+        module_file = Path(resolved)
+        module_name = module_file.parent.name if module_file.name in ("mod.rs", "lib.rs", "main.rs") else module_file.stem
+        if module_name == rest[0]:  # a re-exported module, not a re-exported item that lives in a root file
+            return [resolved]
+    return []
+
+
 def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | None:
     segments = path.split("::")
     if not segments:
@@ -4561,6 +4593,9 @@ def _extract_module(
                     for defining in _rust_reexport_targets(repo_path, path, use_path, target):
                         if defining != rel_path:
                             resolved_imports.append(defining)
+                for module_file in _rust_module_reexport_targets(repo_path, path, use_path):
+                    if module_file != rel_path:
+                        resolved_imports.append(module_file)
     elif language_name == "java":
         raw_imports, functions, classes = _extract_java(tree.root_node, source)
         java_refs = _java_type_references(tree.root_node, source) if java_package_types else None
