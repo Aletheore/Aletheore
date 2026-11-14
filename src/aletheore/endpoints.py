@@ -1034,7 +1034,7 @@ def _spring_request_methods(args_list: Node | None, source: bytes) -> list[str]:
                 for node in nodes:
                     if node is not None and node.type == "field_access":
                         field_node = node.child_by_field_name("field")
-                        if field_node is not None:
+                        if field_node is not None and source[field_node.start_byte : field_node.end_byte].decode() in _HTTP_METHODS:
                             methods.append(source[field_node.start_byte : field_node.end_byte].decode())
                     elif node is not None and node.type == "identifier":
                         # `method = POST` with `import static ...RequestMethod.POST`
@@ -1044,6 +1044,18 @@ def _spring_request_methods(args_list: Node | None, source: bytes) -> list[str]:
                 if methods:
                     return methods
     return ["ANY"]
+
+
+def _spring_method_attribute_unreadable(args_list: Node | None, source: bytes) -> bool:
+    """True when @RequestMapping has a `method = ...` attribute that is not RequestMethod constants we can read."""
+    if args_list is None:
+        return False
+    for arg in args_list.named_children:
+        if arg.type == "element_value_pair":
+            key = arg.child_by_field_name("key")
+            if key is not None and source[key.start_byte : key.end_byte].decode() == "method":
+                return _spring_request_methods(args_list, source) == ["ANY"]
+    return False
 
 
 def _spring_request_mapping_method(args_list: Node | None, source: bytes) -> str:
@@ -1110,6 +1122,7 @@ def _extract_spring_boot_routes(root: Node, source: bytes, rel_path: str) -> lis
                 methods = _spring_request_methods(args_list, source)
             else:
                 continue
+            method_unreadable = ann_name == "RequestMapping" and _spring_method_attribute_unreadable(args_list, source)
             paths, present = _spring_paths_from_args(args_list, source)
             if present and not paths:
                 continue  # the method's path is a constant or concatenation: not guessed
@@ -1130,8 +1143,8 @@ def _extract_spring_boot_routes(root: Node, source: bytes, rel_path: str) -> lis
                                 "file": rel_path,
                                 "line": ann.start_point[0] + 1,
                                 "handler": handler,
-                                "unresolved": prefix_unresolved,  # the class prefix could not be read: the path is partial
-                                "note": note,
+                                "unresolved": prefix_unresolved or method_unreadable,  # a class prefix or method constraint could not be read
+                                "note": note or ("RequestMapping method is not a RequestMethod constant" if method_unreadable else None),
                             }
                         )
     return entries

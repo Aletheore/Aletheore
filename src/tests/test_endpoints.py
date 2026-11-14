@@ -1885,3 +1885,9 @@ def test_extract_spring_route_under_a_constant_class_prefix_is_flagged_unresolve
     entries = _extract_spring_boot_routes(root, source, "C.java")
 
     assert entries and all(e["unresolved"] is True for e in entries)
+
+
+def test_extract_spring_request_mapping_with_an_unreadable_method_is_unresolved_not_any():
+    root, source = parse_java('public class C {\n    @RequestMapping(path = "/x", method = Consts.VERB)\n    public void a() { }\n}\n')
+    entry = _extract_spring_boot_routes(root, source, "C.java")[0]
+    assert entry["unresolved"] is True and "RequestMethod" in entry["note"]
