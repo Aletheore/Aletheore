@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -24,7 +25,7 @@ from aletheore.scanner.graph import (
 from aletheore.safe_io import read_bytes_or_none
 
 _ROUTE_VERB_METHODS = {"get", "post", "put", "delete", "patch"}
-_DJANGO_ROUTE_FUNCS = {"path", "re_path"}
+_DJANGO_ROUTE_FUNCS = {"path", "re_path", "url"}  # url() is the pre-2.0 spelling of re_path()
 _EXPRESS_ROUTE_METHODS = {"get", "post", "put", "delete", "patch", "all"}
 _GO_HANDLE_FIELDS = {"HandleFunc", "Handle"}
 _HTTP_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
@@ -1881,6 +1882,295 @@ def _extract_aspnet_minimal_routes(root: Node, source: bytes, rel_path: str) -> 
     return entries
 
 
+_DRF_STANDARD_ACTIONS = ("list", "create", "retrieve", "update", "partial_update", "destroy")
+_DRF_MIXIN_ACTIONS = {
+    "ListModelMixin": {"list"}, "CreateModelMixin": {"create"}, "RetrieveModelMixin": {"retrieve"},
+    "UpdateModelMixin": {"update", "partial_update"}, "DestroyModelMixin": {"destroy"},
+    "ModelViewSet": set(_DRF_STANDARD_ACTIONS), "ReadOnlyModelViewSet": {"list", "retrieve"},
+}
+_DJANGO_REGEX_MARKERS = ("^", "$", "(?P<", "\\")
+
+
+_DRF_GENERIC_VIEW_METHODS = {
+    "ListAPIView": {"GET"}, "CreateAPIView": {"POST"}, "RetrieveAPIView": {"GET"}, "UpdateAPIView": {"PUT", "PATCH"},
+    "DestroyAPIView": {"DELETE"}, "ListCreateAPIView": {"GET", "POST"}, "RetrieveUpdateAPIView": {"GET", "PUT", "PATCH"},
+    "RetrieveDestroyAPIView": {"GET", "DELETE"}, "RetrieveUpdateDestroyAPIView": {"GET", "PUT", "PATCH", "DELETE"},
+}
+_HTTP_VIEW_METHODS = ("get", "post", "put", "patch", "delete")
+
+
+def _collect_view_methods(py_trees: list[tuple[bytes, Node]]) -> dict[str, set[str]]:
+    """function name -> HTTP methods from `@api_view([...])` / `@require_http_methods([...])` / `@require_POST`-style
+    decorators, for function-based Django views."""
+    found: dict[str, set[str]] = {}
+    for source, root in py_trees:
+        for n in _walk_tree(root):
+            if n.type != "decorated_definition":
+                continue
+            definition = n.child_by_field_name("definition")
+            if definition is None or definition.type != "function_definition":
+                continue
+            name = source[definition.child_by_field_name("name").start_byte : definition.child_by_field_name("name").end_byte].decode()
+            for dec in (c for c in n.children if c.type == "decorator"):
+                text = source[dec.start_byte : dec.end_byte].decode()
+                m = re.match(r"@(?:\w+\.)*(api_view|require_http_methods|require_safe|require_GET|require_POST)\b(.*)", text, re.S)
+                if not m:
+                    continue
+                kind, rest = m.groups()
+                if kind == "require_GET" or kind == "require_safe":
+                    found.setdefault(name, set()).add("GET")
+                elif kind == "require_POST":
+                    found.setdefault(name, set()).add("POST")
+                else:
+                    listed = {x.upper() for x in re.findall(r"['\"]([A-Za-z]+)['\"]", rest)}
+                    found.setdefault(name, set()).update(listed & {"GET", "POST", "PUT", "PATCH", "DELETE"})
+                    if kind == "api_view" and not listed:
+                        found.setdefault(name, set()).add("GET")  # DRF's default
+    return found
+
+
+def _view_class_methods(name: str, classes: dict[str, tuple[list[str], set[str]]], depth: int = 0) -> set[str] | None:
+    """HTTP methods a class-based Django/DRF view answers: methods named get/post/... on the class or its bases, plus those
+    implied by DRF generic base classes. None when the class is not in the repository."""
+    if name not in classes or depth > 6:
+        return None
+    bases, methods = classes[name]
+    out = {m.upper() for m in methods if m in _HTTP_VIEW_METHODS}
+    for base in bases:
+        if base in _DRF_GENERIC_VIEW_METHODS:
+            out |= _DRF_GENERIC_VIEW_METHODS[base]
+        else:
+            out |= _view_class_methods(base, classes, depth + 1) or set()
+    return out or None
+
+
+def _collect_viewset_classes(py_trees: list[tuple[bytes, Node]]) -> dict[str, tuple[list[str], set[str]]]:
+    """name -> (base class names, method names) of every Python class, for resolving which actions a DRF viewset has."""
+    classes: dict[str, tuple[list[str], set[str]]] = {}
+    for source, root in py_trees:
+        for n in _walk_tree(root):
+            if n.type != "class_definition":
+                continue
+            name_node = n.child_by_field_name("name")
+            if name_node is None:
+                continue
+            bases: list[str] = []
+            args = n.child_by_field_name("superclasses")
+            for base in (args.named_children if args is not None else []):
+                if base.type in ("identifier", "attribute"):
+                    bases.append(source[base.start_byte : base.end_byte].decode().split(".")[-1])
+            body = n.child_by_field_name("body")
+            methods = {
+                source[m.child_by_field_name("name").start_byte : m.child_by_field_name("name").end_byte].decode()
+                for m in (body.named_children if body is not None else [])
+                if m.type == "function_definition" and m.child_by_field_name("name") is not None
+            }
+            classes[source[name_node.start_byte : name_node.end_byte].decode()] = (bases, methods)
+    return classes
+
+
+def _viewset_actions(name: str, classes: dict[str, tuple[list[str], set[str]]], depth: int = 0) -> set[str] | None:
+    """The standard DRF actions a viewset class provides, from its mixin/base classes and methods; None when the class
+    is not in the repository or provides none (not guessed)."""
+    if name not in classes or depth > 6:
+        return None
+    bases, methods = classes[name]
+    actions = {m for m in methods if m in _DRF_STANDARD_ACTIONS}
+    for base in bases:
+        if base in _DRF_MIXIN_ACTIONS:
+            actions |= _DRF_MIXIN_ACTIONS[base]
+        else:
+            actions |= _viewset_actions(base, classes, depth + 1) or set()
+    return actions or None
+
+
+def _django_regex_to_route(raw: str) -> str:
+    """`^articles/(?P<slug>[-\\w]+)/favorite/?$` -> `articles/<slug>/favorite` (anchors and an optional trailing slash
+    dropped, named groups as <name>, other groups as <arg>). A string with no regex marker is returned unchanged."""
+    if not any(marker in raw for marker in _DJANGO_REGEX_MARKERS):
+        return raw
+    text = raw.removeprefix("^").removesuffix("$").removesuffix("\\Z")
+    text = text.removesuffix("/?")
+    out, i = [], 0
+    while i < len(text):
+        if text.startswith("(?P<", i):
+            close = text.index(">", i)
+            name = text[i + 4 : close]
+            depth, j = 1, close + 1
+            while j < len(text) and depth:
+                depth += (text[j] == "(") - (text[j] == ")")
+                j += 1
+            out.append(f"<{name}>")
+            i = j
+        elif text[i] == "(":
+            depth, j = 1, i + 1
+            while j < len(text) and depth:
+                depth += (text[j] == "(") - (text[j] == ")")
+                j += 1
+            out.append("<arg>")
+            i = j
+        elif text[i] == "\\" and i + 1 < len(text):
+            out.append(text[i + 1])
+            i += 2
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def _django_join(*parts: str) -> str:
+    segments = [p for p in (q.strip("/") for q in parts) if p]
+    path = "/" + "/".join(segments)
+    return path + "/" if parts and parts[-1].endswith("/") and path != "/" else path
+
+
+def _django_router_registrations(root: Node, source: bytes) -> dict[str, dict]:
+    """var -> {"trailing_slash": bool, "regs": [(prefix, viewset class name)]} for DRF `router = DefaultRouter()` and
+    `router.register(r"x", ViewSet)` calls."""
+    routers: dict[str, dict] = {}
+    for n in _walk_tree(root):
+        if n.type == "assignment":
+            left, right = n.child_by_field_name("left"), n.child_by_field_name("right")
+            if left is not None and left.type == "identifier" and right is not None and right.type == "call":
+                func = right.child_by_field_name("function")
+                func_name = source[func.start_byte : func.end_byte].decode().split(".")[-1] if func is not None else ""
+                if func_name in ("DefaultRouter", "SimpleRouter"):
+                    trailing = True
+                    args = right.child_by_field_name("arguments")
+                    for arg in (args.named_children if args is not None else []):
+                        if arg.type == "keyword_argument" and source[arg.child_by_field_name("name").start_byte : arg.child_by_field_name("name").end_byte] == b"trailing_slash":
+                            trailing = source[arg.child_by_field_name("value").start_byte : arg.child_by_field_name("value").end_byte] != b"False"
+                    routers[source[left.start_byte : left.end_byte].decode()] = {"trailing_slash": trailing, "regs": []}
+    for n in _walk_tree(root):
+        if n.type == "call":
+            func = n.child_by_field_name("function")
+            if func is not None and func.type == "attribute":
+                obj, attr = func.child_by_field_name("object"), func.child_by_field_name("attribute")
+                if obj is not None and attr is not None and source[attr.start_byte : attr.end_byte] == b"register":
+                    var = source[obj.start_byte : obj.end_byte].decode()
+                    args = n.child_by_field_name("arguments")
+                    positional = [a for a in (args.named_children if args is not None else []) if a.type != "keyword_argument"]
+                    if var in routers and len(positional) >= 2 and positional[0].type == "string":
+                        routers[var]["regs"].append((_string_literal_text(positional[0], source), source[positional[1].start_byte : positional[1].end_byte].decode().split(".")[-1]))
+    return routers
+
+
+def _resolve_django_include(repo_path: Path, roots: list[Path], dotted: str) -> str | None:
+    for root in roots:
+        base = root / Path(*dotted.split("."))
+        for candidate in (base.with_suffix(".py"), base / "__init__.py"):
+            if candidate.is_file():
+                return _rel(repo_path, candidate)
+    return None
+
+
+def _django_view_http_methods(entry: dict, classes: dict, function_methods: dict[str, set[str]]) -> set[str] | None:
+    """HTTP methods of the view a Django route points at: `View.as_view()` (class methods / DRF generics),
+    `ViewSet.as_view({"get": "list"})` (the mapping's keys) or a function view decorated with `@api_view([...])`."""
+    handler = entry.get("handler") or ""
+    mapping = re.match(r"[\w.]+\.as_view\(\s*\{(.*?)\}", handler, re.S)
+    if mapping:
+        methods = {k.upper() for k in re.findall(r"['\"](get|post|put|patch|delete)['\"]\s*:", mapping.group(1))}
+        return methods or None
+    cls = re.match(r"([\w.]+)\.as_view\(", handler)
+    if cls:
+        return _view_class_methods(cls.group(1).split(".")[-1], classes)
+    if re.fullmatch(r"[\w.]+", handler):
+        return function_methods.get(handler.split(".")[-1]) or None
+    return None
+
+
+def _compose_django_routes(
+    endpoints: list[dict], repo_path: Path, py_parser: Parser, roots: list[Path],
+    classes: dict[str, tuple[list[str], set[str]]], function_methods: dict[str, set[str]] | None = None,
+) -> list[dict]:
+    """Django `include("app.urls")` / `include(router.urls)` composed across files: every route of an included urls module
+    gets the including route's prefix; DRF router registrations expand to their list/detail routes; regex routes become
+    templates. A route whose include target cannot be found in the repository stays as an unresolved include."""
+    django = [e for e in endpoints if e.get("framework") == "django"]
+    if not django:
+        return endpoints
+    rest = [e for e in endpoints if e.get("framework") != "django"]
+    by_file: dict[str, list[dict]] = {}
+    for e in django:
+        by_file.setdefault(e["file"], []).append(e)
+
+    def parse_include(entry: dict) -> tuple[str, str] | None:
+        handler = entry["handler"] or ""
+        m = re.match(r"include\(\s*(['\"])([\w.]+)\1", handler)
+        if m:
+            return "module", m.group(2)
+        m = re.match(r"include\(\s*(\w+)\.urls\b", handler)
+        if m:
+            return "router", m.group(1)
+        if entry.get("unresolved") and handler == "include(...)":
+            return "module", entry["path"]
+        return None
+
+    targets: dict[str, set[str]] = {}
+    for file, entries in by_file.items():
+        for e in entries:
+            inc = parse_include(e)
+            if inc and inc[0] == "module":
+                target = _resolve_django_include(repo_path, roots, inc[1])
+                if target:
+                    targets.setdefault(file, set()).add(target)
+    included = {t for ts in targets.values() for t in ts}
+    router_cache: dict[str, dict] = {}
+
+    def routers_of(file: str) -> dict:
+        if file not in router_cache:
+            data = (repo_path / file).read_bytes() if (repo_path / file).is_file() else b""
+            router_cache[file] = _django_router_registrations(py_parser.parse(data).root_node, data) if data else {}
+        return router_cache[file]
+
+    def expand(file: str, prefix: str, depth: int) -> list[dict]:
+        out: list[dict] = []
+        for e in by_file.get(file, []):
+            converted = _django_regex_to_route(e["path"])
+            own = _django_join(prefix, converted) if prefix else converted  # no prefix: the path as written
+            inc = parse_include(e)
+            if inc is None:
+                methods = _django_view_http_methods(e, classes, function_methods or {}) if e.get("method") == "ANY" else None
+                if methods:
+                    out.extend({**e, "path": own, "method": m} for m in sorted(methods))
+                else:
+                    out.append({**e, "path": own})
+            elif inc[0] == "module":
+                target = _resolve_django_include(repo_path, roots, inc[1])
+                if target and depth < 8:
+                    out.extend(expand(target, own, depth + 1))
+                else:
+                    out.append({**e, "path": own, "unresolved": True, "note": "include target is not in the repository"})
+            else:
+                router = routers_of(file).get(inc[1])
+                if router is None:
+                    out.append({**e, "path": own, "unresolved": True, "note": "router is not defined in this file"})
+                    continue
+                slash = "/" if router["trailing_slash"] else ""
+                for reg_prefix, viewset in router["regs"]:
+                    base = _django_join(own, _django_regex_to_route(reg_prefix))
+                    actions = _viewset_actions(viewset, classes)
+                    if actions is None:
+                        out.append({**e, "path": base + slash, "method": "ANY", "handler": viewset, "unresolved": True,
+                                    "note": "DRF viewset actions could not be determined"})
+                        continue
+                    for action, method, suffix in (
+                        ("list", "GET", ""), ("create", "POST", ""), ("retrieve", "GET", "/<pk>"),
+                        ("update", "PUT", "/<pk>"), ("partial_update", "PATCH", "/<pk>"), ("destroy", "DELETE", "/<pk>"),
+                    ):
+                        if action in actions:
+                            out.append({**e, "path": base.rstrip("/") + suffix + slash, "method": method,
+                                        "handler": f"{viewset}.{action}", "unresolved": False, "note": None})
+        return out
+
+    composed: list[dict] = []
+    for file in by_file:
+        if file not in included:
+            composed.extend(expand(file, "", 0))
+    return rest + composed
+
+
 def map_api_endpoints(
     repo_path: Path,
     *,
@@ -1948,6 +2238,8 @@ def map_api_endpoints(
     # correctness that doesn't depend on tracking which mounting file
     # changed - see docs/audits/Claude_Audit.md finding 20.
     cross_file_mount_defining_files = {defining_file for defining_file, _router in cross_file_router_mounts}
+    # Django includes are composed across files below, so a cached (already composed) urls.py entry must not be reused
+    cross_file_mount_defining_files |= {_rel(repo_path, path) for path in source_paths if path.name == "urls.py"}
 
     for path in source_paths:
         rel_path = _rel(repo_path, path)
@@ -2042,5 +2334,17 @@ def map_api_endpoints(
                 continue
             tree = parsers["kt"].parse(source)
             endpoints.extend(_extract_ktor_routes(tree.root_node, source, rel_path))
+
+    if any(e.get("framework") == "django" for e in endpoints):
+        py_trees = []
+        for path in source_paths:
+            if path.suffix == ".py":
+                data = read_bytes_or_none(path)
+                if data is not None:
+                    py_trees.append((data, parsers["py"].parse(data).root_node))
+        endpoints = _compose_django_routes(
+            endpoints, repo_path, parsers["py"], python_source_roots, _collect_viewset_classes(py_trees),
+            _collect_view_methods(py_trees),
+        )
 
     return {"checked": True, "endpoints": endpoints}
