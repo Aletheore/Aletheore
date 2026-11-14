@@ -5338,6 +5338,10 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
                     break
 
 
+_KOTLIN_TOP_DECLARATION = re.compile(
+    r"(?m)^((?:(?:public|internal|private|protected|expect|actual|annotation|data|sealed|enum|open|abstract|inline|value|fun|"
+    r"inner|external)\s+)*)(?:class|interface|object|typealias)\s+([A-Z]\w*)"
+)
 _KOTLIN_QUALIFIED_NAME = re.compile(r"\b([a-z_]\w*(?:\.[a-z_]\w*)*)\.([A-Z]\w*)")
 
 
@@ -5380,13 +5384,13 @@ def _kotlin_type_facts(root: Node, source: bytes) -> dict:
             if name is not None:
                 skip_ids.add(name.id)
                 declared.add(text(name))
-                if n.parent is not None and n.parent.type == "source_file":
+                if _kotlin_is_top_level(n):
                     top.add(text(name))
                     marker = _kotlin_platform_marker(n)
                     if marker:
                         platform[text(name)] = marker
         elif t in ("function_declaration", "property_declaration"):
-            at_top = n.parent is not None and n.parent.type == "source_file"
+            at_top = _kotlin_is_top_level(n)
             names = []
             if t == "function_declaration":
                 ident = next((c for c in n.children if c.type == "identifier"), None)
@@ -5414,11 +5418,31 @@ def _kotlin_type_facts(root: Node, source: bytes) -> dict:
                 lower_refs.add(value)
         stack.extend(n.children)
     code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source.decode(errors="ignore"), flags=re.S)
+    # The grammar reads `@A @B(args) public annotation class X` as an expression, so the type is never a declaration.
+    # A top-level declaration starts in column 0: modifiers, then class/interface/object/typealias, then the name.
+    for m in _KOTLIN_TOP_DECLARATION.finditer(code):
+        name = m.group(2)
+        if name not in top:
+            top.add(name)
+            declared.add(name)
+            refs.discard(name)
+            kind = re.search(r"\b(expect|actual)\b", m.group(1) or "")
+            if kind and name not in platform:
+                platform[name] = kind.group(1)
     qualified = {(m.group(1), m.group(2)) for m in _KOTLIN_QUALIFIED_NAME.finditer(code)}
     return {
         "package": package, "imports": imports, "top": top, "declared": declared, "refs": refs, "qualified": qualified,
         "platform": platform, "top_values": top_values, "declared_values": declared_values, "lower_refs": lower_refs,
     }
+
+
+def _kotlin_is_top_level(node: Node) -> bool:
+    """A declaration directly in the file. Several annotation lines above it make tree-sitter wrap it in an
+    `annotated_expression`, which does not make it any less top-level."""
+    parent = node.parent
+    while parent is not None and parent.type == "annotated_expression":
+        parent = parent.parent
+    return parent is not None and parent.type == "source_file"
 
 
 def _kotlin_platform_marker(node: Node) -> str | None:

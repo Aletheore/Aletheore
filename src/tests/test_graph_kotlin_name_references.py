@@ -167,3 +167,28 @@ def test_a_local_with_the_name_of_a_top_level_function_is_not_an_edge(tmp_path):
         MP + "main/kotlin/a/User.kt": "package a\nfun g(checkOffset: Int) = checkOffset\n",
     })
     assert MP + "main/kotlin/a/Util.kt" not in mods[MP + "main/kotlin/a/User.kt"]["imports"]
+
+
+def test_a_class_declared_below_several_annotation_lines_is_still_a_top_level_type(tmp_path):
+    mods = _modules(tmp_path, {
+        MP + "main/kotlin/p/Annotations.kt": (
+            "package p\n\n@MustBeDocumented\n@Retention(AnnotationRetention.BINARY)\n"
+            "@RequiresOptIn(level = RequiresOptIn.Level.ERROR)\npublic annotation class InternalApi\n"),
+        MP + "main/kotlin/p/Use.kt": "package p\n\n@OptIn(InternalApi::class)\nfun f() {}\n",
+    })
+    assert MP + "main/kotlin/p/Annotations.kt" in mods[MP + "main/kotlin/p/Use.kt"]["imports"]
+
+
+def test_a_type_the_grammar_reads_as_an_expression_is_still_found_by_its_declaration_line(tmp_path):
+    # several annotation lines with arguments before `public annotation class` make tree-sitter-kotlin report an
+    # infix expression instead of a class declaration
+    mods = _modules(tmp_path, {
+        MP + "main/kotlin/p/Annotations.kt": (
+            "package p\n\n@MustBeDocumented\n@Retention(AnnotationRetention.BINARY)\n"
+            "@RequiresOptIn(\n    level = RequiresOptIn.Level.ERROR,\n    message = \"internal\" +\n        \"api\"\n)\n"
+            "public annotation class InternalApi\n\n@MustBeDocumented\n@RequiresOptIn(level = RequiresOptIn.Level.WARNING)\n"
+            "public annotation class DelicateApi\n"),
+        MP + "main/kotlin/p/Use.kt": "package p\n\n@OptIn(InternalApi::class, DelicateApi::class)\nfun f() {}\n",
+    })
+    assert MP + "main/kotlin/p/Annotations.kt" in mods[MP + "main/kotlin/p/Use.kt"]["imports"]
+
