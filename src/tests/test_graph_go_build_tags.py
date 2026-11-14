@@ -1,11 +1,22 @@
 """Go build constraints: a file is built always, never, or only on some platforms (default tags, any OS)."""
 
+from pathlib import Path
+
 import pytest
 
 from aletheore.scanner import go_resolve
 from aletheore.scanner.graph import build_module_graph
 
-from test_graph_go_rust_round2 import go_repo
+GO_MOD = "module example.com/m\n\ngo 1.21\n"
+
+
+def go_repo(tmp_path, files):
+    root = tmp_path / "r"
+    for rel, text in {"go.mod": GO_MOD, **files}.items():
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    return root
 
 
 @pytest.mark.parametrize(
