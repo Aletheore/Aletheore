@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.
+- Fixed: `aletheore query evidence-for-dependency` (and the `aletheore_find_evidence_for_dependency` MCP tool) now resolves a package name such as `flask` or `@scope/pkg` to a file that imports it, as its help says. Before, only repo-relative paths resolved. Package names are matched by reading Python and JS/TS import lines, so the result is marked `inferred`.
 - Fixed: the read guard, evidence and Hallbook hooks, and the evidence hook's background index build, no longer
   import modules from the repository they run in. Hooks run with the repository as the current folder, so a
   repository holding its own `aletheore/` package (or `json.py`, `tree_sitter.py`, ...) could run its code inside them.

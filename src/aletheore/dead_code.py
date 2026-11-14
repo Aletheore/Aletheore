@@ -1558,28 +1558,41 @@ _JS_IMPORT_RE = re.compile(
 _JS_SIDE_EFFECT_IMPORT_RE = re.compile(r"""^\s*import\s*['"]([^'"]+)['"]""", re.MULTILINE)
 
 
+def _module_external_import_roots(repo_path: Path, path: str) -> set[str]:
+    """The normalized top-level package names one source file imports, read from its text (Python and JS/TS only)."""
+    if path.endswith(".py"):
+        pattern_pairs = (_PY_PLAIN_IMPORT_RE, _PY_FROM_IMPORT_RE)
+        dotted = True
+    elif path.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
+        pattern_pairs = (_JS_IMPORT_RE, _JS_SIDE_EFFECT_IMPORT_RE)
+        dotted = False
+    else:
+        return set()
+    try:
+        source = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return set()
+    roots: set[str] = set()
+    for pattern in pattern_pairs:
+        for match in pattern.finditer(source):
+            root = _import_root(match.group(1), dotted=dotted)
+            if root:
+                roots.add(root)
+    return roots
+
+
 def _raw_external_import_roots(repo_path: Path, modules: list[dict]) -> set[str]:
     roots: set[str] = set()
     for module in modules:
-        path = module["path"]
-        if path.endswith(".py"):
-            pattern_pairs = (_PY_PLAIN_IMPORT_RE, _PY_FROM_IMPORT_RE)
-            dotted = True
-        elif path.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
-            pattern_pairs = (_JS_IMPORT_RE, _JS_SIDE_EFFECT_IMPORT_RE)
-            dotted = False
-        else:
-            continue
-        try:
-            source = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        for pattern in pattern_pairs:
-            for match in pattern.finditer(source):
-                root = _import_root(match.group(1), dotted=dotted)
-                if root:
-                    roots.add(root)
+        roots |= _module_external_import_roots(repo_path, module["path"])
     return roots
+
+
+def external_importers(repo_path: Path, modules: list[dict], package: str) -> list[str]:
+    """Paths of the scanned modules whose text imports `package` (an import or distribution name, e.g. flask or PyYAML)."""
+    wanted = _package_import_names(package) | {_import_root(package, dotted=True), _import_root(package, dotted=False)}
+    wanted.discard("")
+    return [m["path"] for m in modules if _module_external_import_roots(repo_path, m["path"]) & wanted]
 
 
 def _package_import_names(package: str) -> set[str]:

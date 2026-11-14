@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from aletheore.git_exec import git_executable
-from aletheore.dead_code import _package_import_names
+from aletheore.dead_code import _package_import_names, external_importers
 
 CONFIDENCE_ORDER = {"unavailable": 0, "weak": 1, "inferred": 2, "exact": 3}
 CANONICAL_FIELDS = (
@@ -509,7 +509,7 @@ def resolve_code_evidence(
     elif kind == "symbol" and symbol is not None:
         resolution = _resolve_symbol(evidence, symbol)
     elif kind == "dependency" and dependency is not None:
-        resolution = _resolve_dependency(evidence, dependency)
+        resolution = _resolve_dependency(evidence, dependency, repo_path)
     else:
         resolution = empty_resolution(kind)
 
@@ -547,11 +547,20 @@ def _resolve_symbol(evidence: dict, symbol: str) -> dict:
     return result
 
 
-def _resolve_dependency(evidence: dict, dependency: str) -> dict:
-    matches = []
-    for module in evidence.get("repository", {}).get("modules", []):
-        if dependency in module.get("imports", []):
-            matches.append(module.get("path"))
+def _resolve_dependency(evidence: dict, dependency: str, repo_path: Path | None = None) -> dict:
+    modules = evidence.get("repository", {}).get("modules", [])
+    matches = [module.get("path") for module in modules if dependency in module.get("imports", [])]
+    if not matches and repo_path is not None:
+        # The scan's per-module imports hold only repo-internal files; a package name (flask, typer) is found by reading import lines.
+        found = external_importers(repo_path, modules, dependency)
+        if found:
+            return normalize_resolution(
+                kind="dependency",
+                file=found[0],
+                dependency=dependency,
+                confidence="inferred",
+                evidence_path="repository.modules",
+            )
     if not matches:
         result = empty_resolution("dependency")
         result["dependency"] = dependency

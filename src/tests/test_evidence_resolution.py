@@ -542,3 +542,22 @@ def test_attach_risk_evidence_matches_bare_string_dependency_lookup():
     result = attach_risk_evidence(evidence, resolution)
 
     assert [r["category"] for r in result["risk"]] == ["vulnerability"]
+
+
+def test_dependency_lookup_resolves_a_package_name_from_import_lines(tmp_path):
+    from aletheore.evidence_resolution import resolve_code_evidence
+
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "web.py").write_text("import os\nfrom flask import Flask\n", encoding="utf-8")
+    (tmp_path / "app" / "ui.js").write_text("import x from '@scope/pkg/sub';\nconst y = require('left-pad');\n", encoding="utf-8")
+    (tmp_path / "app" / "plain.py").write_text("import json\n", encoding="utf-8")
+    evidence = {"repository": {"modules": [{"path": p, "imports": []} for p in ("app/web.py", "app/ui.js", "app/plain.py")]}}
+
+    flask = resolve_code_evidence(evidence, tmp_path, kind="dependency", dependency="flask")
+    assert flask["file"] == "app/web.py" and flask["confidence"] == "inferred" and flask["dependency"] == "flask"
+    assert resolve_code_evidence(evidence, tmp_path, kind="dependency", dependency="Flask")["file"] == "app/web.py"
+    assert resolve_code_evidence(evidence, tmp_path, kind="dependency", dependency="left-pad")["file"] == "app/ui.js"
+    assert resolve_code_evidence(evidence, tmp_path, kind="dependency", dependency="@scope/pkg")["file"] == "app/ui.js"
+    assert resolve_code_evidence(evidence, tmp_path, kind="dependency", dependency="django")["file"] is None
+    # without a repository path there is nothing to read, so a package name stays unresolved
+    assert resolve_code_evidence(evidence, None, kind="dependency", dependency="flask")["file"] is None
