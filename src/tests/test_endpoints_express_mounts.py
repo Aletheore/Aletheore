@@ -166,3 +166,11 @@ def test_mount_cycles_give_the_same_prefixes_whatever_order_they_are_visited_in(
         "src/app.js": "const express = require('express');\nconst a = require('./a');\nconst app = express();\napp.use('/api', a);\n",
     }
     assert _routes(tmp_path / "one", files) == _routes(tmp_path / "two", dict(reversed(list(files.items()))))
+
+
+def test_a_chain_of_verb_calls_on_a_router_emits_every_route(tmp_path):
+    got = _routes(tmp_path, {
+        "src/app.js": "const express = require('express');\nconst r = express.Router();\nr.get('/a', hA).post('/b', hB).delete('/c', hC);\nmodule.exports = r;\n",
+        "src/main.js": "const express = require('express');\nconst app = express();\napp.use('/api', require('./app'));\n",
+    })
+    assert {("GET", "/api/a"), ("POST", "/api/b"), ("DELETE", "/api/c")} <= got

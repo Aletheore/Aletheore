@@ -491,7 +491,13 @@ def extract_routes(
                     continue
                 for verb, handler in zip(reversed(verbs), reversed(handlers)):
                     emit("ANY" if verb == "all" else verb.upper(), route_path, handler, line, root_name)
-            continue
+                continue
+            if cursor is not None and cursor.type == "identifier":
+                # `router.get('/a', hA).post('/b', hB)`: a chain of verb calls rooted at a router; the outer verb is an
+                # ordinary route on that router (the inner ones are visited when the walk reaches them)
+                receiver_name = _text(source, cursor)
+            else:
+                continue
         if method_name == "route" and named and named[0].type == "string":
             # the chain's first link: handled from the outermost verb call above
             continue
