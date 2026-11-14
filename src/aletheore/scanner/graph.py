@@ -5344,6 +5344,47 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
 _SWIFT_DECL_KEYWORDS = frozenset({"class", "struct", "enum", "actor", "extension", "protocol", "typealias"})
 
 
+_SWIFT_MEMBER_MIN_LENGTH = 7  # shorter names (count, name, first, map) collide with the standard library too often
+
+
+def _swift_member_facts(root: Node, source: bytes) -> tuple[set[str], set[str]]:
+    """(function / property / enum-case names declared in the file, lowercase identifiers used in code)."""
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
+
+    declared: set[str] = set()
+    declaration_names: set[int] = set()
+    used: set[str] = set()
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        t = n.type
+        if t == "function_declaration":
+            name = next((c for c in n.children if c.type == "simple_identifier"), None)
+            if name is not None:
+                declared.add(text(name))
+                declaration_names.add(name.id)
+        elif t == "property_declaration":
+            for pattern in (c for c in n.children if c.type == "pattern"):
+                name = next((c for c in pattern.children if c.type == "simple_identifier"), None)
+                if name is not None:
+                    declared.add(text(name))
+                    declaration_names.add(name.id)
+        elif t == "enum_entry":
+            for name in (c for c in n.children if c.type == "simple_identifier"):
+                declared.add(text(name))
+                declaration_names.add(name.id)
+        elif t == "simple_identifier" and n.id not in declaration_names:
+            value = text(n)
+            if value[:1].islower():
+                used.add(value)
+        elif t == "import_declaration":
+            continue
+        stack.extend(n.children)
+    return declared, used
+
+
 def _swift_type_facts(root: Node, source: bytes) -> tuple[set[str], set[str], set[str], list[str]]:
     """(top-level type names declared, every type name declared, type names referenced, imported module names).
 
@@ -5410,6 +5451,8 @@ def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_fil
     parser.language = SWIFT_LANGUAGE
     facts: dict[str, tuple[set[str], set[str], set[str], list[str]]] = {}
     owners: dict[str, dict[str, set[str]]] = {}
+    member_facts: dict[str, tuple[set[str], set[str]]] = {}
+    member_owners: dict[str, dict[str, set[str]]] = {}
     for module in swift_modules:
         rel = module["path"]
         target = target_of.get(rel)
@@ -5420,11 +5463,15 @@ def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_fil
             if file_path.stat().st_size > MAX_SOURCE_FILE_BYTES:
                 continue
             data = file_path.read_bytes()
-            facts[rel] = _swift_type_facts(parser.parse(data).root_node, data)
+            tree_root = parser.parse(data).root_node
+            facts[rel] = _swift_type_facts(tree_root, data)
+            member_facts[rel] = _swift_member_facts(tree_root, data)
         except OSError:
             continue
         for name in facts[rel][0]:
             owners.setdefault(target, {}).setdefault(name, set()).add(rel)
+        for name in member_facts[rel][0]:
+            member_owners.setdefault(target, {}).setdefault(name, set()).add(rel)
     for module in swift_modules:
         rel = module["path"]
         entry = facts.get(rel)
@@ -5449,6 +5496,29 @@ def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_fil
             if dest != rel and dest not in present:
                 present.add(dest)
                 module.setdefault("imports", []).append(dest)
+        # Methods, properties and free functions another file declares (typically in an extension): the name is all a
+        # syntax tree has, so each such edge is a guess and is marked inferred.
+        declared_members, used_members = member_facts[rel]
+        confidence = module.setdefault("import_confidence", {})
+        for name in sorted(used_members):
+            if len(name) < _SWIFT_MEMBER_MIN_LENGTH or name in declared_members:
+                continue
+            found = member_owners.get(target, {}).get(name)
+            if found is None:
+                candidates = set()
+                for other in imported:
+                    if other != target:
+                        candidates |= member_owners.get(other, {}).get(name, set())
+                found = candidates
+            if len(found) != 1:
+                continue
+            dest = next(iter(found))
+            if dest != rel and dest not in present:
+                present.add(dest)
+                module.setdefault("imports", []).append(dest)
+                confidence[dest] = "inferred"
+        if not confidence:
+            module.pop("import_confidence", None)
 
 
 def _retag_c_headers(modules: list[dict]) -> None:

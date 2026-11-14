@@ -120,3 +120,59 @@ def test_editing_a_swift_file_changes_the_resolution_signature_and_drops_a_stale
     )
     assert first["swift"] != second["swift"]
     assert next(m for m in modules if m["path"].endswith("User.swift"))["imports"] == []
+
+
+def _conf(mods, src, dst):
+    return (mods[src].get("import_confidence") or {}).get(dst, "exact")
+
+
+def test_a_method_added_by_an_extension_in_another_file_is_an_inferred_edge(tmp_path):
+    mods = _scan(tmp_path, {
+        "Sources/App/Core.swift": "struct Core {}\n",
+        "Sources/App/Helpers.swift": "extension Core {\n    func renderDescription() -> String { \"\" }\n}\n",
+        "Sources/App/User.swift": "func run(_ c: Core) { _ = c.renderDescription() }\n",
+    })
+    assert "Sources/App/Helpers.swift" in _imports(mods, "Sources/App/User.swift")
+    assert _conf(mods, "Sources/App/User.swift", "Sources/App/Helpers.swift") == "inferred"
+    assert _conf(mods, "Sources/App/User.swift", "Sources/App/Core.swift") == "exact"  # the type itself is still exact
+
+
+def test_a_property_and_a_free_function_in_another_file_are_inferred_edges(tmp_path):
+    mods = _scan(tmp_path, {
+        "Sources/App/Decls.swift": "let defaultTimeout = 5\nfunc normalizedIdentifier(_ s: String) -> String { s }\n",
+        "Sources/App/User.swift": "func run() { _ = defaultTimeout; _ = normalizedIdentifier(\"x\") }\n",
+    })
+    assert "Sources/App/Decls.swift" in _imports(mods, "Sources/App/User.swift")
+
+
+def test_short_member_names_are_not_guessed(tmp_path):
+    mods = _scan(tmp_path, {
+        "Sources/App/Decls.swift": "extension Core { func name() {}\n var count: Int { 0 } }\nstruct Core {}\n",
+        "Sources/App/User.swift": "func run(_ a: [Int]) { _ = a.count; _ = a.first }\n",
+    })
+    assert _imports(mods, "Sources/App/User.swift") == set()
+
+
+def test_a_member_name_declared_in_two_files_is_not_guessed(tmp_path):
+    mods = _scan(tmp_path, {
+        "Sources/App/A.swift": "func renderDescription() {}\n",
+        "Sources/App/B.swift": "func renderDescription() {}\n",
+        "Sources/App/User.swift": "func run() { renderDescription() }\n",
+    })
+    assert _imports(mods, "Sources/App/User.swift") == set()
+
+
+def test_a_member_the_file_declares_itself_is_not_an_edge(tmp_path):
+    mods = _scan(tmp_path, {
+        "Sources/App/Other.swift": "func renderDescription() {}\n",
+        "Sources/App/User.swift": "func renderDescription() {}\nfunc run() { renderDescription() }\n",
+    })
+    assert _imports(mods, "Sources/App/User.swift") == set()
+
+
+def test_a_member_name_in_a_comment_or_string_is_not_a_reference(tmp_path):
+    mods = _scan(tmp_path, {
+        "Sources/App/Decls.swift": "func renderDescription() {}\n",
+        "Sources/App/User.swift": '// renderDescription\nlet s = "renderDescription"\n',
+    })
+    assert _imports(mods, "Sources/App/User.swift") == set()
