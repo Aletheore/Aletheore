@@ -382,7 +382,8 @@ def _extract_flask_fastapi_routes(
                         if source[kw_name.start_byte : kw_name.end_byte].decode() != "methods":
                             continue
                         value = arg.child_by_field_name("value")
-                        if value is not None and value.type == "list":
+                        # a list, tuple or set of strings: methods=["POST"], methods=("POST",), methods={"GET", "POST"}
+                        if value is not None and value.type in ("list", "tuple", "set"):
                             methods = [
                                 _string_literal_text(item, source).upper()
                                 for item in value.named_children

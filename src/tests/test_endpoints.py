@@ -1828,3 +1828,10 @@ def test_map_api_endpoints_extracts_kotlin_ktor_routes(tmp_path):
 
     paths = {e["path"] for e in result["endpoints"]}
     assert "/kt" in paths
+
+
+def test_extract_flask_route_methods_given_as_a_tuple_or_a_set():
+    for literal in ('("POST",)', '{"GET", "POST"}', '["POST"]'):
+        root, source = parse_python(f'@bp.route("/api/users", methods={literal})\ndef users():\n    pass\n')
+        methods = {e["method"] for e in _extract_flask_fastapi_routes(root, source, "views.py")}
+        assert methods == ({"GET", "POST"} if "GET" in literal else {"POST"}), literal

@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: Flask `@route(..., methods=("POST",))` (a tuple) or `methods={"GET", "POST"}` (a set) was ignored and the route reported as GET, so POST and DELETE endpoints were wrong rather than merely missing. On the RealWorld Flask app, 7 of the spec's 19 routes were found; now all 19.
+
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.
