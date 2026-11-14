@@ -295,3 +295,19 @@ def test_build_module_graph_resolves_cross_target_xcodeproj_import(tmp_path):
     edges = {tuple(edge) for edge in dependency_graph["edges"]}
 
     assert ("App/Main.swift", "Widgets/WidgetKit.swift") in edges
+
+
+def test_a_type_declared_in_an_oversized_swift_file_still_counts_as_an_owner(tmp_path, monkeypatch):
+    from aletheore.scanner import graph
+
+    repo = tmp_path / "pkg"
+    (repo / "Sources/Core").mkdir(parents=True)
+    (repo / "Package.swift").write_text('// swift-tools-version:5.5\nimport PackageDescription\nlet package = Package(name: "P", targets: [.target(name: "Core")])\n')
+    (repo / "Sources/Core/Big.swift").write_text("public struct Widget { }\n" + "// padding\n" * 50)
+    (repo / "Sources/Core/Small.swift").write_text("public struct Widget { }\n")
+    (repo / "Sources/Core/Use.swift").write_text("func f() { _ = Widget() }\n")
+    monkeypatch.setattr(graph, "MAX_SOURCE_FILE_BYTES", 200)
+    # the 200-byte cap makes Big.swift oversized; Widget is then declared in two files, so it must not resolve to one
+    mods, g, _bad = graph.build_module_graph(repo)
+    edges = {tuple(e) for e in g["edges"]}
+    assert ("Sources/Core/Use.swift", "Sources/Core/Small.swift") not in edges

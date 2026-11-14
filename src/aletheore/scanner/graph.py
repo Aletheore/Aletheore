@@ -5344,6 +5344,7 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
 _SWIFT_DECL_KEYWORDS = frozenset({"class", "struct", "enum", "actor", "extension", "protocol", "typealias"})
 
 
+_SWIFT_TYPE_DECLARATION = re.compile(r"(?m)^[ \t]*(?:(?:public|internal|private|fileprivate|open|final|indirect)\s+)*(?:class|struct|enum|protocol|actor|typealias)\s+([A-Za-z_]\w*)")
 _SWIFT_MEMBER_MIN_LENGTH = 7  # shorter names (count, name, first, map) collide with the standard library too often
 
 
@@ -5472,6 +5473,18 @@ def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_fil
             owners.setdefault(target, {}).setdefault(name, set()).add(rel)
         for name in member_facts[rel][0]:
             member_owners.setdefault(target, {}).setdefault(name, set()).add(rel)
+    # A file too large to parse never becomes a module, but it is still part of its target: its type names are read from
+    # the text so a same-named type in another file is not mistaken for the only owner of that name.
+    for rel, target in target_of.items():
+        if rel in facts:
+            continue
+        try:
+            file_path = repo_path / rel
+            if file_path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+                for name in _SWIFT_TYPE_DECLARATION.findall(file_path.read_text(encoding="utf-8", errors="ignore")):
+                    owners.setdefault(target, {}).setdefault(name, set()).add(rel)
+        except OSError:
+            continue
     for module in swift_modules:
         rel = module["path"]
         entry = facts.get(rel)
