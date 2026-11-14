@@ -1986,29 +1986,52 @@ def _viewset_actions(name: str, classes: dict[str, tuple[list[str], set[str]]], 
 
 def _django_regex_to_route(raw: str) -> str:
     """`^articles/(?P<slug>[-\\w]+)/favorite/?$` -> `articles/<slug>/favorite` (anchors and an optional trailing slash
-    dropped, named groups as <name>, other groups as <arg>). A string with no regex marker is returned unchanged."""
+    dropped, named groups as <name>, other capturing groups as <arg>; an optional non-capturing group is dropped and a
+    required one kept). A quantifier written after a group goes with it. A string with no regex marker is unchanged."""
     if not any(marker in raw for marker in _DJANGO_REGEX_MARKERS):
         return raw
     text = raw.removeprefix("^").removesuffix("$").removesuffix("\\Z")
     text = text.removesuffix("/?")
+
+    def group_end(start: int) -> int:
+        depth, j = 1, start
+        while j < len(text) and depth:
+            if text[j] == "\\":
+                j += 2
+                continue
+            depth += (text[j] == "(") - (text[j] == ")")
+            j += 1
+        return j
+
+    def after_quantifier(j: int) -> tuple[int, str]:
+        if j < len(text) and text[j] in "?*+":
+            q = text[j]
+            j += 1
+            if j < len(text) and text[j] == "?":
+                j += 1  # lazy
+            return j, q
+        if j < len(text) and text[j] == "{":
+            close = text.find("}", j)
+            if close != -1:
+                return close + 1, "{"
+        return j, ""
+
     out, i = [], 0
     while i < len(text):
         if text.startswith("(?P<", i):
             close = text.index(">", i)
             name = text[i + 4 : close]
-            depth, j = 1, close + 1
-            while j < len(text) and depth:
-                depth += (text[j] == "(") - (text[j] == ")")
-                j += 1
+            i, _q = after_quantifier(group_end(close + 1))
             out.append(f"<{name}>")
-            i = j
+        elif text.startswith("(?:", i):
+            end = group_end(i + 3)
+            inner = text[i + 3 : end - 1]
+            i, quant = after_quantifier(end)
+            if quant not in ("?", "*"):
+                out.append(_django_regex_to_route(inner) if any(m in inner for m in _DJANGO_REGEX_MARKERS) else inner)
         elif text[i] == "(":
-            depth, j = 1, i + 1
-            while j < len(text) and depth:
-                depth += (text[j] == "(") - (text[j] == ")")
-                j += 1
+            i, _q = after_quantifier(group_end(i + 1))
             out.append("<arg>")
-            i = j
         elif text[i] == "\\" and i + 1 < len(text):
             out.append(text[i + 1])
             i += 2

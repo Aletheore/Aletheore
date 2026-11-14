@@ -1925,3 +1925,13 @@ def test_django_regex_routes_become_templates():
     assert _django_regex_to_route(r"^tags/?$") == "tags"
     assert _django_regex_to_route(r"^files/(\d+)/$") == "files/<arg>/"
     assert _django_regex_to_route("users/<int:id>/") == "users/<int:id>/"
+
+
+def test_django_regex_templates_drop_group_quantifiers_and_handle_non_capturing_groups():
+    from aletheore.endpoints import _django_regex_to_route
+
+    assert _django_regex_to_route(r"^articles/(?P<slug>[-\w]+)+/$") == "articles/<slug>/"
+    assert _django_regex_to_route(r"^y/(?P<year>[0-9]{4})/$") == "y/<year>/"
+    assert _django_regex_to_route(r"^items/(\d+)?/$") == "items/<arg>/"
+    assert _django_regex_to_route(r"^docs(?:/(?P<page>\w+))?/$") == "docs/"
+    assert _django_regex_to_route(r"^(?:v1|v2)/ping$") == "v1|v2/ping"
