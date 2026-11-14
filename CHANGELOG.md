@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Improved: Go build constraints are now evaluated, not just detected. A `//go:build` (or legacy `// +build`) line is read as an expression under the default context: custom tags such as `nomsgpack` or `ignore` are false, platform tags (`linux`, `amd64`, `cgo`, `unix`) stay unknown so results are identical on every OS, and `!nomsgpack` counts as built by default. Edges out of a file that is not built by default are now marked `inferred`, as edges into it already were, and a file that is built by default (`//go:build !nomsgpack`) keeps exact edges. On gin, edges marked exact went from precision 0.960 / recall 0.889 to 1.000 / 0.979 against `go list` plus `go/types`.
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.

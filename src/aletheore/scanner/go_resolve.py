@@ -348,11 +348,144 @@ _GOOS_ARCH_SUFFIX = re.compile(rf"_({_KNOWN_OS_ARCH})(_({_KNOWN_OS_ARCH}))?(_tes
 _BUILD_LINE = re.compile(r"(?m)^\s*//\s*(?:go:build|\+build)\b")
 
 
+_UNKNOWN_TAGS = frozenset(_KNOWN_OS_ARCH.split("|")) | {"unix", "cgo"}
+_TRUE_TAGS = frozenset({"gc"})
+_GO_VERSION_TAG = re.compile(r"go1\.(\d+)$")
+_NEWEST_GO_MINOR = 30  # go1.N is satisfied by every toolchain up to a far-future bound
+_BUILD_TOKEN = re.compile(r"\s*(\(|\)|!|&&|\|\||[A-Za-z0-9_.]+)")
+
+
+def _tag_value(tag: str) -> bool | None:
+    """One build tag under the default context: custom tags (`nomsgpack`, `ignore`, `appengine`, `race`) are false;
+    GOOS, GOARCH, `unix` and `cgo` depend on the machine, so they stay unknown (a scan must give the same evidence on
+    every OS); `gc` and `go1.N` are true."""
+    if tag in _UNKNOWN_TAGS:
+        return None
+    if tag in _TRUE_TAGS:
+        return True
+    version = _GO_VERSION_TAG.match(tag)
+    if version:
+        return int(version.group(1)) <= _NEWEST_GO_MINOR
+    return False
+
+
+def _and(left: bool | None, right: bool | None) -> bool | None:
+    if left is False or right is False:
+        return False
+    return True if left is True and right is True else None
+
+
+def _or(left: bool | None, right: bool | None) -> bool | None:
+    if left is True or right is True:
+        return True
+    return False if left is False and right is False else None
+
+
+def _not(value: bool | None) -> bool | None:
+    return None if value is None else not value
+
+
+class _BuildSyntaxError(ValueError):
+    pass
+
+
+def _eval_build_expression(expression: str) -> bool | None:
+    """Three-valued value of a `//go:build` expression (`!`, `&&`, `||`, parentheses); None when unknown or malformed."""
+    tokens: list[str] = []
+    position = 0
+    text = expression.strip()
+    while position < len(text):
+        match = _BUILD_TOKEN.match(text, position)
+        if match is None:
+            return None
+        tokens.append(match.group(1))
+        position = match.end()
+    index = 0
+
+    def peek() -> str | None:
+        return tokens[index] if index < len(tokens) else None
+
+    def parse_or() -> bool | None:
+        nonlocal index
+        value = parse_and()
+        while peek() == "||":
+            index += 1
+            value = _or(value, parse_and())
+        return value
+
+    def parse_and() -> bool | None:
+        nonlocal index
+        value = parse_not()
+        while peek() == "&&":
+            index += 1
+            value = _and(value, parse_not())
+        return value
+
+    def parse_not() -> bool | None:
+        nonlocal index
+        token = peek()
+        if token == "!":
+            index += 1
+            return _not(parse_not())
+        if token == "(":
+            index += 1
+            value = parse_or()
+            if peek() != ")":
+                raise _BuildSyntaxError(expression)
+            index += 1
+            return value
+        if token is None or token in (")", "&&", "||"):
+            raise _BuildSyntaxError(expression)
+        index += 1
+        return _tag_value(token)
+
+    try:
+        value = parse_or()
+    except _BuildSyntaxError:
+        return None
+    return value if index == len(tokens) else None
+
+
+def _eval_plus_build_line(line: str) -> bool | None:
+    """Legacy `// +build a,b !c` line: space-separated terms are ORed, comma-separated parts ANDed."""
+    result: bool | None = False
+    for term in line.split():
+        part: bool | None = True
+        for tag in term.split(","):
+            negate = tag.startswith("!")
+            value = _tag_value(tag.lstrip("!"))
+            part = _and(part, _not(value) if negate else value)
+        result = _or(result, part)
+    return result
+
+
+_GO_BUILD_LINE = re.compile(r"(?m)^[ \t]*//go:build[ \t]+(.*)$")
+_PLUS_BUILD_LINE = re.compile(r"(?m)^[ \t]*//[ \t]*\+build[ \t]+(.*)$")
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+
+
+def build_state(filename: str, head: str) -> str:
+    """Whether the file is built under the default build context, on every OS:
+    "always" (no constraint, or one that holds by default such as `!nomsgpack`), "never" (a custom tag that is not set,
+    such as `nomsgpack` or `ignore`) or "maybe" (depends on GOOS/GOARCH/cgo, or the expression cannot be read).
+    Constraints are read from the comment block before the package clause only."""
+    before_package = _BLOCK_COMMENT.sub("", ("\n" + head).split("\npackage ", 1)[0])
+    value: bool | None = True
+    if _GOOS_ARCH_SUFFIX.search(filename):
+        value = None
+    go_build = _GO_BUILD_LINE.search(before_package)
+    if go_build:
+        value = _and(value, _eval_build_expression(go_build.group(1)))
+    else:
+        for line in _PLUS_BUILD_LINE.findall(before_package):
+            value = _and(value, _eval_plus_build_line(line))
+    return "always" if value is True else "never" if value is False else "maybe"
+
+
 def build_constrained(filename: str, head: str) -> bool:
-    """True when the file is only built under some tags/platforms (a `//go:build` line before the package
-    clause, or a _GOOS/_GOARCH filename suffix). Such files are alternatives to each other, not additions."""
-    before_package = head.split("\npackage ", 1)[0]
-    return bool(_BUILD_LINE.search(before_package)) or bool(_GOOS_ARCH_SUFFIX.search(filename))
+    """True when the file is not built unconditionally by default (a platform file, or one behind a custom tag).
+    Such files are alternatives to each other, not additions."""
+    return build_state(filename, head) != "always"
 
 
 @lru_cache(maxsize=512)
