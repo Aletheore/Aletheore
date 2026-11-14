@@ -4442,6 +4442,8 @@ def _resolve_js_import(
         # tried before an index file
         entry = _package_json_main(base)
         if entry is not None:
+            swaps = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
+            candidates.extend(entry.with_suffix(ext) for ext in swaps.get(entry.suffix, ()))  # "main": "lib/index.js" -> index.ts
             candidates.append(entry)
             candidates.extend(Path(f"{entry}{ext}") for ext in JS_FAMILY_EXTENSIONS)
             candidates.extend(entry / f"index{ext}" for ext in JS_FAMILY_EXTENSIONS)  # "main": "./lib" names a directory

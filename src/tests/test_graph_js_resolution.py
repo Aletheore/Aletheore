@@ -195,3 +195,12 @@ def test_package_json_main_naming_a_directory_resolves_to_its_index(tmp_path):
         "app.js": "const p = require('./pkg')\n",
     })
     assert imp["app.js"] == {"pkg/lib/index.js"}
+
+
+def test_package_json_main_naming_a_js_file_resolves_to_its_ts_source(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "pkg/package.json": '{"main": "lib/index.js"}',
+        "pkg/lib/index.ts": "export const a = 1\n",
+        "app.js": "const p = require('./pkg')\n",
+    })
+    assert imp["app.js"] == {"pkg/lib/index.ts"}
