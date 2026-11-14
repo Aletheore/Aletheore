@@ -5479,6 +5479,15 @@ def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_fil
             continue
         _top, declared, refs, imported = entry
         target = target_of[rel]
+        # `import Nuke` made the file depend on every file of the Nuke target; the compiler only links the files
+        # whose declarations it uses, and those are what the passes below add back.
+        fanout = {
+            _rel(repo_path, path) for other in imported if other != target for path in swift_target_files.get(other, [])
+        }
+        if fanout:
+            module["imports"] = [i for i in module.get("imports", []) if i not in fanout]
+            for dropped in fanout:
+                (module.get("import_confidence") or {}).pop(dropped, None)
         present = set(module.get("imports", []))
         for name in sorted(refs):
             if name in declared:

@@ -113,22 +113,16 @@ def test_build_module_graph_extracts_swift_symbols(tmp_path):
     assert unparseable == []
 
 
-def test_build_module_graph_swift_import_resolves_to_whole_target(tmp_path):
-    # A Swift `import Store` names a whole compiled module, not one file -
-    # unlike every per-file-resolving language (Python/JS/Go/Java), it must
-    # fan out to every source file belonging to that target, the same way
-    # Java's wildcard imports already do for a whole package.
+def test_build_module_graph_swift_import_links_the_files_it_uses_not_the_whole_target(tmp_path):
+    # A Swift `import Store` names a whole compiled module, but the compiler only depends on the files whose
+    # declarations the importer uses: Handler names Store and Logger, never User, so User.swift is not an edge.
     repo = make_swift_repo(tmp_path)
     _modules, dependency_graph, _unparseable = build_module_graph(repo)
     edges = {tuple(edge) for edge in dependency_graph["edges"]}
 
-    assert ("Sources/Handlers/Handler.swift", "Sources/Store/User.swift") in edges
     assert ("Sources/Handlers/Handler.swift", "Sources/Store/Store.swift") in edges
     assert ("Sources/Handlers/Handler.swift", "Sources/Logging/Logger.swift") in edges
-
-    assert ("Sources/App/Main.swift", "Sources/Handlers/Handler.swift") in edges
-    assert ("Sources/App/Main.swift", "Sources/Store/User.swift") in edges
-    assert ("Sources/App/Main.swift", "Sources/Store/Store.swift") in edges
+    assert ("Sources/Handlers/Handler.swift", "Sources/Store/User.swift") not in edges
 
 
 def test_build_module_graph_swift_target_path_override_from_package_manifest(tmp_path):
