@@ -32,7 +32,7 @@ describe("ported policy pages", () => {
   });
   it("keep the dated headers and the 14-day refund window", () => {
     expect(legal.privacy.updated).toBe("Last updated: October 2026");
-    expect(legal.terms.updated).toBe("Last updated: October 2026");
+    expect(legal.terms.updated).toBe("Last updated: November 2026");
     expect(legal.refund.html).toContain("14 days");
   });
   it("state the GitHub App permissions the App actually holds (checked against GitHub's public apps API on 2026-09-27)", () => {

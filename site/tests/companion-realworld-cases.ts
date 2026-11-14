@@ -25,7 +25,7 @@ export const REALWORLD_CASES: readonly EvalCase[] = [
   { id: "rw-free-plan", question: "is there a free plan?", status: "answer", contains: "$0" },
   { id: "rw-plans", question: "what plans do you have?", status: "answer", contains: "Community" },
   { id: "rw-flash-vs-air", question: "what's the difference between Flash and AIR?", status: "answer", contains: "$40" },
-  { id: "rw-flash-reviews", question: "how many pr reviews do I get on flash?", status: "answer", contains: "400" },
+  { id: "rw-flash-reviews", question: "how many pr reviews do I get on flash?", status: "answer", contains: "280" },
   { id: "rw-ai-credit", question: "what is ai credit?", status: "answer", contains: "credit" },
   { id: "rw-install-word", question: "install", status: "answer", command: "pip install" },
   { id: "rw-install-typo", question: "how do i instal aletheore", status: "answer", command: "pip install" },
