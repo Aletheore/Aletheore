@@ -9,6 +9,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 - Fixed: `pub use other_crate::*;` in a facade crate now follows that crate's own re-exports, so `use facade::Command;` links the file that defines `Command` (clap's builder/command.rs) instead of stopping at the crate root. clap edge F1 against an independent reference rose from 0.657 to 0.792.
 - Improved: Rust paths through a facade crate now also link the module it re-exports. When `crate::de::Item` or `facade::de::Item` names a module that the crate root only re-exports (`pub use core_lib::de;`, also written inside a zero-argument macro), the file in the crate it comes from is added as a dependency. On serde, edge recall against an independent reference rose from 0.941 to 0.977 with precision unchanged at 1.000.
+
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.
