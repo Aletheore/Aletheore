@@ -1466,7 +1466,7 @@ def test_extract_laravel_match_route_multiple_methods():
     assert all(e["path"] == "/search" for e in entries)
 
 
-def test_extract_laravel_route_inside_group_gets_a_note():
+def test_extract_laravel_route_group_prefix_is_composed():
     root, source = parse_php(
         "<?php\n"
         "Route::group(['prefix' => 'admin'], function () {\n"
@@ -1477,10 +1477,47 @@ def test_extract_laravel_route_inside_group_gets_a_note():
     entries = _extract_laravel_routes(root, source, "routes/web.php")
 
     assert len(entries) == 1
-    assert entries[0]["path"] == "/dashboard"
-    assert entries[0]["note"] == (
-        "declared inside a Route::group() prefix, not composed into this path"
+    assert entries[0]["path"] == "/admin/dashboard"
+    assert entries[0]["note"] is None
+
+
+def test_extract_laravel_chained_prefix_group_and_nested_groups_compose_outermost_first():
+    root, source = parse_php(
+        "<?php\n"
+        "Route::prefix('v1')->middleware('auth')->group(function () {\n"
+        "    Route::group(['prefix' => 'admin'], function () {\n"
+        "        Route::get('stats', 'StatsController@show');\n"
+        "    });\n"
+        "});\n"
     )
+
+    assert [e["path"] for e in _extract_laravel_routes(root, source, "routes/web.php")] == ["/v1/admin/stats"]
+
+
+def test_extract_laravel_non_literal_group_prefix_is_noted_not_guessed():
+    root, source = parse_php(
+        "<?php\nRoute::prefix($version)->group(function () {\n    Route::get('ping', 'P@ping');\n});\n"
+    )
+
+    entry = _extract_laravel_routes(root, source, "routes/web.php")[0]
+
+    assert entry["path"] == "/ping"
+    assert "not a string literal" in entry["note"]
+
+
+def test_extract_laravel_routes_in_api_php_get_the_default_api_prefix():
+    root, source = parse_php("<?php\nRoute::get('users/login', 'AuthController@login');\n")
+
+    entry = _extract_laravel_routes(root, source, "routes/api.php")[0]
+
+    assert entry["path"] == "/api/users/login"
+    assert "default /api prefix" in entry["note"]
+
+
+def test_extract_laravel_relative_uri_gets_a_leading_slash():
+    root, source = parse_php("<?php\nRoute::get('users', 'U@index');\n")
+
+    assert _extract_laravel_routes(root, source, "routes/web.php")[0]["path"] == "/users"
 
 
 def test_extract_laravel_inline_closure_handler():
@@ -1507,66 +1544,75 @@ def test_extract_laravel_legacy_string_handler():
     assert entries[0]["handler"] == "UserController@index"
 
 
-def test_extract_laravel_route_resource_class_reference():
-    # Real gap found via audit: Route::resource()/apiResource() - Laravel's
-    # direct equivalent of Rails' `resources`, generating all 7 RESTful
-    # actions for a controller - was completely unextracted before. Unlike
-    # Rails, the controller is always an explicit ::class reference here,
-    # never inferred from the resource name by convention.
-    root, source = parse_php(
-        "<?php\nRoute::resource('users', UserController::class);\n"
-    )
+def test_extract_laravel_route_resource_expands_to_its_standard_routes():
+    root, source = parse_php("<?php\nRoute::resource('users', UserController::class);\n")
 
     entries = _extract_laravel_routes(root, source, "routes/web.php")
 
-    assert entries == [
-        {
-            "method": None,
-            "path": "users",
-            "framework": "laravel",
-            "file": "routes/web.php",
-            "line": 2,
-            "handler": "UserController",
-            "unresolved": True,
-            "note": None,
-        }
+    got = {(e["method"], e["path"], e["handler"]) for e in entries}
+    assert got == {
+        ("GET", "/users", "UserController@index"), ("GET", "/users/create", "UserController@create"),
+        ("POST", "/users", "UserController@store"), ("GET", "/users/{user}", "UserController@show"),
+        ("GET", "/users/{user}/edit", "UserController@edit"), ("PUT", "/users/{user}", "UserController@update"),
+        ("PATCH", "/users/{user}", "UserController@update"), ("DELETE", "/users/{user}", "UserController@destroy"),
+    }
+    assert all(not e["unresolved"] for e in entries)
+
+
+def test_extract_laravel_api_resource_has_no_create_or_edit():
+    root, source = parse_php("<?php\nRoute::apiResource('posts', PostController::class);\n")
+
+    paths = {(e["method"], e["path"]) for e in _extract_laravel_routes(root, source, "routes/web.php")}
+
+    assert ("GET", "/posts/create") not in paths and ("GET", "/posts/{post}/edit") not in paths
+    assert ("GET", "/posts") in paths and ("DELETE", "/posts/{post}") in paths
+
+
+def test_extract_laravel_resource_only_and_except_as_options_or_chained():
+    root, source = parse_php(
+        "<?php\n"
+        "Route::resource('a', AC::class, ['only' => ['index', 'show']]);\n"
+        "Route::resource('b', BC::class, ['except' => ['create', 'edit']]);\n"
+        "Route::apiResource('c', CC::class)->only(['index']);\n"
+        "Route::apiResource('d', DC::class)->except(['destroy']);\n"
+    )
+
+    entries = _extract_laravel_routes(root, source, "routes/web.php")
+    by = lambda h: {e["handler"].split("@")[1] for e in entries if e["handler"].startswith(h)}
+
+    assert by("AC") == {"index", "show"}
+    assert by("BC") == {"index", "store", "show", "update", "destroy"}
+    assert by("CC") == {"index"}
+    assert by("DC") == {"index", "store", "show", "update"}
+
+
+def test_extract_laravel_nested_resource_names_its_parameter_after_the_last_segment():
+    root, source = parse_php(
+        "<?php\nRoute::resource('articles/{article}/comments', CommentController::class, ['only' => ['destroy']]);\n"
+    )
+
+    assert [e["path"] for e in _extract_laravel_routes(root, source, "routes/web.php")] == [
+        "/articles/{article}/comments/{comment}"
     ]
 
 
-def test_extract_laravel_api_resource_class_reference():
+def test_extract_laravel_resource_with_a_non_literal_only_list_stays_unresolved():
+    root, source = parse_php("<?php\nRoute::resource('x', XC::class, ['only' => $actions]);\n")
+
+    entry = _extract_laravel_routes(root, source, "routes/web.php")[0]
+
+    assert entry["unresolved"] is True and entry["method"] is None and entry["handler"] == "XC"
+
+
+def test_extract_laravel_resource_legacy_string_and_namespaced_controllers_keep_their_names():
     root, source = parse_php(
-        "<?php\nRoute::apiResource('posts', PostController::class);\n"
+        "<?php\nRoute::resource('items', 'ItemController', ['only' => ['index']]);\n"
+        "Route::resource('admin/users', Admin\\UserController::class, ['only' => ['index']]);\n"
     )
 
-    entries = _extract_laravel_routes(root, source, "routes/web.php")
+    handlers = {e["handler"] for e in _extract_laravel_routes(root, source, "routes/web.php")}
 
-    assert entries[0]["handler"] == "PostController"
-
-
-def test_extract_laravel_resource_legacy_string_controller():
-    # The pre-::class form is also valid for Route::resource(), same as
-    # the plain-verb methods above.
-    root, source = parse_php(
-        "<?php\nRoute::resource('items', 'ItemController');\n"
-    )
-
-    entries = _extract_laravel_routes(root, source, "routes/web.php")
-
-    assert entries[0]["handler"] == "ItemController"
-
-
-def test_extract_laravel_resource_namespaced_class_reference():
-    # A namespaced ::class reference (Admin\UserController::class) keeps
-    # its full qualified name, not just the bare class - dead_code.py's
-    # resolver needs the namespace segments to disambiguate a nested
-    # controller from an unrelated same-named top-level one.
-    root, source = parse_php(
-        "<?php\nRoute::resource('admin/users', Admin\\UserController::class);\n"
-    )
-
-    entries = _extract_laravel_routes(root, source, "routes/web.php")
-
-    assert entries[0]["handler"] == "Admin\\UserController"
+    assert handlers == {"ItemController@index", "Admin\\UserController@index"}
 
 
 def test_extract_aspnet_httpget_attribute():

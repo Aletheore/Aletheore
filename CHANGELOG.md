@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: Laravel `Route::resource()`/`apiResource()` expand to their standard routes (honouring `only`/`except`), `prefix` groups are composed, URIs get a leading slash, and `routes/api.php` gets Laravel's default `/api` prefix (noted as an assumption). On the RealWorld Laravel app, 0 of the spec's 19 routes matched; now all 19.
+
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.
