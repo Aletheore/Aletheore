@@ -4432,11 +4432,34 @@ def _resolve_js_import(
         candidates.extend(base.with_suffix(ext) for ext in swaps.get(base.suffix, ()))
         candidates.append(base)
     candidates.extend(Path(f"{base}{ext}") for ext in JS_FAMILY_EXTENSIONS)
+    candidates.append(Path(f"{base}.d.ts"))  # TypeScript tries the declaration file after the source extensions
+    if base.is_dir():
+        # Node: a directory import (`require('..')`, `from './lib'`) is the package.json "main" of that directory,
+        # tried before an index file
+        entry = _package_json_main(base)
+        if entry is not None:
+            candidates.append(entry)
+            candidates.extend(Path(f"{entry}{ext}") for ext in JS_FAMILY_EXTENSIONS)
     candidates.extend(base / f"index{ext}" for ext in JS_FAMILY_EXTENSIONS)
     for candidate in candidates:
         if candidate.is_file():
             return _rel(repo_path, candidate)
     return None
+
+
+def _package_json_main(directory: Path) -> Path | None:
+    """The file named by `main` in `directory/package.json`, or None (missing, unreadable, huge, not a string)."""
+    manifest = directory / "package.json"
+    try:
+        if not manifest.is_file() or manifest.stat().st_size > 1_000_000:
+            return None
+        data = json.loads(manifest.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, ValueError):
+        return None
+    main = data.get("main") if isinstance(data, dict) else None
+    if not isinstance(main, str) or not main.strip():
+        return None
+    return (directory / main).resolve()
 
 
 def _extract_module(
