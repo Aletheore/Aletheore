@@ -299,3 +299,32 @@ def test_ruby_zeitwerk_name_handles_camel_case_and_acronyms(tmp_path):
         "lib/app/consumer.rb": "module App\n  class Consumer\n    def f; LiquidRenderer.new; end\n  end\nend\n",
     })
     assert "lib/app/liquid_renderer.rb" in _imports(repo, "lib/app/consumer.rb")
+
+
+def test_ruby_constant_edges_do_not_depend_on_the_hash_seed(tmp_path):
+    # The order of a file's imports must be identical on every run and every OS: it was taken from a set.
+    import json
+    import os
+    import subprocess
+    import sys
+
+    repo = tmp_path / "det"
+    (repo / "lib" / "app").mkdir(parents=True)
+    (repo / "lib" / "app.rb").write_text("module App\nend\n")
+    names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+    for n in names:
+        (repo / "lib" / "app" / f"{n.lower()}.rb").write_text(f"module App\n  class {n}\n  end\nend\n")
+    (repo / "lib" / "app" / "user.rb").write_text(
+        "module App\n  class User\n    def go\n" + "".join(f"      {n}.new\n" for n in reversed(names)) + "    end\n  end\nend\n"
+    )
+    code = (
+        "import json, sys; from pathlib import Path; from aletheore.scanner.graph import build_module_graph;"
+        "m,_,_ = build_module_graph(Path(sys.argv[1]));"
+        "print(json.dumps({x['path']: x['imports'] for x in m}))"
+    )
+    outputs = []
+    for seed in ("1", "2", "3"):
+        env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONPATH=os.pathsep.join(sys.path))
+        outputs.append(subprocess.run([sys.executable, "-c", code, str(repo)], capture_output=True, text=True, env=env, check=True).stdout)
+    assert outputs[0] == outputs[1] == outputs[2]
+    assert len(json.loads(outputs[0])["lib/app/user.rb"]) == len(names)

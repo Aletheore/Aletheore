@@ -5348,7 +5348,7 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
             continue
         own, refs = entry
         present = set(module.get("imports", []))
-        for ref, nest in refs:
+        for ref, nest in sorted(refs):  # a set: iterate in a fixed order so the import list is the same on every run
             if ref.startswith("::"):
                 candidates = [ref[2:]]
             else:
