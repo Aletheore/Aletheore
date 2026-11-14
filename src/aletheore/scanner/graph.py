@@ -3463,11 +3463,11 @@ def _csharp_partial_facts(type_node: Node, source: bytes) -> dict:
                 got = name_of(member)
                 if got:
                     nested.add(got)
-            elif member.type in ("method_declaration", "property_declaration", "event_declaration", "event_field_declaration"):
+            elif member.type in ("method_declaration", "property_declaration", "event_declaration"):
                 got = name_of(member)
                 if got:
                     members.add(got)
-            elif member.type == "field_declaration":
+            elif member.type in ("field_declaration", "event_field_declaration"):  # an event field's name is a declarator
                 declaration = next((c for c in member.children if c.type == "variable_declaration"), None)
                 for declarator in (declaration.children if declaration is not None else []):
                     if declarator.type == "variable_declarator":
@@ -3535,7 +3535,8 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
     if not namespaces and types and root.has_error:
         # `#if` branches that split a declaration make tree-sitter drop the `namespace X` node; its text is intact.
         # Only a single block-scoped or file-scoped namespace is recovered this way, and only when the tree lost it.
-        found_ns = re.findall(r"(?m)^[ \t]*namespace\s+([A-Za-z_][\w.]*)\s*[{;]?", decoded)
+        uncommented = re.sub(r"/\*.*?\*/|//[^\n]*", " ", decoded, flags=re.S)  # a commented-out `namespace X;` is not one
+        found_ns = re.findall(r"(?m)^[ \t]*namespace\s+([A-Za-z_][\w.]*)\s*[{;]?", uncommented)
         if len(set(found_ns)) == 1:
             namespaces.append(found_ns[0])
             for type_name, type_ns in list(types.items()):

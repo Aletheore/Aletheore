@@ -139,3 +139,21 @@ def test_two_partial_blocks_of_one_type_in_a_file_keep_both_blocks_members(tmp_p
         "UsesBeta.cs": "namespace App;\npublic partial class Db { void Go() { BetaMember(); } }\n",
     }
     assert "Parts.cs" in _imports(tmp_path, files, "UsesBeta.cs")
+
+
+def test_an_event_field_in_a_partial_part_is_a_member_a_sibling_can_link_to(tmp_path):
+    files = {
+        "A.cs": "namespace App;\npublic partial class Db { public event System.EventHandler ConnectionOpened; }\n",
+        "B.cs": "namespace App;\npublic partial class Db { void Go() { ConnectionOpened += null; } }\n",
+    }
+    assert "A.cs" in _imports(tmp_path, files, "B.cs")
+
+
+def test_a_commented_out_namespace_is_not_used_to_recover_a_lost_namespace(tmp_path):
+    split = (
+        "#if NET20\nusing System.Collections;\n#else\nusing System.Collections.Generic;\n#endif\n"
+        "// namespace Ghost.Old;\n"
+        "namespace Real.Place\n{\n#if NET20\n    public class Alpha\n    {\n#else\n    public class Alpha\n    {\n#endif\n    }\n}\n"
+    )
+    files = {"Alpha.cs": split, "Real/Use.cs": "namespace Real.Place\n{\n    public class Use : Alpha { }\n}\n"}
+    assert "Alpha.cs" in _imports(tmp_path, files, "Real/Use.cs")
