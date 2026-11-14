@@ -316,19 +316,29 @@ async def test_the_paging_tool_rejects_an_unknown_tool_and_a_missing_target(tmp_
 
 
 @pytest.mark.asyncio
-async def test_a_client_still_passing_the_old_paging_arguments_gets_a_loud_error_not_a_silent_first_page(tmp_path):
-    # Paging moved to aletheore_page. A pydantic model ignores unknown arguments by default, so without this a client
-    # that still sends section/offset to aletheore_endpoints would quietly get the first page and think it paged.
+async def test_a_client_still_passing_the_old_paging_arguments_gets_the_page_it_asked_for(tmp_path):
+    # Paging moved to aletheore_page, but clients written before that still send section/offset/limit/filter to the
+    # evidence tool. They must get the same page aletheore_page gives, and the schema must not advertise the arguments.
     repo = make_repo_with_evidence(tmp_path)
     bloat(repo, 5)
     server = build_server(repo)
-    for arguments in ({"section": "endpoints"}, {"offset": 3}):
-        # Over the wire this is an is_error result; the in-process server raises the same ToolError.
-        with pytest.raises(ToolError) as error:
-            await server.call_tool("aletheore_endpoints", arguments)
-        assert next(iter(arguments)) in str(error.value) and "Extra inputs are not permitted" in str(error.value)
-    ok = await server.call_tool("aletheore_endpoints", {})
-    assert ok.is_error is not True
+    old = tool_result_body(await server.call_tool("aletheore_endpoints", {"section": "endpoints", "offset": 1, "limit": 2}))
+    new = tool_result_body(
+        await server.call_tool("aletheore_page", {"tool": "aletheore_endpoints", "section": "endpoints", "offset": 1, "limit": 2})
+    )
+    assert old == new and "error" not in str(old)[:40]
+    schema = next(t for t in await server.list_tools() if t.name == "aletheore_endpoints").input_schema
+    assert not {"section", "offset", "limit", "filter"} & set(schema.get("properties", {}))
+
+
+@pytest.mark.asyncio
+async def test_an_argument_no_evidence_tool_ever_had_is_still_rejected(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+    with pytest.raises(ToolError) as error:
+        await server.call_tool("aletheore_endpoints", {"sectoin": "endpoints"})
+    assert "Extra inputs are not permitted" in str(error.value)
+    assert (await server.call_tool("aletheore_endpoints", {})).is_error is not True
 
 
 @pytest.mark.asyncio
