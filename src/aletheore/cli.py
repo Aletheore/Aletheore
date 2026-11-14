@@ -3635,7 +3635,12 @@ class _CouncilGroup(typer.core.TyperGroup):
                 raise typer.Exit(code=0)
             console.print(hint, markup=False)
             raise typer.Exit(code=1)
-        return real.main(args=list(ctx.args), prog_name="aletheore council", standalone_mode=False)
+        # standalone_mode=False makes click return a command's exit code instead of exiting with it, and this group's own caller
+        # ignores the return value: without this a refused registration code or an unreachable server would exit 0.
+        code = real.main(args=list(ctx.args), prog_name="aletheore council", standalone_mode=False)
+        if isinstance(code, int) and not isinstance(code, bool) and code:
+            raise typer.Exit(code=code)
+        return code
 
 
 council_app = typer.Typer(cls=_CouncilGroup, help="a sealed room where people and their coding agents work together")

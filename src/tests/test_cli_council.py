@@ -3,6 +3,7 @@
 import builtins
 import sys
 
+import pytest
 from typer.testing import CliRunner
 
 from aletheore.cli import app
@@ -66,3 +67,16 @@ def test_council_help_works_before_the_extra_is_installed(monkeypatch):
     result = runner.invoke(app, ["council", "--help"])
     assert result.exit_code == 0
     assert "Usage:" in result.output and "aletheore[council]" in "".join(result.output.split())
+
+
+def test_a_failing_council_command_exits_non_zero(monkeypatch, tmp_path):
+    """Council's commands run with click's standalone_mode off, which returns their exit code; the wrapper must turn it back into one."""
+    pytest.importorskip("aletheore.council.cli")  # needs the optional `council` extra, which the ordinary test jobs do not install
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    result = runner.invoke(app, ["council", "register", "--server", "http://127.0.0.1:9", "--code", "cr_x", "--handle", "alice"])
+    assert result.exit_code == 1
+    assert "cannot reach the room server" in result.output
