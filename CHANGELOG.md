@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: Flask routes on a blueprint now get the blueprint's URL prefix. The prefix can come from `Blueprint(..., url_prefix=)`, from `app.register_blueprint(bp, url_prefix=)` (which replaces the constructor prefix, as Flask does), from a parent blueprint (`parent.register_blueprint(child)`, prefixes compose), or from a blueprint built and returned by a factory function; a blueprint registered twice is listed at both prefixes, and one imported under an alias (`from app.auth import bp as auth_bp`, even inside `create_app()`) is followed to the file that defines it. Also new: `app.add_url_rule(...)` and `bp.add_url_rule(...)`, with methods taken from `methods=`, from the `MethodView` class, or defaulting to GET. A prefix that is not a string literal is reported as `unresolved`, not as a bare path. On a Flask reference app, endpoint precision and recall against `app.url_map` went from 0.438 / 0.304 to 1.000 / 1.000; on Microblog, `/login` is now `/auth/login` and `/users` is `/api/users`.
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.
