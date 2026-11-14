@@ -5354,6 +5354,10 @@ def _kotlin_type_facts(root: Node, source: bytes) -> dict:
     declared: set[str] = set()
     refs: set[str] = set()
     skip_ids: set[int] = set()
+    platform: dict[str, str] = {}        # top-level type/function name -> "expect" | "actual"
+    top_values: set[str] = set()         # top-level function and property names
+    declared_values: set[str] = set()    # every name this file declares as a function, property or parameter
+    lower_refs: set[str] = set()         # lowercase identifiers used in code
     for child in root.children:
         if child.type == "package_header":
             qn = next((c for c in child.children if c.type == "qualified_identifier"), None)
@@ -5378,14 +5382,53 @@ def _kotlin_type_facts(root: Node, source: bytes) -> dict:
                 declared.add(text(name))
                 if n.parent is not None and n.parent.type == "source_file":
                     top.add(text(name))
+                    marker = _kotlin_platform_marker(n)
+                    if marker:
+                        platform[text(name)] = marker
+        elif t in ("function_declaration", "property_declaration"):
+            at_top = n.parent is not None and n.parent.type == "source_file"
+            names = []
+            if t == "function_declaration":
+                ident = next((c for c in n.children if c.type == "identifier"), None)
+                names = [ident] if ident is not None else []
+            else:
+                names = [c for v in n.children if v.type == "variable_declaration" for c in v.children if c.type == "identifier"]
+            for ident in names:
+                skip_ids.add(ident.id)
+                declared_values.add(text(ident))
+                if at_top:
+                    top_values.add(text(ident))
+                    marker = _kotlin_platform_marker(n)
+                    if marker:
+                        platform[text(ident)] = marker
+        elif t in ("parameter", "class_parameter", "variable_declaration", "type_parameter"):
+            for c in n.children:
+                if c.type == "identifier":
+                    skip_ids.add(c.id)
+                    declared_values.add(text(c))
         elif t == "identifier" and n.id not in skip_ids:
             value = text(n)
             if value[:1].isupper():
                 refs.add(value)
+            elif value[:1].islower():
+                lower_refs.add(value)
         stack.extend(n.children)
     code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source.decode(errors="ignore"), flags=re.S)
     qualified = {(m.group(1), m.group(2)) for m in _KOTLIN_QUALIFIED_NAME.finditer(code)}
-    return {"package": package, "imports": imports, "top": top, "declared": declared, "refs": refs, "qualified": qualified}
+    return {
+        "package": package, "imports": imports, "top": top, "declared": declared, "refs": refs, "qualified": qualified,
+        "platform": platform, "top_values": top_values, "declared_values": declared_values, "lower_refs": lower_refs,
+    }
+
+
+def _kotlin_platform_marker(node: Node) -> str | None:
+    """"expect" or "actual" when the declaration carries that modifier (Kotlin Multiplatform), else None."""
+    for child in node.children:
+        if child.type == "modifiers":
+            for modifier in child.children:
+                if modifier.type == "platform_modifier":
+                    return "expect" if any(c.type == "expect" for c in modifier.children) else "actual"
+    return None
 
 
 def _add_kotlin_name_edges(repo_path: Path, modules: list[dict]) -> None:
@@ -5404,6 +5447,7 @@ def _add_kotlin_name_edges(repo_path: Path, modules: list[dict]) -> None:
     parser.language = KOTLIN_LANGUAGE
     facts: dict[str, dict] = {}
     index: dict[tuple[str, str], set[str]] = {}
+    value_index: dict[tuple[str, str], set[str]] = {}
     for module in kotlin_modules:
         rel = module["path"]
         try:
@@ -5416,6 +5460,21 @@ def _add_kotlin_name_edges(repo_path: Path, modules: list[dict]) -> None:
         facts[rel] = _kotlin_type_facts(parser.parse(data).root_node, data)
         for name in facts[rel]["top"]:
             index.setdefault((facts[rel]["package"], name), set()).add(rel)
+        for name in facts[rel]["top_values"]:
+            value_index.setdefault((facts[rel]["package"], name), set()).add(rel)
+
+    def platform_owners(key: tuple[str, str], name: str, owners: set[str]) -> set[str]:
+        """Kotlin Multiplatform: a name declared `expect` in a common source set and `actual` in platform ones. A
+        reference binds to the actual declarations (the compiler checks a platform build); with no actual in the
+        repository it stays on the expect one."""
+        if len(owners) < 2:
+            return owners
+        kinds = {o: facts[o]["platform"].get(name) for o in owners}
+        if any(k is None for k in kinds.values()):
+            return owners
+        actual = {o for o, k in kinds.items() if k == "actual"}
+        return actual or owners
+
     for module in kotlin_modules:
         rel = module["path"]
         entry = facts.get(rel)
@@ -5446,17 +5505,59 @@ def _add_kotlin_name_edges(repo_path: Path, modules: list[dict]) -> None:
             if name in entry["declared"]:
                 continue
             if name in explicit:
-                owners = index.get(explicit[name], set())
+                key = explicit[name]
+                owners = index.get(key, set())
             else:
-                owners = index.get((entry["package"], name), set())
+                key = (entry["package"], name)
+                owners = index.get(key, set())
                 if not owners:
                     owners = set().union(*(index.get((pkg, name), set()) for pkg in wildcard_packages)) if wildcard_packages else set()
-            if len(owners) != 1:
+            owners = platform_owners(key, key[1] if name in explicit else name, owners)
+            if not owners or (len(owners) != 1 and not all(facts[o]["platform"].get(key[1] if name in explicit else name) == "actual" for o in owners)):
                 continue
-            dest = next(iter(owners))
-            if dest != rel and dest not in present:
-                present.add(dest)
-                module.setdefault("imports", []).append(dest)
+            for dest in sorted(owners):
+                if dest != rel and dest not in present:
+                    present.add(dest)
+                    module.setdefault("imports", []).append(dest)
+        # an `expect` declaration depends on the `actual` ones that complete it
+        for name, kind in sorted(entry["platform"].items()):
+            if kind != "expect":
+                continue
+            for dest in sorted((index.get((entry["package"], name), set()) | value_index.get((entry["package"], name), set())) - {rel}):
+                if facts[dest]["platform"].get(name) == "actual" and dest not in present:
+                    present.add(dest)
+                    module.setdefault("imports", []).append(dest)
+        # Top-level functions and properties: named by an explicit import (exact), or used unqualified from the same
+        # package / a wildcard-imported one (a guess: only a syntax tree, so a local of the same name is possible).
+        confidence = module.setdefault("import_confidence", {})
+        explicit_values = {}
+        for dotted, wildcard, alias in entry["imports"]:
+            if wildcard or "." not in dotted:
+                continue
+            pkg, _, last = dotted.rpartition(".")
+            if (pkg, last) in value_index:
+                explicit_values[alias or last] = (pkg, last)
+        for name in sorted(entry["lower_refs"]):
+            if name in entry["declared_values"] or len(name) < 4:
+                continue
+            exact = name in explicit_values
+            if exact:
+                owners = value_index.get(explicit_values[name], set())
+            else:
+                owners = value_index.get((entry["package"], name), set())
+                if not owners and wildcard_packages:
+                    owners = set().union(*(value_index.get((pkg, name), set()) for pkg in wildcard_packages))
+            owners = platform_owners((entry["package"], name), name, owners)
+            if not owners or (len(owners) != 1 and not all(facts[o]["platform"].get(name) == "actual" for o in owners)):
+                continue
+            for dest in sorted(owners):
+                if dest != rel and dest not in present:
+                    present.add(dest)
+                    module.setdefault("imports", []).append(dest)
+                    if not exact:
+                        confidence[dest] = "inferred"
+        if not confidence:
+            module.pop("import_confidence", None)
 
 
 def _retag_c_headers(modules: list[dict]) -> None:

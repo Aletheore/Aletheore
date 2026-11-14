@@ -107,3 +107,63 @@ def test_a_qualified_name_in_a_comment_is_not_a_reference(tmp_path):
         SRC + "app/User.kt": "package app\n/** See [core.deep.Thing] */\n// core.deep.Thing\nfun f() = 1\n",
     }, SRC + "app/User.kt")
     assert got == set()
+
+
+def _modules(tmp_path: Path, files: dict[str, str]):
+    repo = tmp_path / "r"
+    for rel, body in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+    modules, _, _ = build_module_graph(repo)
+    return {m["path"]: m for m in modules}
+
+
+MP = "lib/src/"
+
+
+def test_a_reference_to_an_expect_type_links_the_actual_files_and_expect_links_its_actuals(tmp_path):
+    mods = _modules(tmp_path, {
+        MP + "commonMain/kotlin/p/Buffer.kt": "package p\nexpect class Buffer\n",
+        MP + "jvmMain/kotlin/p/Buffer.kt": "package p\nactual class Buffer\n",
+        MP + "commonMain/kotlin/p/Use.kt": "package p\nfun f(b: Buffer) = b\n",
+    })
+    assert set(mods[MP + "commonMain/kotlin/p/Use.kt"]["imports"]) == {MP + "jvmMain/kotlin/p/Buffer.kt"}
+    assert set(mods[MP + "commonMain/kotlin/p/Buffer.kt"]["imports"]) == {MP + "jvmMain/kotlin/p/Buffer.kt"}
+    assert MP + "commonMain/kotlin/p/Buffer.kt" not in mods[MP + "jvmMain/kotlin/p/Buffer.kt"]["imports"]
+
+
+def test_a_reference_to_an_expect_type_with_no_actual_stays_on_the_expect_file(tmp_path):
+    mods = _modules(tmp_path, {
+        MP + "commonMain/kotlin/p/Buffer.kt": "package p\nexpect class Buffer\n",
+        MP + "commonMain/kotlin/p/Use.kt": "package p\nfun f(b: Buffer) = b\n",
+    })
+    assert set(mods[MP + "commonMain/kotlin/p/Use.kt"]["imports"]) == {MP + "commonMain/kotlin/p/Buffer.kt"}
+
+
+def test_an_imported_top_level_function_is_an_exact_edge(tmp_path):
+    mods = _modules(tmp_path, {
+        MP + "main/kotlin/a/Util.kt": "package a\nfun checkOffset(x: Int) {}\n",
+        MP + "main/kotlin/b/User.kt": "package b\nimport a.checkOffset\nfun g() { checkOffset(1) }\n",
+    })
+    user = mods[MP + "main/kotlin/b/User.kt"]
+    assert MP + "main/kotlin/a/Util.kt" in user["imports"]
+    assert user.get("import_confidence", {}).get(MP + "main/kotlin/a/Util.kt") is None
+
+
+def test_an_unimported_same_package_top_level_function_is_marked_inferred(tmp_path):
+    mods = _modules(tmp_path, {
+        MP + "main/kotlin/a/Util.kt": "package a\nfun checkOffset(x: Int) {}\n",
+        MP + "main/kotlin/a/User.kt": "package a\nfun g() { checkOffset(1) }\n",
+    })
+    user = mods[MP + "main/kotlin/a/User.kt"]
+    assert MP + "main/kotlin/a/Util.kt" in user["imports"]
+    assert user["import_confidence"][MP + "main/kotlin/a/Util.kt"] == "inferred"
+
+
+def test_a_local_with_the_name_of_a_top_level_function_is_not_an_edge(tmp_path):
+    mods = _modules(tmp_path, {
+        MP + "main/kotlin/a/Util.kt": "package a\nfun checkOffset(x: Int) {}\n",
+        MP + "main/kotlin/a/User.kt": "package a\nfun g(checkOffset: Int) = checkOffset\n",
+    })
+    assert MP + "main/kotlin/a/Util.kt" not in mods[MP + "main/kotlin/a/User.kt"]["imports"]
