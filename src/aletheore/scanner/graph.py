@@ -5081,9 +5081,17 @@ def _php_code_only(source: str) -> str:
     return _PHP_NOISE_RE.sub(" ", source)
 
 
+_PHP_FIRST_DECLARATION_RE = re.compile(r"(?m)^\s*(?:(?:abstract|final|readonly)\s+)*(?:class|interface|trait|enum)\s+\w")
+
+
 def _php_aliases(code: str) -> dict[str, str]:
     aliases: dict[str, str] = {}
+    # `use Exception;` in the file header imports the global class and shadows a same-namespace `Exception`. The same
+    # statement inside a class body is a trait import, so a single-segment name only counts before the first declaration.
+    first_declaration = _PHP_FIRST_DECLARATION_RE.search(code)
+    header_end = first_declaration.start() if first_declaration else len(code)
     for match in re.finditer(r"(?m)^\s*use\s+(?!function\b|const\b)([^;]+);", code):
+        in_header = match.start() < header_end
         body = match.group(1)
         if "{" in body:
             prefix, _, group = body.partition("{")
@@ -5093,7 +5101,7 @@ def _php_aliases(code: str) -> dict[str, str]:
             names = [item.strip().lstrip("\\") for item in body.split(",")]
         for name in names:
             parsed = re.match(r"([\w\\]+)(?:\s+as\s+(\w+))?$", name)
-            if parsed and "\\" in parsed.group(1):
+            if parsed and ("\\" in parsed.group(1) or in_header):
                 aliases[parsed.group(2) or parsed.group(1).split("\\")[-1]] = parsed.group(1)
     return aliases
 

@@ -171,3 +171,33 @@ def test_php_heredoc_and_nowdoc_bodies_are_not_scanned(tmp_path):
     ))
     imp = imports_of(repo)
     assert imp["src/Doc.php"] == {"src/Real.php"}
+
+
+def _php_modules(tmp_path, files):
+    from aletheore.scanner.graph import build_module_graph
+
+    repo = tmp_path / "phpr"
+    for rel, body in files.items():
+        f = repo / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body)
+    modules, _, _ = build_module_graph(repo)
+    return {m["path"]: set(m["imports"]) for m in modules}
+
+
+def test_use_of_a_global_class_shadows_a_same_namespace_class_of_that_name(tmp_path):
+    imp = _php_modules(tmp_path, {
+        "src/Exceptions/Exception.php": "<?php\nnamespace App\\Exceptions;\ninterface Exception {}\n",
+        "src/Exceptions/Unit.php": "<?php\nnamespace App\\Exceptions;\nuse Exception;\nclass Unit extends Exception {}\n",
+        "src/Exceptions/Plain.php": "<?php\nnamespace App\\Exceptions;\nclass Plain implements Exception {}\n",
+    })
+    assert "src/Exceptions/Exception.php" not in imp["src/Exceptions/Unit.php"]
+    assert "src/Exceptions/Exception.php" in imp["src/Exceptions/Plain.php"]
+
+
+def test_a_trait_use_inside_a_class_body_is_not_a_global_import(tmp_path):
+    imp = _php_modules(tmp_path, {
+        "src/Helper.php": "<?php\nnamespace App;\ntrait Helper {}\n",
+        "src/Svc.php": "<?php\nnamespace App;\nclass Svc {\n    use Helper;\n}\n",
+    })
+    assert "src/Helper.php" in imp["src/Svc.php"]

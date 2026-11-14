@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: a PHP `use Exception;` in the file header imports the global class, so a bare `Exception` no longer links a same-namespace `Exception` file. A single-segment `use` inside a class body is still a trait import. Carbon edge F1 against an independent reference rose from 0.922 to 0.997.
+
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.
