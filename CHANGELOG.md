@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: `<?hh` (Hack) files are no longer read as PHP for implicit class references. FastRoute's Hack test fixtures produced seven false edges; edge F1 against an independent reference rose from 0.877 to 1.000.
+
 - Fixed: composer PSR-4 maps keep every directory a prefix maps to. `autoload-dev` mapping the same prefix to a test directory overwrote the real source directory, so explicit `use` statements of classes in `lib/` stopped resolving; a prefix listing several directories is also read now. php-parser edge F1 against an independent reference rose from 0.951 to 1.000.
 
 - Fixed: a PHP `use Exception;` in the file header imports the global class, so a bare `Exception` no longer links a same-namespace `Exception` file. A single-segment `use` inside a class body is still a trait import. Carbon edge F1 against an independent reference rose from 0.922 to 0.997.

@@ -229,3 +229,11 @@ def test_psr4_prefix_with_several_directories_resolves_in_each(tmp_path):
         "use.php": "<?php\nuse App\\A;\nuse App\\B;\n",
     })
     assert imp["use.php"] == {"src/A.php", "extra/B.php"}
+
+
+def test_a_hack_file_does_not_get_php_implicit_edges(tmp_path):
+    imp = _php_modules(tmp_path, {
+        "src/Dispatcher.php": "<?php\nnamespace App;\ninterface Dispatcher {}\n",
+        "test/fixture.php": "<?hh\nnamespace App\\Fixtures;\nfunction f(): \\App\\Dispatcher { return 1; }\n",
+    })
+    assert imp["test/fixture.php"] == set()

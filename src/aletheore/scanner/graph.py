@@ -5147,6 +5147,8 @@ def _add_php_implicit_edges(repo_path: Path, modules: list[dict], php_psr4_map: 
             raw = (repo_path / module["path"]).read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
+        if raw.lstrip().startswith("<?hh"):
+            continue  # Hack, not PHP: PHP's own tokenizer reads such a file as inline text, so it references nothing
         code = _php_code_only(raw)
         ns_match = _PHP_NAMESPACE_RE.search(code)
         namespace = ns_match.group(1) if ns_match else ""
