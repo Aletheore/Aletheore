@@ -169,3 +169,11 @@ def test_a_dot_js_specifier_resolves_to_the_declaration_file_when_there_is_no_so
         "index.d.ts": "import { Options } from './types/options.js'\nexport type X = Options\n",
     })
     assert imp["index.d.ts"] == {"types/options.d.ts"}
+
+
+def test_a_directory_import_can_resolve_to_an_index_declaration_file(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "test-dts/index.d.ts": "export declare const a: number\n",
+        "test-dts/store.test-d.ts": "import { a } from '.'\nexport const b = a\n",
+    })
+    assert imp["test-dts/store.test-d.ts"] == {"test-dts/index.d.ts"}

@@ -4445,6 +4445,7 @@ def _resolve_js_import(
             candidates.append(entry)
             candidates.extend(Path(f"{entry}{ext}") for ext in JS_FAMILY_EXTENSIONS)
     candidates.extend(base / f"index{ext}" for ext in JS_FAMILY_EXTENSIONS)
+    candidates.append(base / "index.d.ts")
     for candidate in candidates:
         if candidate.is_file():
             return _rel(repo_path, candidate)
