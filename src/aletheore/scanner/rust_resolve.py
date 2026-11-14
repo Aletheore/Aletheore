@@ -457,6 +457,10 @@ def extra_imports(repo_path: Path, from_file: Path, source: str) -> list[str]:
         pattern = re.compile(r"(?<![\w$:.])(" + "|".join(re.escape(a) for a in aliases) + r")((?:::[A-Za-z_]\w*)+)")
         for m in pattern.finditer(body):
             out.append(m.group(1) + m.group(2))
+            segments = m.group(2).split("::")[1:]
+            if len(segments) > 1:
+                # `tracing::Level::TRACE`: the item the crate re-exports is the first segment after the crate name
+                out.append(f"{m.group(1)}::{segments[0]}")
     seen: set[str] = set()
     unique = []
     for p in out:

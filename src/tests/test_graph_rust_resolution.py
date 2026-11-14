@@ -239,3 +239,18 @@ def test_rust_glob_reexport_of_a_crate_follows_that_crates_own_reexport(tmp_path
     })
     assert ("user/src/lib.rs", "builder/src/builder/command.rs") in edges_of(repo)
 
+
+
+def test_rust_inline_workspace_crate_path_follows_the_reexport_of_its_first_item(tmp_path):
+    # `facade::Level::TRACE` written inline (no `use`): Level is re-exported from the core crate's metadata.rs
+    repo = write(tmp_path / "inl", {
+        "Cargo.toml": '[workspace]\nmembers = ["core", "facade", "app"]\n',
+        "core/Cargo.toml": pkg("core-crate"),
+        "core/src/lib.rs": "mod metadata;\npub use self::metadata::Level;\n",
+        "core/src/metadata.rs": "pub struct Level;\n",
+        "facade/Cargo.toml": pkg("facade", 'core-crate = { path = "../core" }\n'),
+        "facade/src/lib.rs": "pub use core_crate::Level;\n",
+        "app/Cargo.toml": pkg("app", 'facade = { path = "../facade" }\n'),
+        "app/src/main.rs": "fn main() { let _ = facade::Level::TRACE; }\n",
+    })
+    assert ("app/src/main.rs", "core/src/metadata.rs") in edges_of(repo)
