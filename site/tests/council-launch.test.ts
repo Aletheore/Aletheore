@@ -39,12 +39,12 @@ describe("Council launch switch", () => {
     }
   });
 
-  it("links to the Council site are plain followed links, and the page says it is not released yet", () => {
+  it("links to the Council site are plain followed links, and the page says which release ships it", () => {
     expect(read("src/components/site/footer.tsx")).not.toMatch(/nofollow/);
     expect(read("src/components/site/header.tsx")).not.toMatch(/nofollow/);
     const page = read("src/app/council/page.tsx");
     expect(page).not.toMatch(/nofollow/);
-    expect(page).toMatch(/arrives with the next Aletheore release/);
+    expect(page).toMatch(/ships in Aletheore 0\.13\.0/);
     expect(page).toMatch(/not had an independent security review/);
   });
 });

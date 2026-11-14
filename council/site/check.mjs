@@ -14,7 +14,7 @@ check("no dead links (href=\"#\")", !/href="#"/.test(html));
 check("every in-page link points at something that exists", [...html.matchAll(/href="#([^"]+)"/g)].every(([, id]) => html.includes(`id="${id}"`)), [...html.matchAll(/href="#([^"]+)"/g)].map((m) => m[1]).filter((id) => !html.includes(`id="${id}"`)).join(","));
 check("no en or em dashes in the copy", !/[–—]/.test(html));
 check("does not name the unpublished package", !/aletheore-council\b(?!-site)/.test(html.replace(/council-control/g, "")));
-check("shows no install command that cannot be run", !/pip install|pipx install/.test(html));
+check("shows the real install command", /pip install 'aletheore\[council\]'/.test(html) && !/pipx install/.test(html));
 check("open to search engines: no noindex tag, robots.txt allows crawling and names the sitemap, no X-Robots-Tag header",
   !/noindex/i.test(html) && /Allow: \//.test(readFileSync(new URL("./robots.txt", import.meta.url), "utf8")) && !/Disallow: \//.test(readFileSync(new URL("./robots.txt", import.meta.url), "utf8"))
   && /Sitemap: https:\/\/aletheorecouncil\.com\/sitemap\.xml/.test(readFileSync(new URL("./robots.txt", import.meta.url), "utf8"))

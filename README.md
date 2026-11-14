@@ -279,7 +279,7 @@ jobs:
   evidence:
     runs-on: ubuntu-latest
     steps:
-      - uses: Aletheore/Aletheore@v0.10.2
+      - uses: Aletheore/Aletheore@v0.13.0
         with:
           fail-on-new-secrets: true
 ```
