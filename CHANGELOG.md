@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Improved: Swift files of one module now depend on each other by the types they name. A file that annotates, conforms to, extends, aliases or constructs a type declared in another file of its target gets an edge to that file, with no `import` needed (Swift has none inside a module). Only a type with exactly one declaring file counts: the file's own target first, then the targets it `import`s. Before this, a SwiftPM module had edges only across targets. On swift-argument-parser, edge recall against the Swift compiler's own checked AST rose from 0.003 to 0.628 at precision 0.989. Methods and properties added by an extension in another file and called on a value are not resolved yet.
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.

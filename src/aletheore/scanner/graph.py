@@ -5341,6 +5341,116 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
                     break
 
 
+_SWIFT_DECL_KEYWORDS = frozenset({"class", "struct", "enum", "actor", "extension", "protocol", "typealias"})
+
+
+def _swift_type_facts(root: Node, source: bytes) -> tuple[set[str], set[str], set[str], list[str]]:
+    """(top-level type names declared, every type name declared, type names referenced, imported module names).
+
+    A reference is a `type_identifier` (annotations, conformances, generics, `extension Foo`) or a capitalised
+    `simple_identifier` (`Foo()`, `Foo.shared`); the name of a declaration is not a reference to itself."""
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
+
+    top: set[str] = set()
+    declared: set[str] = set()
+    refs: set[str] = set()
+    imports: list[str] = []
+    declaration_names: set[int] = set()
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        t = n.type
+        if t in ("class_declaration", "protocol_declaration", "typealias_declaration"):
+            keyword = next((c.type for c in n.children if c.type in _SWIFT_DECL_KEYWORDS), None)
+            if keyword is not None and keyword != "extension":
+                name = next((c for c in n.children if c.type == "type_identifier"), None)
+                if name is not None:
+                    declaration_names.add(name.id)
+                    declared.add(text(name))
+                    if n.parent is not None and n.parent.type == "source_file":
+                        top.add(text(name))
+        elif t == "import_declaration":
+            ident = next((c for c in n.children if c.type == "identifier"), None)
+            if ident is not None:
+                imports.append(text(ident).split(".")[0])
+            continue
+        elif t == "type_identifier":
+            if n.id not in declaration_names:
+                refs.add(text(n))
+        elif t == "simple_identifier":
+            value = text(n)
+            if value[:1].isupper():
+                refs.add(value)
+        stack.extend(n.children)
+    return top, declared, refs, imports
+
+
+def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_files: dict[str, list[Path]]) -> None:
+    """Edges between Swift files that name each other's types.
+
+    Files of one module see each other's declarations with no `import`, so an import-only graph has almost no
+    edges inside a target. A file depends on the file declaring a type it names (annotation, conformance, extension,
+    initialiser, static member) when, in the file's own target, exactly one file declares a type of that name; only
+    when its own target declares none does it look at the targets it `import`s, again needing exactly one
+    declaring file. A name two files declare is left unresolved, a type the file declares itself is never an
+    edge to another file, and comments and strings are not references. Free functions and members called on
+    a value are not modelled (that needs types)."""
+    swift_modules = [m for m in modules if m.get("language") == "swift"]
+    if len(swift_modules) < 2 or not swift_target_files:
+        return
+    target_of: dict[str, str] = {}
+    for target, paths in swift_target_files.items():
+        for path in paths:
+            rel = _rel(repo_path, path)
+            if rel is not None:
+                target_of.setdefault(rel, target)
+    parser = Parser()
+    parser.language = SWIFT_LANGUAGE
+    facts: dict[str, tuple[set[str], set[str], set[str], list[str]]] = {}
+    owners: dict[str, dict[str, set[str]]] = {}
+    for module in swift_modules:
+        rel = module["path"]
+        target = target_of.get(rel)
+        if target is None:
+            continue
+        try:
+            file_path = repo_path / rel
+            if file_path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+                continue
+            data = file_path.read_bytes()
+            facts[rel] = _swift_type_facts(parser.parse(data).root_node, data)
+        except OSError:
+            continue
+        for name in facts[rel][0]:
+            owners.setdefault(target, {}).setdefault(name, set()).add(rel)
+    for module in swift_modules:
+        rel = module["path"]
+        entry = facts.get(rel)
+        if entry is None:
+            continue
+        _top, declared, refs, imported = entry
+        target = target_of[rel]
+        present = set(module.get("imports", []))
+        for name in sorted(refs):
+            if name in declared:
+                continue
+            found = owners.get(target, {}).get(name)
+            if found is None:
+                candidates: set[str] = set()
+                for other in imported:
+                    if other != target:
+                        candidates |= owners.get(other, {}).get(name, set())
+                found = candidates
+            if len(found) != 1:
+                continue
+            dest = next(iter(found))
+            if dest != rel and dest not in present:
+                present.add(dest)
+                module.setdefault("imports", []).append(dest)
+
+
 def _retag_c_headers(modules: list[dict]) -> None:
     """`.h` is parsed with the C++ grammar (a superset) and tagged "cpp" by the shared extension
     map, which mislabels the headers of a C project. Decide per header from the code that uses it,
@@ -5549,7 +5659,8 @@ def _compute_resolution_signatures(
     - java: source roots and every package's top-level types (same-package edges, wildcard and import targets);
     - csharp: each file's namespaces, top-level types, extension methods and global usings, the namespace prefix
       map, the csproj project index and implicit usings (type-reference edges);
-    - php: each file's namespace and declared classes, and the PSR-4 map (implicit class-reference edges).
+    - php: each file's namespace and declared classes, and the PSR-4 map (implicit class-reference edges);
+    - swift: the contents of every Swift file (type-reference edges read every file's declarations).
     An edit that changes none of these leaves the fingerprint, and so every cached module, untouched."""
     import hashlib
 
@@ -5589,6 +5700,18 @@ def _compute_resolution_signatures(
             ns_match = _PHP_NAMESPACE_RE.search(code)
             decls[rel(path)] = [ns_match.group(1) if ns_match else "", sorted({m.group(1) for m in _PHP_DECL_RE.finditer(code)})]
         extras["php"] = [decls, sorted((k, rel(v)) for k, v in php_psr4_map.items())]
+    if "swift" in paths_by_language:
+        # a Swift file's edges depend on the types every other Swift file declares and on every import, so any edit
+        # to a Swift file changes them: fingerprint the contents
+        digests: dict[str, str] = {}
+        for path in all_source_paths:
+            if path.suffix != ".swift":
+                continue
+            try:
+                digests[rel(path)] = hashlib.blake2b(path.read_bytes(), digest_size=8).hexdigest()
+            except OSError:
+                continue
+        extras["swift"] = digests
     if "go" in paths_by_language:
         # same-package edges read the declarations of the sibling files, so a sibling that gains or loses one
         # changes this file's edges even though this file did not change
@@ -5967,6 +6090,7 @@ def build_module_graph(
     _add_php_implicit_edges(repo_path, modules, php_psr4_map)
     _add_c_include_edges(repo_path, modules)
     _add_ruby_constant_edges(repo_path, modules)
+    _add_swift_type_edges(repo_path, modules, swift_target_files)
     _retag_c_headers(modules)
 
     for module in modules:
