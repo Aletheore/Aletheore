@@ -201,3 +201,31 @@ def test_a_trait_use_inside_a_class_body_is_not_a_global_import(tmp_path):
         "src/Svc.php": "<?php\nnamespace App;\nclass Svc {\n    use Helper;\n}\n",
     })
     assert "src/Helper.php" in imp["src/Svc.php"]
+
+
+def test_psr4_prefix_mapped_again_by_autoload_dev_keeps_the_source_directory(tmp_path):
+    import json
+
+    (tmp_path / "composer.json").write_text(json.dumps({
+        "autoload": {"psr-4": {"App\\": "lib/App"}},
+        "autoload-dev": {"psr-4": {"App\\": "test/App/"}},
+    }))
+    imp = _php_modules(tmp_path, {
+        "composer.json": (tmp_path / "composer.json").read_text(),
+        "lib/App/Node/Identifier.php": "<?php\nnamespace App\\Node;\nclass Identifier {}\n",
+        "lib/App/Builder.php": "<?php\nnamespace App;\nuse App\\Node\\Identifier;\n/** @param Identifier $x */\nclass Builder {}\n",
+        "test/App/Thing.php": "<?php\nnamespace App;\nclass Thing {}\n",
+    })
+    assert "lib/App/Node/Identifier.php" in imp["lib/App/Builder.php"]
+
+
+def test_psr4_prefix_with_several_directories_resolves_in_each(tmp_path):
+    import json
+
+    imp = _php_modules(tmp_path, {
+        "composer.json": json.dumps({"autoload": {"psr-4": {"App\\": ["src/", "extra/"]}}}),
+        "src/A.php": "<?php\nnamespace App;\nclass A {}\n",
+        "extra/B.php": "<?php\nnamespace App;\nclass B {}\n",
+        "use.php": "<?php\nuse App\\A;\nuse App\\B;\n",
+    })
+    assert imp["use.php"] == {"src/A.php", "extra/B.php"}

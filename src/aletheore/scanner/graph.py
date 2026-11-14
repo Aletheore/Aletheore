@@ -3112,18 +3112,28 @@ def _extract_php(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list
     return imports, functions, types
 
 
+class _Psr4Map(dict):
+    """prefix -> its first directory (what every existing caller reads), with `.extra[prefix]` holding the further
+    directories the same prefix maps to: composer lets one prefix list several, and `autoload-dev` usually maps the
+    prefix of `autoload` again to a test directory. Keeping only the last one made the real source directory vanish."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.extra: dict[str, list[Path]] = {}
+
+
 def _load_php_psr4_map(repo_path: Path) -> dict[str, Path]:
+    mapping = _Psr4Map()
     composer_json = repo_path / "composer.json"
     if not composer_json.exists():
-        return {}
+        return mapping
     try:
         data = json.loads(read_text_lenient(composer_json))
     except json.JSONDecodeError:
-        return {}
+        return mapping
     if not isinstance(data, dict):
-        return {}
+        return mapping
 
-    mapping: dict[str, Path] = {}
     for section in ("autoload", "autoload-dev"):
         psr4 = data.get(section, {})
         if not isinstance(psr4, dict):
@@ -3131,9 +3141,17 @@ def _load_php_psr4_map(repo_path: Path) -> dict[str, Path]:
         psr4 = psr4.get("psr-4", {})
         if not isinstance(psr4, dict):
             continue
-        for prefix, rel_dir in psr4.items():
-            if isinstance(prefix, str) and isinstance(rel_dir, str):
-                mapping[prefix] = repo_path / rel_dir
+        for prefix, rel_dirs in psr4.items():
+            if not isinstance(prefix, str):
+                continue
+            for rel_dir in rel_dirs if isinstance(rel_dirs, list) else [rel_dirs]:
+                if not isinstance(rel_dir, str):
+                    continue
+                directory = repo_path / rel_dir
+                if prefix not in mapping:
+                    mapping[prefix] = directory
+                elif directory != mapping[prefix] and directory not in mapping.extra.setdefault(prefix, []):
+                    mapping.extra[prefix].append(directory)
     return mapping
 
 
@@ -3162,10 +3180,11 @@ def _resolve_php_use(psr4_map: dict[str, Path], qualified_name: str) -> tuple[Pa
         return None, False
 
     parts = remainder.split("\\")
-    candidate = psr4_map[best_prefix].joinpath(*parts[:-1], f"{parts[-1]}.php")
-    if not candidate.is_file():
-        return None, False
-    return candidate, len(matching_prefixes) > 1
+    for directory in [psr4_map[best_prefix], *getattr(psr4_map, "extra", {}).get(best_prefix, [])]:
+        candidate = directory.joinpath(*parts[:-1], f"{parts[-1]}.php")
+        if candidate.is_file():
+            return candidate, len(matching_prefixes) > 1
+    return None, False
 
 
 def _resolve_php_include(from_file: Path, spec: str) -> Path | None:
@@ -5596,6 +5615,7 @@ def _compute_resolution_signatures(
                 continue
             ns_match = _PHP_NAMESPACE_RE.search(code)
             decls[rel(path)] = [ns_match.group(1) if ns_match else "", sorted({m.group(1) for m in _PHP_DECL_RE.finditer(code)})]
+        extras["php_extra_dirs"] = sorted((k, rel(v)) for k, vs in getattr(php_psr4_map, "extra", {}).items() for v in vs)
         extras["php"] = [decls, sorted((k, rel(v)) for k, v in php_psr4_map.items())]
     if "go" in paths_by_language:
         # same-package edges read the declarations of the sibling files, so a sibling that gains or loses one
