@@ -1831,7 +1831,7 @@ def _extract_aspnet_attribute_routes(root: Node, source: bytes, rel_path: str) -
                 template = route_template  # [HttpGet] with no template of its own uses the method's [Route]
             class_unresolved = has_class_route and class_template is None
             if class_unresolved:
-                path, note = template or "", "class-level [Route] template is not a string literal, not composed into this path"
+                path, note = template or "/", "class-level [Route] template is not a string literal, not composed into this path"
             elif class_template is not None or template is None:
                 path, note = _aspnet_compose_route(class_template, template, controller, handler), None
             else:
