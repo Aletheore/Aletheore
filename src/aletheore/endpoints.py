@@ -1130,7 +1130,7 @@ def _extract_spring_boot_routes(root: Node, source: bytes, rel_path: str) -> lis
                                 "file": rel_path,
                                 "line": ann.start_point[0] + 1,
                                 "handler": handler,
-                                "unresolved": False,
+                                "unresolved": prefix_unresolved,  # the class prefix could not be read: the path is partial
                                 "note": note,
                             }
                         )

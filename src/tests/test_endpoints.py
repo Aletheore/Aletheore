@@ -1875,3 +1875,13 @@ def test_extract_spring_request_mapping_method_given_as_a_statically_imported_co
     root, source = parse_java('public class C {\n    @RequestMapping(path = "/users", method = POST)\n    public void f() { }\n}\n')
 
     assert [(e["method"], e["path"]) for e in _extract_spring_boot_routes(root, source, "C.java")] == [("POST", "/users")]
+
+
+def test_extract_spring_route_under_a_constant_class_prefix_is_flagged_unresolved():
+    root, source = parse_java(
+        "@RequestMapping(Paths.BASE)\npublic class C {\n    @GetMapping\n    public void a() { }\n    @GetMapping(\"/x\")\n    public void b() { }\n}\n"
+    )
+
+    entries = _extract_spring_boot_routes(root, source, "C.java")
+
+    assert entries and all(e["unresolved"] is True for e in entries)
