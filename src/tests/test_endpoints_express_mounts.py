@@ -148,3 +148,21 @@ def test_module_exports_of_a_chained_router(tmp_path):
         "r.js": "const express = require('express');\nconst leaf = express.Router();\nleaf.get('/z', h);\nmodule.exports = express.Router().use('/leaf', leaf);\n",
     })
     assert ("GET", "/p/leaf/z") in got
+
+
+def test_a_route_in_a_file_with_no_express_markers_does_not_crash_the_scan(tmp_path):
+    # `r` comes from another module, and the file mentions none of express / .use( / Router, so no facts exist for it
+    got = _routes(tmp_path, {
+        "src/app.ts": "import express from 'express';\nconst app = express();\napp.get('/ok', h);\n",
+        "src/plain.js": "const r = require('./routes');\nr.get('/x', h);\n",
+    })
+    assert ("GET", "/ok") in got
+
+
+def test_mount_cycles_give_the_same_prefixes_whatever_order_they_are_visited_in(tmp_path):
+    files = {
+        "src/a.js": "const express = require('express');\nconst b = require('./b');\nconst a = express.Router();\na.use('/b', b);\na.get('/x', h);\nmodule.exports = a;\n",
+        "src/b.js": "const express = require('express');\nconst a = require('./a');\nconst b = express.Router();\nb.use('/a', a);\nmodule.exports = b;\n",
+        "src/app.js": "const express = require('express');\nconst a = require('./a');\nconst app = express();\napp.use('/api', a);\n",
+    }
+    assert _routes(tmp_path / "one", files) == _routes(tmp_path / "two", dict(reversed(list(files.items()))))

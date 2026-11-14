@@ -366,7 +366,9 @@ def resolve(all_facts: list[dict]):
         return None
 
     def receiver_node(file: str, name: str) -> tuple[str, str] | None:
-        facts = by_file[file]
+        facts = by_file.get(file)
+        if facts is None:
+            return None  # a file the pre-filter did not collect facts for (no express / .use( / Router in it)
         if name in facts["routers"]:
             return (file, name)
         if name in facts["imports"]:
@@ -388,12 +390,15 @@ def resolve(all_facts: list[dict]):
         by_target.setdefault(target, []).append((recv, prefix))
     memo: dict[tuple[str, str], list[str]] = {}
     unresolved: set[tuple[str, str]] = set()
+    cuts = [0]  # how many times a mount cycle was cut short
 
     def eff(node, stack=()):
         if node in memo:
             return memo[node]
         if node in stack:
+            cuts[0] += 1
             return [""]
+        cuts_before = cuts[0]
         parents = by_target.get(node, [])
         if not parents:
             memo[node] = [""]
@@ -407,12 +412,14 @@ def resolve(all_facts: list[dict]):
                 full = join_path(b, prefix if prefix and prefix != UNKNOWN else "") if (prefix and prefix != UNKNOWN) else b
                 if full not in out:
                     out.append(full)
-        memo[node] = out
+        if cuts[0] == cuts_before:
+            memo[node] = out  # a result computed while a cycle was cut short depends on where the walk started: not cached
         return out
 
-    for node in {t for _r, t, _p in edges}:
-        eff(node)
-    return memo, unresolved, resolved_sites, receiver_node
+    final: dict[tuple[str, str], list[str]] = {}
+    for node in sorted({t for _r, t, _p in edges}):
+        final[node] = memo[node] if node in memo else eff(node)
+    return final, unresolved, resolved_sites, receiver_node
 
 
 def extract_routes(
