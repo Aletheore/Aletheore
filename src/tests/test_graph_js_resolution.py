@@ -177,3 +177,21 @@ def test_a_directory_import_can_resolve_to_an_index_declaration_file(tmp_path):
         "test-dts/store.test-d.ts": "import { a } from '.'\nexport const b = a\n",
     })
     assert imp["test-dts/store.test-d.ts"] == {"test-dts/index.d.ts"}
+
+
+def test_package_json_main_cannot_leave_the_package_directory(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "outside.js": "module.exports = 1\n",
+        "pkg/package.json": '{"main": "../outside.js"}',
+        "app.js": "const p = require('./pkg')\n",
+    })
+    assert imp["app.js"] == set()
+
+
+def test_package_json_main_naming_a_directory_resolves_to_its_index(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "pkg/package.json": '{"main": "./lib"}',
+        "pkg/lib/index.js": "module.exports = 1\n",
+        "app.js": "const p = require('./pkg')\n",
+    })
+    assert imp["app.js"] == {"pkg/lib/index.js"}

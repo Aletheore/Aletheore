@@ -4444,6 +4444,7 @@ def _resolve_js_import(
         if entry is not None:
             candidates.append(entry)
             candidates.extend(Path(f"{entry}{ext}") for ext in JS_FAMILY_EXTENSIONS)
+            candidates.extend(entry / f"index{ext}" for ext in JS_FAMILY_EXTENSIONS)  # "main": "./lib" names a directory
     candidates.extend(base / f"index{ext}" for ext in JS_FAMILY_EXTENSIONS)
     candidates.append(base / "index.d.ts")
     for candidate in candidates:
@@ -4464,7 +4465,12 @@ def _package_json_main(directory: Path) -> Path | None:
     main = data.get("main") if isinstance(data, dict) else None
     if not isinstance(main, str) or not main.strip():
         return None
-    return (directory / main).resolve()
+    entry = (directory / main).resolve()
+    try:
+        entry.relative_to(directory.resolve())  # a `main` such as "../../x" must not leave the package directory
+    except ValueError:
+        return None
+    return entry
 
 
 def _extract_module(
