@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: the unused-dependency check no longer reports tools that are named in a script, CI workflow or config file (`eslint`, `vitest`, `playwright`, `sphinx` and similar), `@types/*` packages, `typescript` in a TypeScript project, or the transitive pins in a pip-compile `requirements.txt`. On 32 Python and TypeScript repositories it reported 519 unused packages before and 154 after; most of the removed ones were build, test and docs tooling that is never imported.
+
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.
