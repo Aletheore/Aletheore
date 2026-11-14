@@ -246,3 +246,56 @@ def test_ruby_def_nested_only_in_a_lambda_literal_is_not_public(tmp_path):
     modules, _, _ = build_module_graph(repo)
     func = modules[0]["symbols"]["functions"][0]
     assert func["is_public"] is False
+
+
+def _zeitwerk_repo(tmp_path: Path, extra: dict[str, str]) -> Path:
+    repo = tmp_path / "zw"
+    files = {
+        "lib/app.rb": "module App\nend\n",
+        "lib/app/utils.rb": "module App\n  module Utils\n    def self.x; end\n  end\nend\n",
+        "lib/app/utils/extra.rb": "module App\n  module Utils\n    def self.y; end\n  end\nend\n",
+        "lib/app/worker.rb": "module App\n  class Worker\n    def run; Utils.x; end\n  end\nend\n",
+    }
+    files.update(extra)
+    for rel, body in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+    return repo
+
+
+def _imports(repo: Path, path: str) -> list[str]:
+    modules, _, _ = build_module_graph(repo)
+    return next(m for m in modules if m["path"] == path)["imports"]
+
+
+def test_ruby_reopened_constant_resolves_to_the_file_whose_path_matches_its_name(tmp_path):
+    # App::Utils is defined in two files; Zeitwerk maps App::Utils to app/utils.rb, so that one is the target.
+    repo = _zeitwerk_repo(tmp_path, {})
+    assert "lib/app/utils.rb" in _imports(repo, "lib/app/worker.rb")
+    assert "lib/app/utils/extra.rb" not in _imports(repo, "lib/app/worker.rb")
+
+
+def test_ruby_reopened_top_level_module_resolves_to_its_namesake_file(tmp_path):
+    # `module App` is reopened in several files; a reference to App itself maps to lib/app.rb.
+    repo = _zeitwerk_repo(tmp_path, {"test/t.rb": "puts App.name\n"})
+    assert _imports(repo, "test/t.rb") == ["lib/app.rb"]
+
+
+def test_ruby_reopened_constant_with_no_matching_path_stays_unresolved(tmp_path):
+    repo = _zeitwerk_repo(tmp_path, {
+        "lib/app/a.rb": "module App\n  module Thing\n  end\nend\n",
+        "lib/app/b.rb": "module App\n  module Thing\n  end\nend\n",
+        "lib/app/user.rb": "module App\n  class User\n    def f; Thing; end\n  end\nend\n",
+    })
+    imports = _imports(repo, "lib/app/user.rb")
+    assert "lib/app/a.rb" not in imports and "lib/app/b.rb" not in imports
+
+
+def test_ruby_zeitwerk_name_handles_camel_case_and_acronyms(tmp_path):
+    repo = _zeitwerk_repo(tmp_path, {
+        "lib/app/liquid_renderer.rb": "module App\n  class LiquidRenderer\n  end\nend\n",
+        "lib/app/liquid_renderer/table.rb": "module App\n  class LiquidRenderer\n    class Table; end\n  end\nend\n",
+        "lib/app/consumer.rb": "module App\n  class Consumer\n    def f; LiquidRenderer.new; end\n  end\nend\n",
+    })
+    assert "lib/app/liquid_renderer.rb" in _imports(repo, "lib/app/consumer.rb")
