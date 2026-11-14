@@ -161,3 +161,11 @@ def test_a_source_file_wins_over_a_declaration_file_of_the_same_name(tmp_path):
         "b.ts": "import { x } from './a'\n",
     })
     assert imp["b.ts"] == {"a.ts"}
+
+
+def test_a_dot_js_specifier_resolves_to_the_declaration_file_when_there_is_no_source(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "types/options.d.ts": "export interface Options {}\n",
+        "index.d.ts": "import { Options } from './types/options.js'\nexport type X = Options\n",
+    })
+    assert imp["index.d.ts"] == {"types/options.d.ts"}

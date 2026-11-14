@@ -4431,6 +4431,10 @@ def _resolve_js_import(
         swaps = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
         candidates.extend(base.with_suffix(ext) for ext in swaps.get(base.suffix, ()))
         candidates.append(base)
+        # `import './x.js'` also names x.d.ts (and .d.mts / .d.cts) when only a declaration file exists
+        declaration = {".js": ".d.ts", ".mjs": ".d.mts", ".cjs": ".d.cts"}.get(base.suffix)
+        if declaration:
+            candidates.append(Path(f"{base.with_suffix('')}{declaration}"))
     candidates.extend(Path(f"{base}{ext}") for ext in JS_FAMILY_EXTENSIONS)
     candidates.append(Path(f"{base}.d.ts"))  # TypeScript tries the declaration file after the source extensions
     if base.is_dir():
