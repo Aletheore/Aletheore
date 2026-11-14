@@ -408,3 +408,41 @@ def test_extract_many_fails_instead_of_caching_empty_extractions_for_unparsed_fi
 
     with pytest.raises(BrokenProcessPool, match="2 of 3 files were not parsed"):
         eh._extract_many([(Path(n), n) for n in ("a.py", "b.py", "c.py")])
+
+
+def _rust_handlers(tmp_path, body: str):
+    r = _scan(tmp_path, "a.rs", body)
+    return [(h["catches"]) for h in r["handlers"]]
+
+
+def test_rust_match_with_an_err_arm_is_a_handler(tmp_path):
+    got = _rust_handlers(tmp_path, "fn f() {\n  match g() {\n    Ok(_) => {}\n    Err(AppError::NotFound) => {}\n    Err(_) => {}\n  }\n}\n")
+    assert len(got) == 1 and "AppError" in got[0]
+
+
+def test_rust_match_without_an_err_arm_is_not_a_handler(tmp_path):
+    assert _rust_handlers(tmp_path, "fn f() {\n  match x {\n    Some(_) => {}\n    None => {}\n  }\n}\n") == []
+
+
+def test_rust_if_let_err_and_while_let_err_are_handlers(tmp_path):
+    got = _rust_handlers(tmp_path, "fn f() {\n  if let Err(e) = g() { let _ = e; }\n  while let Err(MyErr::Retry) = h() {}\n}\n")
+    assert len(got) == 2 and got[0] == ["(any)"] and "MyErr" in got[1]
+
+
+def test_rust_map_err_and_or_else_are_handlers(tmp_path):
+    got = _rust_handlers(tmp_path, "fn f() {\n  let a = g().map_err(|e| Wrapped::from(e));\n  let b = h().or_else(|_| k());\n}\n")
+    assert len(got) == 2
+
+
+def test_rust_question_mark_is_propagation_not_handling(tmp_path):
+    assert _rust_handlers(tmp_path, "fn f() -> Result<(), E> {\n  g()?;\n  Ok(())\n}\n") == []
+
+
+def test_rust_err_in_a_non_result_enum_pattern_is_not_confused(tmp_path):
+    # `Error(...)`/`Errors(...)` are not the Result variant
+    assert _rust_handlers(tmp_path, "fn f() {\n  match t {\n    Token::Error(m) => {}\n    _ => {}\n  }\n}\n") == []
+
+
+def test_swift_try_question_mark_is_a_handler_but_plain_try_and_force_try_are_not(tmp_path):
+    r = _scan(tmp_path, "a.swift", "func f() {\n  _ = try? g()\n  _ = try! g()\n  _ = try g()\n}\n")
+    assert [h["line"] for h in r["handlers"]] == [2]  # only `try?` discards the error on purpose

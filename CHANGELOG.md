@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Improved: the error-handling map now covers how Rust and Swift actually handle errors. Rust: a `match` with an `Err(...)` arm, `if let Err(..)` / `while let Err(..)`, and `.map_err(..)` / `.or_else(..)` are catch handlers (the matched error type is recorded, `(any)` for `Err(e)` / `Err(_)`); `?` stays propagation, not handling. Swift: `try?`, which discards a thrown error on purpose, is a handler. Before this, a Rust codebase reported no handlers at all. C is still not covered (return codes and `goto err` are not exceptions), and a Go `if err != nil` check is not a handler.
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.
