@@ -1312,15 +1312,24 @@ def _rust_use_paths(node: Node, source: bytes) -> list[str]:
         prefix = text(prefix_node)
         names: list[str] = []
         for c in list_node.children:
-            if c.type in ("identifier", "self"):
+            if c.type in ("identifier", "self", "scoped_identifier"):
                 names.append(text(c))
             elif c.type in ("scoped_use_list", "use_as_clause", "use_wildcard"):
                 names.extend(_rust_use_paths(c, source))
         return [f"{prefix}::{name}" for name in names]
 
     if node.type == "use_list":
-        # "use {a, b};" - rare, no prefix at all.
-        return [text(c) for c in node.children if c.type in ("identifier", "self")]
+        # "use {a, b};" - no prefix at all. Entries can themselves be groups
+        # ("use { grep_matcher::{A, B}, std::io };"), aliased or wildcard, the
+        # layout rustfmt produces under `imports_layout`; recurse for those so
+        # they are not silently dropped.
+        out: list[str] = []
+        for c in node.children:
+            if c.type in ("identifier", "self", "scoped_identifier"):
+                out.append(text(c))
+            elif c.type in ("scoped_use_list", "use_as_clause", "use_wildcard"):
+                out.extend(_rust_use_paths(c, source))
+        return out
 
     # scoped_identifier, identifier, crate, self, or super used directly.
     return [text(node)]
@@ -1522,13 +1531,56 @@ def _rust_crate_src_dir(repo_path: Path, from_file: Path) -> Path:
         root = repo_path.resolve()
     except OSError:
         return repo_path / "src"
+    from_dir = current
+    from aletheore.scanner import rust_resolve
+
     while True:
-        if (current / "Cargo.toml").exists() and (current / "src").is_dir():
-            return current / "src"
+        if (current / "Cargo.toml").exists():
+            # A crate root declared in the manifest outside src/ (`[[bin]] path = "crates/core/main.rs"`): the
+            # deepest such directory that holds this file is the crate's source directory.
+            holders = [
+                Path(d) for d in rust_resolve.manifest_root_dirs(str(current))
+                if Path(d) == from_dir or Path(d) in from_dir.parents
+            ]
+            if holders:
+                return max(holders, key=lambda d: len(d.parts))
+            if (current / "src").is_dir():
+                return current / "src"
         if current == root or current.parent == current:
             break
         current = current.parent
     return repo_path / "src"
+
+
+def _rust_test_target_dir(from_file: Path, rest: list[str]) -> Path | None:
+    """The directory a `crate::` path resolves against for a module of a Cargo test, example or bench target.
+
+    Files directly in `<crate>/tests/`, `examples/` or `benches/` are each their own crate root; a multi-file
+    target is one root (`tests/tests.rs`) that declares its siblings with `mod util;`, and those siblings then
+    write `use crate::util::..`. That root is the sibling that declares the path's first segment, so it is only
+    returned when such a declaration exists (no guessing from names alone).
+    """
+    import re
+    from aletheore.scanner import rust_resolve
+
+    directory = from_file.parent
+    if not rest or directory.name not in ("tests", "examples", "benches") or not (directory.parent / "Cargo.toml").is_file():
+        return None
+    wanted = re.compile(rf"\bmod\s+{re.escape(rest[0])}\s*;")
+    try:
+        siblings = sorted(directory.glob("*.rs"))
+    except OSError:
+        return None
+    for sibling in siblings:
+        if sibling == from_file:
+            continue
+        try:
+            text = rust_resolve.clean_source(sibling.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+        if wanted.search(text):
+            return directory
+    return None
 
 
 def _rust_has_any_crate_root(repo_path: Path) -> bool:
@@ -1541,6 +1593,13 @@ def _rust_has_any_crate_root(repo_path: Path) -> bool:
     for cargo in repo_path.glob("*/*/Cargo.toml"):
         if (cargo.parent / "src").is_dir():
             return True
+    from aletheore.scanner import rust_resolve
+
+    # A package whose crate root the manifest puts outside src/ (`[[bin]] path = "crates/core/main.rs"`).
+    for pattern in ("Cargo.toml", "*/Cargo.toml", "*/*/Cargo.toml"):
+        for cargo in repo_path.glob(pattern):
+            if rust_resolve.manifest_root_dirs(str(cargo.parent)):
+                return True
     return False
 
 
@@ -1688,9 +1747,17 @@ def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | Non
 
     if head == "crate":
         src_dir = _rust_crate_src_dir(repo_path, from_file)
+        harness_dir = _rust_test_target_dir(from_file, rest)
+        if harness_dir is not None:
+            # A file of a multi-file integration test (`tests/tests.rs` declaring `mod util;`): `crate::` is that
+            # test crate, never the library under src/.
+            target = _walk_rust_segments(harness_dir, rest)
+            if target is not None:
+                return _rel(repo_path, target)
         target = _walk_rust_segments(src_dir, rest)
-        if target is None and rest:
-            # `use crate::Item;` where Item is defined in the crate root file itself.
+        if target is None:
+            # `use crate::Item;` where Item is defined in the crate root file itself (and a bare `crate`, the
+            # prefix of that path, is the root file too).
             target = rust_resolve.crate_root_file(src_dir)
     elif head == "self":
         target = _walk_rust_segments(_rust_module_search_dir(repo_path, from_file), rest)
