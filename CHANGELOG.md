@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: ASP.NET attribute routing is composed. A controller's class-level `[Route("api/[controller]")]` (or `[RoutePrefix]`) is joined with the method's `[HttpGet("{id}")]` template, `[controller]` and `[action]` are expanded, a `/` or `~/` template replaces the prefix, a bare `[HttpGet]` is the class route itself (it used to be dropped), and a method-level `[Route]` is read. A class route that is not a string literal is noted rather than guessed. On the RealWorld ASP.NET Core app, 0 of the spec's 19 routes were found; now 19.
+
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.

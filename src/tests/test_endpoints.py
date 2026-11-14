@@ -1593,7 +1593,7 @@ def test_extract_aspnet_httpget_attribute():
     ]
 
 
-def test_extract_aspnet_class_level_route_template_produces_a_note():
+def test_extract_aspnet_class_level_route_template_is_composed_with_the_method_template():
     root, source = parse_csharp(
         '[Route("api/[controller]")]\n'
         "public class UsersController {\n"
@@ -1604,9 +1604,72 @@ def test_extract_aspnet_class_level_route_template_produces_a_note():
 
     entries = _extract_aspnet_attribute_routes(root, source, "UsersController.cs")
 
-    assert entries[0]["note"] == (
-        "class-level [Route] template present, not composed into this path"
+    assert entries[0]["path"] == "/api/Users/{id}"
+    assert entries[0]["note"] is None
+
+
+def test_extract_aspnet_bare_http_attribute_is_the_class_route():
+    root, source = parse_csharp(
+        '[Route("api/articles")]\n'
+        "public class ArticlesController {\n"
+        "    [HttpGet]\n"
+        "    public void List() { }\n"
+        "    [HttpPost]\n"
+        "    public void Create() { }\n"
+        "}\n"
     )
+
+    got = {(e["method"], e["path"]) for e in _extract_aspnet_attribute_routes(root, source, "A.cs")}
+
+    assert got == {("GET", "/api/articles"), ("POST", "/api/articles")}
+
+
+def test_extract_aspnet_absolute_method_template_replaces_the_class_template():
+    root, source = parse_csharp(
+        '[Route("api/users")]\n'
+        "public class UsersController {\n"
+        '    [HttpGet("~/health")]\n'
+        "    public void Health() { }\n"
+        '    [HttpGet("/ping")]\n'
+        "    public void Ping() { }\n"
+        "}\n"
+    )
+
+    got = {e["path"] for e in _extract_aspnet_attribute_routes(root, source, "U.cs")}
+
+    assert got == {"/health", "/ping"}
+
+
+def test_extract_aspnet_action_token_and_method_level_route():
+    root, source = parse_csharp(
+        '[Route("api/[controller]/[action]")]\n'
+        "public class ToolsController {\n"
+        "    [HttpPost]\n"
+        "    public void Run() { }\n"
+        '    [Route("legacy")]\n'
+        "    public void Old() { }\n"
+        "}\n"
+    )
+
+    got = {(e["method"], e["path"]) for e in _extract_aspnet_attribute_routes(root, source, "T.cs")}
+
+    assert ("POST", "/api/Tools/Run") in got
+    assert ("ANY", "/api/Tools/[action]/legacy".replace("[action]", "Old")) in got
+
+
+def test_extract_aspnet_non_literal_class_route_is_noted_not_guessed():
+    root, source = parse_csharp(
+        "[Route(Constants.Base)]\n"
+        "public class UsersController {\n"
+        '    [HttpGet("{id}")]\n'
+        "    public void Get() { }\n"
+        "}\n"
+    )
+
+    entry = _extract_aspnet_attribute_routes(root, source, "U.cs")[0]
+
+    assert entry["path"] == "{id}"
+    assert "not a string literal" in entry["note"]
 
 
 def test_extract_aspnet_ignores_non_http_attributes():
@@ -1655,9 +1718,8 @@ def test_extract_aspnet_class_level_route_found_when_stacked_after_apicontroller
 
     entries = _extract_aspnet_attribute_routes(root, source, "UsersController.cs")
 
-    assert entries[0]["note"] == (
-        "class-level [Route] template present, not composed into this path"
-    )
+    assert entries[0]["path"] == "/api/Users/{id}"
+    assert entries[0]["note"] is None
 
 
 def test_extract_aspnet_minimal_mapget():
