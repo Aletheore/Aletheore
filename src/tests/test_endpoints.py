@@ -1855,3 +1855,18 @@ def test_extract_rails_resources_with_a_non_literal_only_list_stays_unresolved()
     entries = _extract_rails_routes(root, source, "config/routes.rb")
 
     assert len(entries) == 1 and entries[0]["unresolved"] is True and entries[0]["handler"] == "resources(...)"
+
+
+def test_extract_rails_singular_resource_with_a_non_literal_only_list_stays_unresolved():
+    root, source = parse_ruby("resource :profile, only: ACTIONS\n")
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert len(entries) == 1 and entries[0]["unresolved"] is True
+
+
+def test_rails_singularizer_handles_common_plurals():
+    from aletheore.endpoints import _rails_singular
+
+    assert [_rails_singular(w) for w in ("articles", "categories", "addresses", "statuses", "boxes", "branches", "people")] == [
+        "article", "category", "address", "status", "box", "branch", "person"]

@@ -1494,7 +1494,7 @@ def _rails_symbol_text(node: Node | None, source: bytes) -> str | None:
     if node is None:
         return None
     if node.type == "simple_symbol":
-        return source[node.start_byte : node.end_byte].decode().lstrip(":")
+        return source[node.start_byte : node.end_byte].decode(errors="ignore").lstrip(":")
     if node.type == "string":
         return _ruby_string_content(node, source)
     return None
@@ -1506,7 +1506,7 @@ def _rails_option_node(args: Node | None, source: bytes, key: str) -> Node | Non
     for arg in args.named_children:
         if arg.type == "pair":
             k = arg.child_by_field_name("key")
-            if k is not None and source[k.start_byte : k.end_byte].decode().rstrip(":").lstrip(":") == key:
+            if k is not None and source[k.start_byte : k.end_byte].decode(errors="ignore").rstrip(":").lstrip(":") == key:
                 return arg.child_by_field_name("value")
     return None
 
@@ -1529,9 +1529,18 @@ def _rails_symbol_list(node: Node | None, source: bytes) -> list[str] | None:
     return None
 
 
+_RAILS_IRREGULAR_SINGULARS = {"people": "person", "men": "man", "women": "woman", "children": "child", "mice": "mouse",
+                              "statuses": "status", "aliases": "alias", "buses": "bus", "addresses": "address",
+                              "analyses": "analysis", "indices": "index", "matrices": "matrix"}
+
+
 def _rails_singular(name: str) -> str:
-    if name.endswith("ies"):
-        return name[:-3] + "y"
+    """A small ActiveSupport-style singularizer for the names that occur in route files."""
+    if name in _RAILS_IRREGULAR_SINGULARS:
+        return _RAILS_IRREGULAR_SINGULARS[name]
+    for suffix, replacement in (("ies", "y"), ("sses", "ss"), ("xes", "x"), ("ches", "ch"), ("shes", "sh"), ("zes", "z")):
+        if name.endswith(suffix):
+            return name[: -len(suffix)] + replacement
     return name[:-1] if name.endswith("s") and not name.endswith("ss") else name
 
 
@@ -1539,7 +1548,7 @@ def _rails_call_head(call: Node, source: bytes) -> str | None:
     method_node = call.child_by_field_name("method")
     if call.type != "call" or method_node is None or method_node.type != "identifier":
         return None
-    return source[method_node.start_byte : method_node.end_byte].decode()
+    return source[method_node.start_byte : method_node.end_byte].decode(errors="ignore")
 
 
 def _rails_resource_of(call: Node, source: bytes) -> dict | None:
@@ -1695,7 +1704,7 @@ def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                                     "note": None,
                                 }
                             )
-                elif method_name == "resources" and args is not None:
+                elif method_name in ("resources", "resource") and args is not None:
                     named = args.named_children
                     if named and named[0].type == "simple_symbol":
                         resource_name = source[
