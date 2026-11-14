@@ -5612,9 +5612,12 @@ def _compute_resolution_signatures(
             if path.suffix != ".php":
                 continue
             try:
-                code = _php_code_only(path.read_text(encoding="utf-8", errors="ignore"))
+                text = path.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
+            if text.lstrip().startswith("<?hh"):
+                continue  # Hack, not PHP (see _add_php_implicit_edges)
+            code = _php_code_only(text)
             ns_match = _PHP_NAMESPACE_RE.search(code)
             decls[rel(path)] = [ns_match.group(1) if ns_match else "", sorted({m.group(1) for m in _PHP_DECL_RE.finditer(code)})]
         extras["php_extra_dirs"] = sorted((k, rel(v)) for k, vs in getattr(php_psr4_map, "extra", {}).items() for v in vs)

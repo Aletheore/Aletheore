@@ -237,3 +237,14 @@ def test_a_hack_file_does_not_get_php_implicit_edges(tmp_path):
         "test/fixture.php": "<?hh\nnamespace App\\Fixtures;\nfunction f(): \\App\\Dispatcher { return 1; }\n",
     })
     assert imp["test/fixture.php"] == set()
+
+
+def test_a_hack_file_is_not_a_php_declaration_either(tmp_path):
+    from aletheore.scanner.graph import build_module_graph
+
+    repo = tmp_path / "hh"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src/H.php").write_text("<?hh\nnamespace A;\nclass Hacky {}\n")
+    (repo / "src/P.php").write_text("<?php\nnamespace A;\nclass Real {}\n")
+    modules, _g, _bad = build_module_graph(repo)
+    assert {m["path"] for m in modules} >= {"src/H.php", "src/P.php"}  # still scanned, just not read as PHP references
