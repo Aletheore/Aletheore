@@ -63,3 +63,11 @@ def test_a_qualified_attribute_name_links_the_attribute_class(tmp_path):
         "Model.cs": "namespace Lib;\npublic class Model { [Lib.Keep] public int X; }\n",
     }
     assert "KeepAttribute.cs" in _imports(tmp_path, files, "Model.cs")
+
+
+def test_an_extension_method_in_a_static_partial_class_links_its_file(tmp_path):
+    files = {
+        "Ext.cs": "namespace App;\npublic static partial class StringExtensions\n{\n    public static int Shout(this string s, int times) => times;\n}\n",
+        "User.cs": "namespace App;\npublic class User { int F(string s) => s.Shout(2); }\n",
+    }
+    assert "Ext.cs" in _imports(tmp_path, files, "User.cs")

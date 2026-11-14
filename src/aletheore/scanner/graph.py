@@ -3496,7 +3496,8 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
             for type_name, type_ns in list(types.items()):
                 if type_ns == "":
                     types[type_name] = found_ns[0]
-    ext_found = _CSHARP_EXTENSION_RE.findall(decoded) if types and "static class" in decoded else []
+    # `public static partial class FooExtensions` is as much a static class as `public static class` is
+    ext_found = _CSHARP_EXTENSION_RE.findall(decoded) if types and re.search(r"\bstatic\s+(?:\w+\s+)*?class\b", decoded) else []
     ext_methods = sorted({name for name, _generic in ext_found})
     ext_generic = sorted({name for name, generic in ext_found if generic})
     return {
