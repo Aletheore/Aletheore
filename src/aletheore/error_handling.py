@@ -515,10 +515,13 @@ def _rust(root: Node, rel: str, classes: list, raises: list, handlers: list) -> 
                 _add_raise(raises, rel, node, _last(label) if re.match(r"^[A-Za-z_][\w:]*$", label) else "(expression)")
             elif callee is not None and _last(_text(callee)) == "catch_unwind":
                 _add_handler(handlers, rel, node, [])
-            elif callee is not None and callee.type == "field_expression" and _text(
-                callee.child_by_field_name("field")
-            ) in _RUST_ERROR_COMBINATORS:
-                _add_handler(handlers, rel, node, [])  # g().map_err(..) / .or_else(..): the error is acted on here
+            elif callee is not None and (
+                (callee.type == "field_expression" and _text(callee.child_by_field_name("field")) in _RUST_ERROR_COMBINATORS)
+                or (callee.type == "scoped_identifier" and _last(_text(callee)) in _RUST_ERROR_COMBINATORS
+                    and _text(callee).rsplit("::", 1)[0].split("::")[-1] in ("Result", "Option"))
+            ):
+                # g().map_err(..) / .or_else(..), or the fully qualified Result::map_err(g(), ..): the error is acted on here
+                _add_handler(handlers, rel, node, [])
         elif node.type == "match_expression":
             caught = _rust_err_patterns(node)
             if caught is not None:

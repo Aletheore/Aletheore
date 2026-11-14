@@ -446,3 +446,8 @@ def test_rust_err_in_a_non_result_enum_pattern_is_not_confused(tmp_path):
 def test_swift_try_question_mark_is_a_handler_but_plain_try_and_force_try_are_not(tmp_path):
     r = _scan(tmp_path, "a.swift", "func f() {\n  _ = try? g()\n  _ = try! g()\n  _ = try g()\n}\n")
     assert [h["line"] for h in r["handlers"]] == [2]  # only `try?` discards the error on purpose
+
+
+def test_rust_fully_qualified_result_map_err_is_a_handler_but_an_unrelated_path_is_not(tmp_path):
+    got = _rust_handlers(tmp_path, "fn f() {\n  let a = Result::map_err(g(), |e| Wrapped::from(e));\n  let b = Mine::map_err(g());\n}\n")
+    assert len(got) == 1
