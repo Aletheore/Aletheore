@@ -6086,6 +6086,8 @@ def _kotlin_type_facts(root: Node, source: bytes) -> dict:
                 lower_refs.add(value)
         stack.extend(n.children)
     code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source.decode(errors="ignore"), flags=re.S)
+    # a dotted name inside a string literal ("com.example.Thing") is data, not a reference; triple-quoted first
+    code = re.sub(r'"""[\s\S]*?"""|"(?:\\.|[^"\\\n])*"', '""', code)
     # The grammar reads `@A @B(args) public annotation class X` as an expression, so the type is never a declaration.
     # A top-level declaration starts in column 0: modifiers, then class/interface/object/typealias, then the name.
     for m in _KOTLIN_TOP_DECLARATION.finditer(code):

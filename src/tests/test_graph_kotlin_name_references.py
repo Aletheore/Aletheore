@@ -192,3 +192,11 @@ def test_a_type_the_grammar_reads_as_an_expression_is_still_found_by_its_declara
     })
     assert MP + "main/kotlin/p/Annotations.kt" in mods[MP + "main/kotlin/p/Use.kt"]["imports"]
 
+
+
+def test_a_qualified_name_inside_a_string_literal_is_not_a_reference(tmp_path):
+    mods = _modules(tmp_path, {
+        MP + "main/kotlin/a/Thing.kt": "package a\nclass Thing\n",
+        MP + "main/kotlin/b/Use.kt": 'package b\nval message = "see a.Thing for details"\nval raw = """a.Thing"""\n',
+    })
+    assert MP + "main/kotlin/a/Thing.kt" not in mods[MP + "main/kotlin/b/Use.kt"]["imports"]
