@@ -222,3 +222,20 @@ def test_rust_other_crate_path_adds_the_reexported_module_next_to_the_facade_roo
 def test_rust_private_use_is_not_treated_as_a_reexport(tmp_path):
     imp = _facade_workspace(tmp_path, "use core_lib::{de, other};\nmod inner;\n")
     assert "core/src/de/mod.rs" not in imp["facade/src/inner.rs"]
+
+
+def test_rust_glob_reexport_of_a_crate_follows_that_crates_own_reexport(tmp_path):
+    # facade: `pub use builder_crate::*;`  builder_crate: `pub use crate::builder::Command;`  user: `use facade::Command;`
+    repo = write(tmp_path / "glob", {
+        "Cargo.toml": '[workspace]\nmembers = ["builder", "facade", "user"]\n',
+        "builder/Cargo.toml": pkg("builder-crate"),
+        "builder/src/lib.rs": "pub mod builder;\npub use crate::builder::Command;\n",
+        "builder/src/builder/mod.rs": "mod command;\npub use self::command::Command;\n",
+        "builder/src/builder/command.rs": "pub struct Command;\n",
+        "facade/Cargo.toml": pkg("facade", 'builder-crate = { path = "../builder" }\n'),
+        "facade/src/lib.rs": "pub use builder_crate::*;\n",
+        "user/Cargo.toml": pkg("user", 'facade = { path = "../facade" }\n'),
+        "user/src/lib.rs": "use facade::Command;\n",
+    })
+    assert ("user/src/lib.rs", "builder/src/builder/command.rs") in edges_of(repo)
+

@@ -1644,9 +1644,16 @@ def _rust_reexport_targets(
             continue
         if is_glob:
             glob_declared, _ = rust_resolve.module_items(str(Path(repo_path) / resolved))
-            if item not in glob_declared:
+            if item in glob_declared:
+                found.append(resolved)
+            else:
+                # `pub use clap_builder::*;` where that crate's root itself re-exports `Command` from builder/command.rs
+                nested = _rust_reexport_targets(repo_path, target_file, f"{base}::{item}", resolved, depth + 1)
+                if not nested:
+                    continue
+                found.append(resolved)
+                found.extend(nested)
                 continue
-            found.append(resolved)
         else:
             found.append(resolved)
             found.extend(_rust_reexport_targets(repo_path, target_file, base, resolved, depth + 1))
