@@ -1,6 +1,6 @@
 {
   "source": "aletheore package build_server() and cli.QUERY_KIND_GROUPS",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "default": [
     "aletheore_add_custom_skill",
     "aletheore_ask",
@@ -16,6 +16,7 @@
     "aletheore_find_evidence_for_dependency",
     "aletheore_find_evidence_for_endpoint",
     "aletheore_find_evidence_for_symbol",
+    "aletheore_find_external_skills",
     "aletheore_find_skill",
     "aletheore_get_blast_radius",
     "aletheore_get_skill",
@@ -34,6 +35,7 @@
     "aletheore_neighborhood",
     "aletheore_overview",
     "aletheore_ownership",
+    "aletheore_page",
     "aletheore_remove_custom_skill",
     "aletheore_scan",
     "aletheore_search",
@@ -169,6 +171,11 @@
       "description": "Resolve a function or class symbol to source evidence."
     },
     {
+      "name": "aletheore_find_external_skills",
+      "group": "Other",
+      "description": "Search Hallbook first, then skills.sh only if Hallbook has no high-confidence match."
+    },
+    {
       "name": "aletheore_find_skill",
       "group": "Hallbook",
       "description": "Finds the right Hallbook skill in one call, or says to move on."
@@ -262,6 +269,11 @@
       "name": "aletheore_ownership",
       "group": "History",
       "description": "Code ownership derived from git blame history."
+    },
+    {
+      "name": "aletheore_page",
+      "group": "Other",
+      "description": "Read one page of a list from another evidence tool's cut result: pass that tool's name and the same target, plus the section and offset the cut result named."
     },
     {
       "name": "aletheore_remove_custom_skill",

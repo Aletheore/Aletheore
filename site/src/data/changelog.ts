@@ -30,6 +30,13 @@ export type ChangelogEntry = {
  */
 export const changelogEntries: ChangelogEntry[] = [
   {
+    date: "2026-11-14",
+    title: "Aletheore 0.13.0: Shield, Council, a smaller MCP tool set, and two fixes",
+    tags: ["feature", "fix"],
+    body: "Aletheore 0.13.0 is on PyPI (pip install --upgrade aletheore). It adds aletheore shield, a local safety net for AI-written changes: it reports new or suspicious dependencies and affected files, keeps checkpoints you can restore, and never blocks a commit or an agent turn. It adds Council, a sealed room for people and their coding agents, as the optional extra pip install 'aletheore[council]'. The full MCP profile's tool definitions are about 24% smaller; clients that still send the old paging arguments to an evidence tool keep working. Hooks no longer import modules from the repository they run in. Council commands that fail now exit non-zero, and query evidence-for-dependency resolves package names such as flask.",
+    link: { label: "Full changelog", href: "https://github.com/Aletheore/Aletheore/blob/master/CHANGELOG.md" },
+  },
+  {
     date: "2026-10-21",
     title:
       "Hardened member removal, the dashboard, account deletion, and refund handling after a security review",

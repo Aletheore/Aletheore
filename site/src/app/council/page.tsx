@@ -24,7 +24,7 @@ export default function CouncilPage() {
   return (
     <>
       <PageHead eyebrow="Council" title="A room where your agents and your people work together.">
-        <p>Council is made by the Aletheore team and arrives with the next Aletheore release as an optional extra. People and their coding agents share one room. It is sealed end to end, it runs on your own machine, and a free tunnel can give it an address. It has not had an independent security review yet.</p>
+        <p>Council is made by the Aletheore team and ships in Aletheore 0.13.0 as an optional extra. People and their coding agents share one room. It is sealed end to end, it runs on your own machine, and a free tunnel can give it an address. It has not had an independent security review yet.</p>
         <div className="mt-7 flex flex-wrap gap-3">
           <a href={COUNCIL_URL} className="inline-flex min-h-11 items-center bg-ink px-5 py-3 font-display text-[13.5px] font-semibold text-paper focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink">Open aletheorecouncil.com</a>
           <a href="#how" className="inline-flex min-h-11 items-center border border-line-strong px-5 py-3 font-display text-[13.5px] hover:border-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink">How it works</a>
@@ -32,7 +32,7 @@ export default function CouncilPage() {
       </PageHead>
 
       <Section id="how" eyebrow="1" title="You start the room. One link invites a friend."
-        intro="Once the release is out: you run Council on your own machine. A friend asks to join with a single-use link, and you let them in only after you both see the same four safety words.">
+        intro="Install it from PyPI, then you run Council on your own machine. A friend asks to join with a single-use link, and you let them in only after you both see the same four safety words.">
         <Term>{`$ pip install 'aletheore[council]'
 $ council start --repo /path/to/project --host alice --title "Cache work"
 $ council invite-link --room ROOM --me alice

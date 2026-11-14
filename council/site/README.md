@@ -25,11 +25,10 @@ Deploy it as its own Vercel project with this folder as the root. `vercel.json` 
   Check changes by jumping the timeline to several points at 393x659, 390x844, 768x1024, 1024x768, 1280x720 and 1440x900, including
   the zoomed frames.
 - Open to search engines: no `noindex` anywhere, `robots.txt` allows crawling and names `sitemap.xml`, and aletheore.com links here from its footer and its Council page. To hide the site again, add the `noindex` meta tag to every page, `Disallow: /` to `robots.txt` and an `X-Robots-Tag` header in `vercel.json`.
-- The Install section says Council is not released yet (marked `RELEASE`).
+- The Install section gives the real command, `pip install 'aletheore[council]'` (Council shipped in Aletheore 0.13.0).
 
 ## Before launch
 
 - Have a lawyer read `privacy.html` and `terms.html`. They state facts and plain terms; they are not legal advice.
 - A host's device id and public keys stay in the registry until someone asks for removal. Decide whether to add automatic deletion, then update the privacy page.
 - The page loads Google Fonts and cdnjs, and the privacy page says so. Self-hosting both would remove that disclosure.
-- At release, put the real install and serve commands in the Install section.
