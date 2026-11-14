@@ -5,7 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- Added: Ruby `require`/`require_relative` of a path built from `__dir__`, `__FILE__`, `File.dirname`, `File.join`, `File.expand_path` and file-level local variables (`require File.join(dir, "httparty")`, `require File.expand_path("../../config/environment", __FILE__)`) now resolves like a relative require. An expression that cannot be evaluated statically adds nothing. httparty edge F1 against an independent reference rose from 0.901 to 0.988.
+- Added: Ruby `require`/`require_relative` of a path built from `__dir__`, `__FILE__`, `File.dirname`, `File.join`, `File.expand_path` and file-level local variables (`require File.join(dir, "client")`, `require File.expand_path("../../config/environment", __FILE__)`) now resolves like a relative require. An expression that cannot be evaluated statically adds nothing. One HTTP client library's edge F1 against an independent reference rose from 0.901 to 0.988.
 
 ## 0.13.0 - 2026-11-14
 
