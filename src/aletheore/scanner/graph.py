@@ -3456,7 +3456,9 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
 
     def walk(children, ns: str) -> str:
         for c in children:
-            if c.type.startswith("preproc_"):
+            if c.type.startswith("preproc_") or c.type == "ERROR":
+                # (an ERROR node is what tree-sitter makes of `#if`/`#else` splitting a declaration; its children are
+                # still the declarations it saw, so descend rather than lose the file's namespace and types)
                 # `#if FLAG ... #endif` wraps whole namespaces and types (AutoMapper's Polyfill.cs is entirely
                 # inside one); every branch is indexed, as a compiler configured with that flag would see it.
                 ns = walk(c.children, ns)
@@ -3485,6 +3487,15 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
 
     walk(root.children, "")
     decoded = source.decode("utf-8", "ignore")
+    if not namespaces and types and root.has_error:
+        # `#if` branches that split a declaration make tree-sitter drop the `namespace X` node; its text is intact.
+        # Only a single block-scoped or file-scoped namespace is recovered this way, and only when the tree lost it.
+        found_ns = re.findall(r"(?m)^[ \t]*namespace\s+([A-Za-z_][\w.]*)\s*[{;]?", decoded)
+        if len(set(found_ns)) == 1:
+            namespaces.append(found_ns[0])
+            for type_name, type_ns in list(types.items()):
+                if type_ns == "":
+                    types[type_name] = found_ns[0]
     ext_found = _CSHARP_EXTENSION_RE.findall(decoded) if types and "static class" in decoded else []
     ext_methods = sorted({name for name, _generic in ext_found})
     ext_generic = sorted({name for name, generic in ext_found if generic})
@@ -3514,6 +3525,18 @@ def _csharp_code_identifiers(root: Node, source: bytes) -> list[str]:
             name_node = n.child_by_field_name("name")
             stack.extend(reversed([c for c in n.children if name_node is None or c.id != name_node.id]))
             continue
+        if n.type == "attribute":
+            # `[JsonProperty]` binds to `JsonPropertyAttribute`: the attribute's own name also counts with the suffix
+            name_node = n.child_by_field_name("name") or (n.children[0] if n.children else None)
+            if name_node is not None:
+                last = name_node
+                while last.type in ("qualified_name", "alias_qualified_name") and last.children:
+                    last = last.children[-1]
+                if last.type == "identifier":
+                    attr = source[last.start_byte:last.end_byte].decode(errors="ignore") + "Attribute"
+                    if attr not in seen:
+                        seen.add(attr)
+                        out.append(attr)
         if n.type == "identifier":
             text = source[n.start_byte:n.end_byte].decode(errors="ignore")
             if text not in seen:

@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: C# files whose `#if` blocks split a declaration kept their types but lost their namespace, so no other file could see them (Newtonsoft.Json's TestFixtureBase.cs: 293 missed edges). The namespace is now recovered from the text. Also: `[JsonProperty]` links `JsonPropertyAttribute`. Newtonsoft.Json edge recall rose from 0.827 to 0.956.
 - Improved: C# no longer links a type when the name in the code is an inherited or own property or field of the same name. `Mapper.Map(...)` in a test class that derives from a base declaring `IMapper Mapper` now binds to that member, as the compiler does, instead of to a class called `Mapper`. A name still links when it also appears in a type position (`new Mapper()`, `Mapper m;`) or when the member's type has the same name (`Foo Foo`). On AutoMapper, edge precision against Roslyn rose from 0.845 to 0.903 with recall 0.987 to 0.986 (139 spurious edges to `Mapper.cs` removed, 2 true edges lost in files that mix several classes).
 ## 0.13.0 - 2026-11-14
 
