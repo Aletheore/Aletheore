@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: a source directory named `build`, `out`, `dist` or `release` was skipped as build output wherever it appeared, so a Java package like `org.apache.commons.io.build` silently vanished from the graph. It is now kept when git tracks it or a `src/` directory sits above it; top-level build output is still skipped. commons-io edge F1 against an independent reference rose from 0.980 to 1.000.
+
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.

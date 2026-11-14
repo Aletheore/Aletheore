@@ -27,7 +27,7 @@ from tree_sitter import Language, Node, Parser, Tree
 
 from aletheore.safe_io import read_text_lenient
 from aletheore.repo_config import is_ignored
-from aletheore.scanner.detect import IGNORED_DIRS, _nested_git_roots, git_visible_paths, visible_key
+from aletheore.scanner.detect import IGNORED_DIRS, _nested_git_roots, git_visible_paths, is_ignored_dir_name, visible_key
 
 PY_LANGUAGE = Language(tspython.language())
 JS_LANGUAGE = Language(tsjavascript.language())
@@ -119,7 +119,7 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
         dirnames[:] = [
             d
             for d in dirnames
-            if d not in IGNORED_DIRS
+            if not is_ignored_dir_name(d, rel_dir, visible[1] if visible else None, f"{rel_dir}/{d}" if rel_dir != "." else d)
             and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
             and (visible is None or visible_key(f"{rel_dir}/{d}" if rel_dir != "." else d) in visible[1])
         ]
