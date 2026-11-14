@@ -1959,7 +1959,7 @@ def _extract_nestjs_routes(root: Node, source: bytes, rel_path: str, global_pref
                     if info is None or info[0] not in _NEST_VERBS:
                         continue
                     paths = _nest_paths(info[1], source)
-                    unresolved = paths is None
+                    unresolved = paths is None or note is not None  # a non-literal @Controller path leaves the route partial
                     for path in paths or [""]:
                         for prefix in prefixes:
                             parts = [p.strip("/") for p in (global_prefix, prefix, path) if p and p.strip("/")]

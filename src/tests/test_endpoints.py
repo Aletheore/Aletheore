@@ -1893,3 +1893,11 @@ def test_map_api_endpoints_composes_nestjs_set_global_prefix(tmp_path):
     paths = {e["path"] for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "nestjs"}
 
     assert paths == {"/api/tags"}
+
+
+def test_extract_nestjs_route_under_a_non_literal_controller_path_is_flagged_unresolved():
+    from aletheore.endpoints import _extract_nestjs_routes
+
+    root, source = _parse_ts("@Controller(BASE)\nclass A {\n  @Get('x')\n  x() {}\n}\n")
+
+    assert _extract_nestjs_routes(root, source, "a.ts")[0]["unresolved"] is True
