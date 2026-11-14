@@ -1901,3 +1901,12 @@ def test_extract_nestjs_route_under_a_non_literal_controller_path_is_flagged_unr
     root, source = _parse_ts("@Controller(BASE)\nclass A {\n  @Get('x')\n  x() {}\n}\n")
 
     assert _extract_nestjs_routes(root, source, "a.ts")[0]["unresolved"] is True
+
+
+def test_nest_global_prefix_is_ignored_inside_comments(tmp_path):
+    from aletheore.endpoints import map_api_endpoints
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/main.ts").write_text("// do not call setGlobalPrefix('v2') here\nasync function bootstrap() {}\n")
+    (tmp_path / "src/t.controller.ts").write_text("@Controller('tags')\nexport class T {\n  @Get()\n  all() {}\n}\n")
+    assert {e["path"] for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "nestjs"} == {"/tags"}

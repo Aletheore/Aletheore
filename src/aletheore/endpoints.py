@@ -1984,7 +1984,8 @@ def _nest_global_prefix(source_paths: list[Path]) -> str:
         if path.suffix == ".ts":
             data = read_bytes_or_none(path)
             if data is not None and b"setGlobalPrefix" in data:
-                found |= set(_NEST_GLOBAL_PREFIX.findall(data.decode(errors="ignore")))
+                code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", data.decode(errors="ignore"), flags=re.S)  # not from a comment
+                found |= set(_NEST_GLOBAL_PREFIX.findall(code))
     return next(iter(found)).strip("/") if len(found) == 1 else ""
 
 
