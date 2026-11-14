@@ -259,3 +259,47 @@ def test_cpp_struct_nested_only_in_a_lambda_is_not_public(tmp_path):
     modules, _, _ = build_module_graph(repo)
     cls = modules[0]["symbols"]["classes"][0]
     assert cls["is_public"] is False
+
+
+def _c_repo(tmp_path, files):
+    repo = tmp_path / "crepo"
+    for rel, body in files.items():
+        f = repo / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body)
+    modules, _, _ = build_module_graph(repo)
+    return {m["path"]: m for m in modules}
+
+
+def test_a_bare_angle_include_of_the_projects_own_header_links_it_as_inferred(tmp_path):
+    mods = _c_repo(tmp_path, {
+        "src/jansson.h": "int json_x(void);\n",
+        "test/t.c": "#include <jansson.h>\n#include <stdio.h>\nint main(void){return 0;}\n",
+    })
+    assert mods["test/t.c"]["imports"] == ["src/jansson.h"]
+    assert mods["test/t.c"]["import_confidence"]["src/jansson.h"] == "inferred"
+
+
+def test_a_system_header_name_never_binds_to_a_same_named_repo_file(tmp_path):
+    mods = _c_repo(tmp_path, {
+        "src/stdio.h": "/* shim */\n",
+        "src/a.c": "#include <stdio.h>\nint f(void){return 0;}\n",
+    })
+    assert mods["src/a.c"]["imports"] == []
+
+
+def test_a_bare_angle_include_with_two_candidate_headers_is_left_unresolved(tmp_path):
+    mods = _c_repo(tmp_path, {
+        "a/config.h": "int a;\n", "b/config.h": "int b;\n",
+        "src/x.c": "#include <config.h>\nint f(void){return 0;}\n",
+    })
+    assert mods["src/x.c"]["imports"] == []
+
+
+def test_a_unity_build_include_of_a_source_file_links_it(tmp_path):
+    mods = _c_repo(tmp_path, {
+        "lib/src/a.cc": "int a() { return 1; }\n",
+        "lib/src/b.cc": "int b() { return 2; }\n",
+        "lib/src/all.cc": '#include "src/a.cc"\n#include "src/b.cc"\n',
+    })
+    assert set(mods["lib/src/all.cc"]["imports"]) == {"lib/src/a.cc", "lib/src/b.cc"}
