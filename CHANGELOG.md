@@ -5,7 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- Added: Rails `resources` / `resource` expand to their routes (honouring only/except/param/path/controller), nested resources, member/collection blocks and `on:`, and `scope :api` composes. On the RealWorld Rails app, 0 of the spec's 19 routes were found; now 17, and three live controllers are no longer reported as dead code.
+- Added: Rails `resources` / `resource` expand to their routes (honouring only/except/param/path/controller), nested resources, member/collection blocks and `on:`, and `scope :api` composes. On the RealWorld Rails app, 0 of the spec's 19 routes were found; now 17, and three live controllers are no longer reported as dead code. `devise_for` adds the Devise sign-in, sign-out and registration routes (with a note that the model's Devise modules decide which exist), taking that app to 19 of 19.
 
 ## 0.13.0 - 2026-11-14
 

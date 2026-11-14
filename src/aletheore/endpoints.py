@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -1718,6 +1719,8 @@ def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                                     "note": None,
                                 }
                             )
+                elif method_name == "devise_for" and first_arg is not None and _rails_symbol_text(first_arg, source):
+                    entries.extend(_rails_devise_routes(n, args, source, rel_path, first_arg))
                 elif method_name in ("resources", "resource") and args is not None:
                     named = args.named_children
                     if named and named[0].type == "simple_symbol":
@@ -1760,6 +1763,51 @@ def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                             }
                         )
     return entries
+
+
+_DEVISE_NOTE = "devise_for: sessions and registrations routes assumed (database_authenticatable, registerable)"
+
+
+def _rails_devise_routes(call: Node, args: Node, source: bytes, rel_path: str, first_arg: Node) -> list[dict]:
+    """`devise_for :users` generates sign-in/out and registration routes. Which ones
+    exist depends on the model's Devise modules, so they are reported with a note."""
+    name = _rails_symbol_text(first_arg, source) or "users"
+    text = source[args.start_byte : args.end_byte].decode(errors="replace")
+
+    def option(key: str, default: str) -> str:
+        m = re.search(rf"\b{key}:\s*:?[\"']?([\w/]+)", text)
+        return m.group(1) if m else default
+
+    base = _apply_rails_url_prefix("/" + name, _rails_enclosing_url_prefix(call, source))
+    module_prefix = _rails_enclosing_module_prefix(call, source)
+    sign_in, sign_out = option("sign_in", "sign_in"), option("sign_out", "sign_out")
+    sign_up = option("sign_up", "sign_up")
+    sessions = option("sessions", "devise/sessions")
+    registrations = option("registrations", "devise/registrations")
+    table = [
+        ("GET", f"{base}/{sign_in}", sessions, "new"),
+        ("POST", f"{base}/{sign_in}", sessions, "create"),
+        ("DELETE", f"{base}/{sign_out}", sessions, "destroy"),
+        ("GET", f"{base}/{sign_up}", registrations, "new"),
+        ("POST", base, registrations, "create"),
+        ("GET", f"{base}/edit", registrations, "edit"),
+        ("PATCH", base, registrations, "update"),
+        ("PUT", base, registrations, "update"),
+        ("DELETE", base, registrations, "destroy"),
+    ]
+    return [
+        {
+            "method": http,
+            "path": path,
+            "framework": "rails",
+            "file": rel_path,
+            "line": call.start_point[0] + 1,
+            "handler": _apply_rails_module_prefix(f"{ctrl}#{action}", module_prefix),
+            "unresolved": False,
+            "note": _DEVISE_NOTE,
+        }
+        for http, path, ctrl, action in table
+    ]
 
 
 def _php_string_content(node: Node, source: bytes) -> str:

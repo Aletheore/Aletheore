@@ -1880,3 +1880,22 @@ def test_extract_rails_only_wins_over_except_and_a_slash_string_is_not_an_action
     assert ("GET", "posts") in got                       # only: wins, except: is ignored
     assert not any("health" in path for _m, path in got)  # a URL, not an action
     assert [_rails_plural(w) for w in ("profile", "person", "status", "category", "box")] == ["profiles", "people", "statuses", "categories", "boxes"]
+
+
+def test_rails_devise_for_expands_session_and_registration_routes(tmp_path):
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "routes.rb").write_text(
+        "Rails.application.routes.draw do\n"
+        "  scope :api do\n"
+        "    devise_for :users, controllers: { sessions: :sessions },\n"
+        "                       path_names: { sign_in: :login }\n"
+        "  end\n"
+        "end\n"
+    )
+    found = {
+        (e["method"], e["path"], e["handler"], e["note"] is not None)
+        for e in map_api_endpoints(tmp_path)["endpoints"]
+    }
+    assert ("POST", "api/users/login", "sessions#create", True) in found
+    assert ("POST", "api/users", "devise/registrations#create", True) in found
+    assert ("DELETE", "api/users/sign_out", "sessions#destroy", True) in found
