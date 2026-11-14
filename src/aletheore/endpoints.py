@@ -1813,6 +1813,7 @@ def _extract_aspnet_attribute_routes(root: Node, source: bytes, rel_path: str) -
 
         verb_attrs: list[tuple[str, str | None, Node]] = []
         route_template: str | None = None
+        route_attr: Node | None = None
         for attr in _aspnet_attributes(n):
             attr_name_node = attr.child_by_field_name("name")
             if attr_name_node is None:
@@ -1822,13 +1823,14 @@ def _extract_aspnet_attribute_routes(root: Node, source: bytes, rel_path: str) -
                 verb_attrs.append((_ASPNET_ATTRIBUTE_METHODS[attr_name], _aspnet_attribute_path(attr, source), attr))
             elif attr_name == "Route":
                 route_template = _aspnet_attribute_path(attr, source)
-        if not verb_attrs and route_template is not None:
-            route_attr = next(a for a in _aspnet_attributes(n) if source[a.child_by_field_name("name").start_byte : a.child_by_field_name("name").end_byte].decode() == "Route")
+                route_attr = attr
+        if not verb_attrs and route_template is not None and route_attr is not None:
             verb_attrs.append(("ANY", route_template, route_attr))
         for method, template, attr in verb_attrs:
             if template is None:
                 template = route_template  # [HttpGet] with no template of its own uses the method's [Route]
-            if has_class_route and class_template is None:
+            class_unresolved = has_class_route and class_template is None
+            if class_unresolved:
                 path, note = template or "", "class-level [Route] template is not a string literal, not composed into this path"
             elif class_template is not None or template is None:
                 path, note = _aspnet_compose_route(class_template, template, controller, handler), None
@@ -1842,7 +1844,7 @@ def _extract_aspnet_attribute_routes(root: Node, source: bytes, rel_path: str) -
                     "file": rel_path,
                     "line": attr.start_point[0] + 1,
                     "handler": handler,
-                    "unresolved": False,
+                    "unresolved": class_unresolved,  # the class route could not be read: the path is partial
                     "note": note,
                 }
             )

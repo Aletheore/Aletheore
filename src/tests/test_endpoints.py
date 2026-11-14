@@ -1890,3 +1890,11 @@ def test_map_api_endpoints_extracts_kotlin_ktor_routes(tmp_path):
 
     paths = {e["path"] for e in result["endpoints"]}
     assert "/kt" in paths
+
+
+def test_extract_aspnet_route_under_a_non_literal_class_route_is_flagged_unresolved():
+    root, source = parse_csharp(
+        "[Route(Constants.Base)]\npublic class UsersController {\n    [HttpGet(\"{id}\")]\n    public void Get() { }\n}\n"
+    )
+
+    assert _extract_aspnet_attribute_routes(root, source, "U.cs")[0]["unresolved"] is True
