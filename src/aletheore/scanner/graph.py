@@ -2894,7 +2894,9 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
     def text(n: Node) -> str:
         return source[n.start_byte:n.end_byte].decode(errors="ignore")
 
-    env: dict[str, tuple[str, list[str]]] = {}  # file-level `name = <path expression>` assignments, in source order
+    # top-level `name = <path expression>` assignments with the byte offset they appear at: a use sees only the nearest
+    # assignment before it, and never one inside a method or block (a different variable with the same name)
+    env: dict[str, list[tuple[int, tuple[str, list[str]]]]] = {}
 
     def normalise(segments: list[str]) -> list[str]:
         out: list[str] = []
@@ -2926,7 +2928,8 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
                 return ("dir", ["<file>"])
             if name == "__dir__":
                 return ("dir", [])
-            return env.get(name)
+            earlier = [value for pos, value in env.get(name, []) if pos < n.start_byte]
+            return earlier[-1] if earlier else None
         if n.type == "parenthesized_statements" and n.named_child_count == 1:
             return eval_path(n.named_children[0])
         if n.type == "call":
@@ -2951,12 +2954,12 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
         stack = [root]
         while stack:
             n = stack.pop()
-            if n.type == "assignment":
+            if n.type == "assignment" and n.parent is not None and n.parent.type == "program":
                 left, right = n.child_by_field_name("left"), n.child_by_field_name("right")
                 if left is not None and right is not None and left.type == "identifier":
                     value = eval_path(right)
                     if value is not None and value[0] == "dir":
-                        env[text(left)] = value
+                        env.setdefault(text(left), []).append((n.start_byte, value))
             stack.extend(reversed(n.children))
 
     def walk(root: Node):

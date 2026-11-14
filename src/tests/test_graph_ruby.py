@@ -292,3 +292,13 @@ def test_a_require_of_an_unknown_expression_adds_nothing(tmp_path):
         "run.rb": "name = ENV['X']\nrequire File.join(name, 'a')\n",
     })
     assert imp["run.rb"] == set()
+
+
+def test_require_path_variable_must_be_a_top_level_assignment_before_the_require(tmp_path):
+    imp = _ruby_edges(tmp_path, {
+        "lib/a.rb": "module A; end\n",
+        "lib/b.rb": "module B; end\n",
+        # assigned inside a method (a different variable) and only after the require: neither may be used
+        "run.rb": "require File.join(dir, 'a')\ndef helper\n  dir = File.expand_path('lib', __dir__)\nend\ndir = File.expand_path('lib', __dir__)\nrequire File.join(dir, 'b')\n",
+    })
+    assert imp["run.rb"] == {"lib/b.rb"}
