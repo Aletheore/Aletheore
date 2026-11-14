@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: the parts of a C# `partial` type depend on each other. A part that names a type nested in a sibling part, or names its own type in its body, links every part; a part that uses a member of the type (declared here or in a sibling) links every part as inferred, since that is a name-only match. Dapper edge F1 against an independent reference rose from 0.702 to 0.776 and Polly from 0.871 to 0.897.
+
 - Fixed: C# extension methods declared in a `static partial class` were not recognised (the check looked for the literal text `static class`), so calls to FluentValidation's `Validate` extensions linked nothing. FluentValidation edge F1 against an independent reference rose from 0.801 to 0.857.
 
 - Fixed: C# files whose `#if` blocks split a declaration kept their types but lost their namespace, so no other file could see them (Newtonsoft.Json's TestFixtureBase.cs: 293 missed edges). The namespace is now recovered from the text. Also: `[JsonProperty]` links `JsonPropertyAttribute`. Newtonsoft.Json edge recall rose from 0.827 to 0.956.

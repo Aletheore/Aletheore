@@ -2326,7 +2326,7 @@ _JAVA_QUALIFIED_RE = re.compile(r"^[a-z_]\w*(?:\.[a-z_]\w*)*\.[A-Z]\w*")
 def _java_inline_qualified_targets(
     root: Node, source: bytes, importer: Path, package_types: dict[str, dict[str, list[Path]]],
     coverage: dict[Path, int] | None,
-) -> list[tuple[Path, bool]]:
+) -> list[tuple[Path, bool | str]]:
     """Files named by a fully qualified type written inline (`org.apache.thrift.TException e`), which needs
     no import. The dotted text must start lower-case, as packages do, and name a top-level type that a scanned
     file declares in exactly that package."""
@@ -2361,7 +2361,7 @@ def _java_same_package_targets(
     explicit_imports: set[str],
     package_types: dict[str, dict[str, list[Path]]],
     refs: tuple[set[str], set[str], set[str]] | None = None,
-) -> list[tuple[Path, bool]]:
+) -> list[tuple[Path, bool | str]]:
     """Files this one depends on without any import: Java needs none for a type of the same package.
 
     Rule (conservative, so a wrong edge stays rarer than a missing one): the file's capitalized identifiers
@@ -3442,6 +3442,41 @@ _CSHARP_GLOBAL_USING_RE = re.compile(r"^\s*global\s+using\s+(?!static\b)(?:\w+\s
 _CSHARP_EXTENSION_RE = re.compile(r"\b([A-Za-z_]\w*)\s*(<[^>()]*>)?\s*\(\s*this\s+[A-Za-z_]")
 
 
+_CSHARP_TYPE_BODY_DECLS = ("class_declaration", "struct_declaration", "interface_declaration", "enum_declaration",
+                           "record_declaration", "record_struct_declaration", "delegate_declaration")
+_CSHARP_COMMON_MEMBER_NAMES = frozenset({"ToString", "Equals", "GetHashCode", "Dispose", "Count", "Value", "Name", "Items", "Length", "Clear", "Add", "Remove", "Contains", "Reset", "Close", "Open", "Create", "Get", "Set"})
+
+
+def _csharp_partial_facts(type_node: Node, source: bytes) -> dict:
+    """What one part of a `partial` type declares: nested type names and member names (methods, properties, fields,
+    events). A sibling part that names one of them depends on this part."""
+    body = type_node.child_by_field_name("body")
+    nested: set[str] = set()
+    members: set[str] = set()
+    if body is not None:
+        def name_of(node: Node) -> str | None:
+            n = node.child_by_field_name("name")
+            return source[n.start_byte:n.end_byte].decode(errors="ignore") if n is not None else None
+
+        for member in body.children:
+            if member.type in _CSHARP_TYPE_BODY_DECLS:
+                got = name_of(member)
+                if got:
+                    nested.add(got)
+            elif member.type in ("method_declaration", "property_declaration", "event_declaration", "event_field_declaration"):
+                got = name_of(member)
+                if got:
+                    members.add(got)
+            elif member.type == "field_declaration":
+                declaration = next((c for c in member.children if c.type == "variable_declaration"), None)
+                for declarator in (declaration.children if declaration is not None else []):
+                    if declarator.type == "variable_declarator":
+                        ident = declarator.child_by_field_name("name") or next((c for c in declarator.children if c.type == "identifier"), None)
+                        if ident is not None:
+                            members.add(source[ident.start_byte:ident.end_byte].decode(errors="ignore"))
+    return {"nested": sorted(nested), "members": sorted(m for m in members if len(m) >= 5 and m not in _CSHARP_COMMON_MEMBER_NAMES)}
+
+
 def _csharp_file_summary(root: Node, source: bytes) -> dict:
     """Namespaces this file declares, its TOP-LEVEL types (name -> namespace; nested types are reachable only
     through their outer type), whether it defines extension methods, and its `global using` namespaces."""
@@ -3453,6 +3488,7 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
     types: dict[str, str] = {}
     members: dict[str, dict[str, str]] = {}
     bases: dict[str, set[str]] = {}
+    partial: dict[str, dict] = {}  # top-level `partial` type name -> {ns, nested, members}
 
     def walk(children, ns: str) -> str:
         for c in children:
@@ -3478,6 +3514,8 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
                 name_node = c.child_by_field_name("name")
                 if name_node is not None:
                     type_name = text(name_node)
+                    if any(m.type == "modifier" and text(m) == "partial" for m in c.children):
+                        partial[type_name] = {"ns": ns, **_csharp_partial_facts(c, source)}
                     types.setdefault(type_name, ns)
                     members.setdefault(type_name, {}).update(_csharp_value_members(c, source))
                     bases.setdefault(type_name, set()).update(_csharp_base_names(c, source))
@@ -3509,6 +3547,7 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
         "global_usings": _CSHARP_GLOBAL_USING_RE.findall(decoded),
         "members": members,
         "bases": {name: sorted(parents) for name, parents in bases.items()},
+        "partial": partial,
     }
 
 
@@ -3635,9 +3674,14 @@ def _build_csharp_index(repo_path: Path, summaries: dict[Path, dict]) -> dict:
         name for name, owners in ext_generic_owners.items()
         if len(name) < _CSHARP_MIN_TYPE_NAME and len(ext_owners.get(name, ())) == 1
     }
+    partial_owners: dict[tuple[str, str], set[Path]] = {}
+    for path, summary in summaries.items():
+        for type_name, facts in summary.get("partial", {}).items():
+            partial_owners.setdefault((facts["ns"], type_name), set()).add(path)
     return {
         "files": summaries, "project_of": project_of, "visible": visible,
         "global_usings": global_usings, "ext_owners": ext_owners, "ext_short_generic": ext_short_generic,
+        "partial_owners": partial_owners,
     }
 
 
@@ -3814,7 +3858,7 @@ def _csharp_type_reference_targets(
     index: dict | None = None,
     usings: list[str] | None = None,
     tree_root: Node | None = None,
-) -> list[tuple[Path, bool]]:
+) -> list[tuple[Path, bool | str]]:
     """Files this one depends on by *naming their types*, not by importing them.
 
     With `index` (see _build_csharp_index) the owners of a name are filtered by what the importing file can
@@ -3846,6 +3890,37 @@ def _csharp_type_reference_targets(
         names = _csharp_code_identifiers(tree_root, source)
     else:
         names = (m.group(0) for m in _IDENTIFIER_RE.finditer(text))
+    if scope is not None and tree_root is not None:
+        # The parts of one `partial` type are one type to the compiler. A part depends on a sibling part when it names
+        # a type nested in it (exact) or calls/reads a member it declares (a name-only guess, so inferred).
+        used = set(_csharp_code_identifiers(tree_root, source))
+        own_facts = index["files"].get(importer) or {}
+        for type_name, facts in own_facts.get("partial", {}).items():
+            peers = [
+                other for other in sorted(index["partial_owners"].get((facts["ns"], type_name), ()))
+                if other != importer and _csharp_project_sees(index, importer, other)
+            ]
+            if not peers:
+                continue
+            own_members = set(facts["members"]) | set(facts["nested"])
+            sibling_members: set[str] = set()
+            sibling_nested: set[str] = set()
+            for other in peers:
+                sibling_members |= set(index["files"][other]["partial"][type_name]["members"])
+                sibling_nested |= set(index["files"][other]["partial"][type_name]["nested"])
+            # Using any member of the type (declared here or in a sibling part) is a use of the whole type, which the
+            # compiler resolves to every part. A member declared in this very file counts only when it appears beyond
+            # its declaration. Names alone cannot prove a binding, so member-based links are inferred.
+            names_type = len(re.findall(rf"\b{re.escape(type_name)}\b", text)) >= 2
+            nested_used = bool(used & (sibling_nested - own_members))
+            member_used = bool(used & (sibling_members - own_members)) or any(
+                len(re.findall(rf"\b{re.escape(name)}\b", text)) >= 2 for name in facts["members"]
+            )
+            for other in peers:
+                if names_type or nested_used:
+                    referenced.append((other, False))
+                elif member_used:
+                    referenced.append((other, "inferred"))
     shadowing: set[str] = set()
     type_context: set[str] = set()
     if scope is not None and tree_root is not None:
@@ -4865,7 +4940,9 @@ def _extract_module(
             if target is not None and target != rel_path and target not in already:
                 already.add(target)
                 resolved_imports.append(target)
-                if type_ref_ambiguous:
+                if type_ref_ambiguous == "inferred":
+                    import_confidence[target] = "inferred"
+                elif type_ref_ambiguous:
                     import_confidence[target] = "ambiguous"
     elif language_name == "swift":
         raw_imports, functions, classes = _extract_swift(tree.root_node, source)
