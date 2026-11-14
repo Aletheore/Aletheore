@@ -1828,3 +1828,68 @@ def test_map_api_endpoints_extracts_kotlin_ktor_routes(tmp_path):
 
     paths = {e["path"] for e in result["endpoints"]}
     assert "/kt" in paths
+
+
+def _parse_ts(code: str):
+    from aletheore.endpoints import TS_LANGUAGE
+
+    parser = Parser()
+    parser.language = TS_LANGUAGE
+    return parser.parse(code.encode()).root_node, code.encode()
+
+
+def test_extract_nestjs_controller_and_method_decorators_compose():
+    from aletheore.endpoints import _extract_nestjs_routes
+
+    root, source = _parse_ts(
+        "@Controller('articles')\n"
+        "export class ArticleController {\n"
+        "  @Get()\n  findAll() {}\n"
+        "  @Get(':slug')\n  find(@Param('slug') slug: string) {}\n"
+        "  @Post()\n  create() {}\n"
+        "  @Delete(':slug/comments/:id')\n  remove() {}\n"
+        "}\n"
+    )
+
+    got = {(e["method"], e["path"], e["handler"]) for e in _extract_nestjs_routes(root, source, "a.controller.ts")}
+
+    assert got == {("GET", "/articles", "findAll"), ("GET", "/articles/:slug", "find"), ("POST", "/articles", "create"),
+                   ("DELETE", "/articles/:slug/comments/:id", "remove")}
+
+
+def test_extract_nestjs_object_form_controller_array_paths_and_all():
+    from aletheore.endpoints import _extract_nestjs_routes
+
+    root, source = _parse_ts(
+        "@Controller({ path: 'users', version: '1' })\n"
+        "class UsersController {\n  @Get(['a', 'b'])\n  two() {}\n  @All('x')\n  any() {}\n}\n"
+    )
+
+    got = {(e["method"], e["path"]) for e in _extract_nestjs_routes(root, source, "u.ts")}
+
+    assert got == {("GET", "/users/a"), ("GET", "/users/b"), ("ANY", "/users/x")}
+
+
+def test_extract_nestjs_non_literal_controller_path_is_noted_and_non_controllers_ignored():
+    from aletheore.endpoints import _extract_nestjs_routes
+
+    root, source = _parse_ts(
+        "@Controller(BASE)\nclass A {\n  @Get('x')\n  x() {}\n}\n"
+        "class NotAController {\n  @Get('y')\n  y() {}\n}\n"
+    )
+
+    entries = _extract_nestjs_routes(root, source, "a.ts")
+
+    assert [e["path"] for e in entries] == ["/x"] and "not a string literal" in entries[0]["note"]
+
+
+def test_map_api_endpoints_composes_nestjs_set_global_prefix(tmp_path):
+    from aletheore.endpoints import map_api_endpoints
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/main.ts").write_text("async function bootstrap() { app.setGlobalPrefix('api'); }\n")
+    (tmp_path / "src/tags.controller.ts").write_text("@Controller('tags')\nexport class TagsController {\n  @Get()\n  all() {}\n}\n")
+
+    paths = {e["path"] for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "nestjs"}
+
+    assert paths == {"/api/tags"}
