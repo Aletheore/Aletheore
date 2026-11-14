@@ -1635,6 +1635,17 @@ def _laravel_array_option(node: Node | None, source: bytes, key: str) -> Node | 
     return None
 
 
+def _laravel_chain_root_is_route(node: Node, source: bytes) -> bool:
+    """True when a fluent `...->group(...)` chain starts at `Route::...` (not some other builder with a `group` method)."""
+    cursor = node
+    while cursor is not None and cursor.type == "member_call_expression":
+        cursor = cursor.child_by_field_name("object")
+    if cursor is None or cursor.type != "scoped_call_expression":
+        return False
+    scope = cursor.child_by_field_name("scope")
+    return scope is not None and source[scope.start_byte:scope.end_byte].decode() == "Route"
+
+
 def _laravel_group_prefixes(call_node: Node, source: bytes) -> tuple[list[str], bool]:
     """Literal URL prefixes of the Route groups enclosing a route call, outermost first, and whether any enclosing group
     has a prefix or host that cannot be read statically (`Route::prefix($x)`, `Route::domain(...)`)."""
@@ -1659,7 +1670,7 @@ def _laravel_group_prefixes(call_node: Node, source: bytes) -> tuple[list[str], 
                     uncertain = True
         elif node.type == "member_call_expression":
             name = node.child_by_field_name("name")
-            if name is not None and source[name.start_byte:name.end_byte].decode() == "group":
+            if name is not None and source[name.start_byte:name.end_byte].decode() == "group" and _laravel_chain_root_is_route(node, source):
                 chain = node.child_by_field_name("object")
                 while chain is not None and chain.type in ("member_call_expression", "scoped_call_expression"):
                     link = chain.child_by_field_name("name")
@@ -1727,12 +1738,12 @@ def _extract_laravel_routes(root: Node, source: bytes, rel_path: str) -> list[di
             prefixes = ["api", *prefixes]
         parts = [p.strip("/") for p in (*prefixes, path) if p and p.strip("/")]
         composed = "/" + "/".join(parts)
-        note = None
+        notes = []
         if uncertain:
-            note = "declared inside a Route group whose prefix or domain is not a string literal, not composed into this path"
-        elif api_file:
-            note = "routes/api.php: assumes Laravel's default /api prefix"
-        return composed, note
+            notes.append("declared inside a Route group whose prefix or domain is not a string literal (the literal parts are composed)")
+        if api_file:
+            notes.append("routes/api.php: assumes Laravel's default /api prefix")
+        return composed, "; ".join(notes) or None
 
     for n in _walk_tree(root):
         if n.type != "scoped_call_expression":

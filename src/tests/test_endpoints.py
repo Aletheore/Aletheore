@@ -1874,3 +1874,11 @@ def test_map_api_endpoints_extracts_kotlin_ktor_routes(tmp_path):
 
     paths = {e["path"] for e in result["endpoints"]}
     assert "/kt" in paths
+
+
+def test_extract_laravel_non_route_group_chain_is_not_a_route_group_and_notes_combine():
+    root, source = parse_php("<?php\n$cache->prefix('x')->group(function () {\n    Route::get('ping', 'P@ping');\n});\n")
+    assert _extract_laravel_routes(root, source, "routes/web.php")[0]["path"] == "/ping"
+    root, source = parse_php("<?php\nRoute::prefix($v)->group(function () {\n    Route::get('ping', 'P@ping');\n});\n")
+    note = _extract_laravel_routes(root, source, "routes/api.php")[0]["note"]
+    assert "not a string literal" in note and "default /api prefix" in note
