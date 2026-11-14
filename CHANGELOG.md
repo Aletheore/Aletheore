@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: a Java `import a.b.*;` from a file whose package also exists in another source root (a test file importing a package that `src/test/java` and `src/main/java` both hold) now links the classes it uses from every root, not only the nearest one. jackson-core edge F1 against an independent reference rose from 0.959 to 1.000.
+
 ## 0.13.0 - 2026-11-14
 
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.

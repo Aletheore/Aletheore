@@ -2231,7 +2231,18 @@ def _resolve_java_import(
                 coverage,
             )
             return nested[:1], len(nested) > 1
-        return sorted(matching_roots[0].joinpath(*segments).glob("*.java")), len(matching_roots) > 1
+        # The package can live in several source roots (src/main/java and src/test/java both hold
+        # `tools.jackson.core`); a test file sees the main classes too, so an on-demand import covers all of them.
+        # Where two roots hold the same file name the nearest root's file wins and the result is flagged ambiguous.
+        by_name: dict[str, Path] = {}
+        duplicated = False
+        for root in matching_roots:
+            for java_file in sorted(root.joinpath(*segments).glob("*.java")):
+                if java_file.name in by_name:
+                    duplicated = True
+                else:
+                    by_name[java_file.name] = java_file
+        return sorted(by_name.values()), duplicated
 
     matches = _nearest_first(
         importer,
