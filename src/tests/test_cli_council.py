@@ -3,6 +3,7 @@
 import builtins
 import sys
 
+import pytest
 from typer.testing import CliRunner
 
 from aletheore.cli import app
@@ -70,6 +71,7 @@ def test_council_help_works_before_the_extra_is_installed(monkeypatch):
 
 def test_a_failing_council_command_exits_non_zero(monkeypatch, tmp_path):
     """Council's commands run with click's standalone_mode off, which returns their exit code; the wrapper must turn it back into one."""
+    pytest.importorskip("aletheore.council.cli")  # needs the optional `council` extra, which the ordinary test jobs do not install
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
