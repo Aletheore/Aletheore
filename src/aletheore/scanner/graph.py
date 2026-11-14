@@ -1464,6 +1464,16 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
                                     else:
                                         imports.append(f"@path:{attr_path}")
                             sibling = sibling.prev_sibling
+            elif n.type == "macro_invocation":
+                # `cfg_net! { pub(crate) mod tcp; pub(crate) mod udp; }`: item-wrapping macros (conditional compilation) leave
+                # their `mod x;` declarations as raw tokens. A literal `mod name;` in the invocation's body is a module
+                # declaration; a `$name` placeholder (inside a macro_rules! body) is not, and is never matched.
+                body = next((c for c in n.children if c.type == "token_tree"), None)
+                if body is not None:
+                    body_text = source[body.start_byte:body.end_byte].decode(errors="ignore")
+                    declared_in = _rust_inline_mod_names(n, source)
+                    for mod_name in dict.fromkeys(re.findall(r"(?<![\w$])mod\s+([A-Za-z_]\w*)\s*;", body_text)):
+                        imports.append(f"@imod:{'/'.join(declared_in)}|{mod_name}" if declared_in else f"self::{mod_name}")
             elif n.type in ("function_item", "function_signature_item"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:

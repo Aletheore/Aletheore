@@ -175,3 +175,28 @@ def test_flatten_use_groups_and_aliases():
         "serde_core::Deserialize",
     ]
     assert rust_resolve.flatten_use("crate::a::*") == ["crate::a"]
+
+
+def test_rust_mod_declared_inside_an_item_wrapping_macro_invocation_links_its_file(tmp_path):
+    repo = write(tmp_path / "mac", {
+        "Cargo.toml": pkg("app"),
+        "src/lib.rs": "mod sys;\n",
+        "src/sys/mod.rs": "mod selector;\ncfg_net! {\n    pub(crate) mod tcp;\n    pub(crate) mod udp;\n}\n",
+        "src/sys/selector.rs": "pub struct S;\n",
+        "src/sys/tcp.rs": "pub struct T;\n",
+        "src/sys/udp.rs": "pub struct U;\n",
+    })
+    edges = edges_of(repo)
+    assert ("src/sys/mod.rs", "src/sys/tcp.rs") in edges
+    assert ("src/sys/mod.rs", "src/sys/udp.rs") in edges
+    assert ("src/sys/mod.rs", "src/sys/selector.rs") in edges
+
+
+def test_rust_mod_placeholder_in_a_macro_rules_body_is_not_a_module(tmp_path):
+    repo = write(tmp_path / "mac2", {
+        "Cargo.toml": pkg("app"),
+        "src/lib.rs": "macro_rules! decl { ($n:ident) => { mod $n; }; }\ndecl!(real);\n",
+        "src/real.rs": "pub struct R;\n",
+        "src/n.rs": "pub struct N;\n",
+    })
+    assert ("src/lib.rs", "src/n.rs") not in edges_of(repo)
