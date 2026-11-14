@@ -104,3 +104,13 @@ def test_plain_files_stay_exact(tmp_path):
     })
     modules, _ = _scan(repo)
     assert _conf(modules, "a.go", "helper.go") == "exact"
+
+
+def test_a_go_version_tag_newer_than_the_known_toolchain_is_unknown_not_false():
+    assert go_resolve.build_state("a.go", "//go:build go1.999\n\npackage x\n") == "maybe"
+    assert go_resolve.build_state("a.go", "//go:build go1.1\n\npackage x\n") == "always"
+
+
+def test_a_block_comment_mentioning_package_before_the_constraint_does_not_hide_it():
+    head = "/*\nThis package is licensed under X.\n*/\n//go:build ignore\n\npackage x\n"
+    assert go_resolve.build_state("a.go", head) == "never"

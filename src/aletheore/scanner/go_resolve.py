@@ -365,7 +365,8 @@ def _tag_value(tag: str) -> bool | None:
         return True
     version = _GO_VERSION_TAG.match(tag)
     if version:
-        return int(version.group(1)) <= _NEWEST_GO_MINOR
+        # a go1.N tag at or below the newest release we know of is true; a newer one depends on the toolchain in use
+        return True if int(version.group(1)) <= _NEWEST_GO_MINOR else None
     return False
 
 
@@ -423,21 +424,21 @@ def _eval_build_expression(expression: str) -> bool | None:
 
     def parse_not() -> bool | None:
         nonlocal index
-        token = peek()
-        if token == "!":
+        lexeme = peek()
+        if lexeme == "!":
             index += 1
             return _not(parse_not())
-        if token == "(":
+        if lexeme == "(":
             index += 1
             value = parse_or()
             if peek() != ")":
                 raise _BuildSyntaxError(expression)
             index += 1
             return value
-        if token is None or token in (")", "&&", "||"):
+        if lexeme is None or lexeme in (")", "&&", "||"):
             raise _BuildSyntaxError(expression)
         index += 1
-        return _tag_value(token)
+        return _tag_value(lexeme)
 
     try:
         value = parse_or()
@@ -469,7 +470,7 @@ def build_state(filename: str, head: str) -> str:
     "always" (no constraint, or one that holds by default such as `!nomsgpack`), "never" (a custom tag that is not set,
     such as `nomsgpack` or `ignore`) or "maybe" (depends on GOOS/GOARCH/cgo, or the expression cannot be read).
     Constraints are read from the comment block before the package clause only."""
-    before_package = _BLOCK_COMMENT.sub("", ("\n" + head).split("\npackage ", 1)[0])
+    before_package = ("\n" + _BLOCK_COMMENT.sub("", head)).split("\npackage ", 1)[0]  # comments first: a license may say "package"
     value: bool | None = True
     if _GOOS_ARCH_SUFFIX.search(filename):
         value = None
