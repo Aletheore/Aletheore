@@ -926,6 +926,111 @@ def _gin_group_prefix_bindings(root: Node, source: bytes) -> dict[tuple[int, str
     return bindings
 
 
+_GO_WEB_FRAMEWORK_IMPORTS = (
+    (b"github.com/go-chi/chi", "chi"),
+    (b"github.com/labstack/echo", "echo"),
+    (b"github.com/gofiber/fiber", "fiber"),
+    (b"github.com/julienschmidt/httprouter", "httprouter"),
+)
+_GO_FRAMEWORK_VERBS = {
+    "chi": {"Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH", "Head": "HEAD",
+            "Options": "OPTIONS", "Connect": "CONNECT", "Trace": "TRACE", "Handle": "ANY", "HandleFunc": "ANY"},
+    "echo": {"GET": "GET", "POST": "POST", "PUT": "PUT", "DELETE": "DELETE", "PATCH": "PATCH", "HEAD": "HEAD",
+             "OPTIONS": "OPTIONS", "CONNECT": "CONNECT", "TRACE": "TRACE", "Any": "ANY"},
+    "fiber": {"Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH", "Head": "HEAD",
+              "Options": "OPTIONS", "Connect": "CONNECT", "Trace": "TRACE", "All": "ANY"},
+    "httprouter": {"GET": "GET", "POST": "POST", "PUT": "PUT", "DELETE": "DELETE", "PATCH": "PATCH", "HEAD": "HEAD",
+                   "OPTIONS": "OPTIONS", "Handler": "ANY", "HandlerFunc": "ANY"},
+}
+
+
+def _go_web_frameworks(source: bytes) -> list[str]:
+    """Every one of chi, Echo, Fiber and httprouter the file imports: their route calls look like Gin's or net/http's, so
+    the imports decide which framework a `r.Get("/x", h)` / `e.GET("/x", h)` belongs to."""
+    return [name for marker, name in _GO_WEB_FRAMEWORK_IMPORTS if marker in source]
+
+
+def _go_chi_route_prefix(node: Node, source: bytes) -> str:
+    """Prefix a call carries from the enclosing `r.Route("/api", func(r chi.Router) { ... })` closures."""
+    parts: list[str] = []
+    current = node.parent
+    while current is not None:
+        if current.type == "func_literal":
+            args = current.parent
+            call = args.parent if args is not None and args.type == "argument_list" else None
+            func = call.child_by_field_name("function") if call is not None else None
+            if func is not None and func.type == "selector_expression":
+                field = func.child_by_field_name("field")
+                named = args.named_children
+                if (
+                    field is not None
+                    and source[field.start_byte : field.end_byte].decode() == "Route"
+                    and named
+                    and named[0].type == "interpreted_string_literal"
+                    and named[-1].id == current.id
+                ):
+                    parts.append(_go_string_literal_text(named[0], source))
+        current = current.parent
+    return "".join("/" + part.strip("/") for part in reversed(parts) if part.strip("/"))
+
+
+def _extract_go_framework_routes(root: Node, source: bytes, rel_path: str, framework: str) -> list[dict]:
+    """Routes of chi, Echo and Fiber: verb calls with a literal path, composed with the `Group("/p")` variable they are
+    called on (Echo, Fiber) or the enclosing `Route("/p", func(r chi.Router) {..})` closures (chi)."""
+    verbs = _GO_FRAMEWORK_VERBS[framework]
+    group_prefixes = _gin_group_prefix_bindings(root, source) if framework in ("echo", "fiber") else {}
+    entries: list[dict] = []
+    for n in _walk_tree(root):
+        if n.type != "call_expression":
+            continue
+        func = n.child_by_field_name("function")
+        if func is None or func.type != "selector_expression":
+            continue
+        field = func.child_by_field_name("field")
+        args = n.child_by_field_name("arguments")
+        if field is None or args is None:
+            continue
+        name = source[field.start_byte : field.end_byte].decode()
+        package = func.child_by_field_name("operand")
+        if package is not None and package.type == "identifier" and source[package.start_byte : package.end_byte] == b"http":
+            continue  # `http.HandleFunc(...)` is net/http's own matcher's
+        named = args.named_children
+        method = verbs.get(name)
+        if framework == "httprouter" and name in ("Handle", "Handler", "HandlerFunc") and len(named) >= 3 and named[0].type == "interpreted_string_literal":
+            method = _go_string_literal_text(named[0], source).upper() or None
+            named = named[1:]
+        elif framework == "httprouter" and name in ("Handler", "HandlerFunc"):
+            method = None  # `Handler(method, path, h)` needs the method first
+        if framework == "chi" and name == "Method" and len(named) >= 3 and named[0].type == "interpreted_string_literal":
+            method = _go_string_literal_text(named[0], source).upper() or None
+            named = named[1:]
+        if method is None or not named or named[0].type != "interpreted_string_literal":
+            continue
+        path = _go_string_literal_text(named[0], source)
+        if framework == "chi":
+            prefix = _go_chi_route_prefix(n, source)
+        elif framework == "httprouter":
+            prefix = ""
+        else:
+            operand = func.child_by_field_name("operand")
+            receiver = source[operand.start_byte : operand.end_byte].decode() if operand is not None and operand.type == "identifier" else None
+            prefix = _resolve_group_prefix(group_prefixes, n, root, receiver) if receiver else ""
+        full_path = f"{prefix.rstrip('/')}/{path.lstrip('/')}" if prefix else path
+        entries.append(
+            {
+                "method": method,
+                "path": full_path or "/",
+                "framework": framework,
+                "file": rel_path,
+                "line": n.start_point[0] + 1,
+                "handler": _go_handler_name(named, source),
+                "unresolved": False,
+                "note": None,
+            }
+        )
+    return entries
+
+
 def _extract_gin_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
     group_prefixes = _gin_group_prefix_bindings(root, source)
@@ -2106,8 +2211,15 @@ def map_api_endpoints(
             if source is None:
                 continue
             tree = parsers["go"].parse(source)
-            endpoints.extend(_extract_go_net_http_routes(tree.root_node, source, rel_path))
-            endpoints.extend(_extract_gin_routes(tree.root_node, source, rel_path))
+            go_frameworks = _go_web_frameworks(source)
+            for go_framework in go_frameworks:
+                endpoints.extend(_extract_go_framework_routes(tree.root_node, source, rel_path, go_framework))
+            # net/http and Gin keep their own matchers: always when no framework above is imported, and otherwise only when
+            # the file really uses them (package-level http.Handle*, or the gin import), so a chi file is not read twice
+            if not go_frameworks or b"http.Handle" in source or b"http.NewServeMux" in source:
+                endpoints.extend(_extract_go_net_http_routes(tree.root_node, source, rel_path))
+            if not go_frameworks or b"gin-gonic/gin" in source:
+                endpoints.extend(_extract_gin_routes(tree.root_node, source, rel_path))
         elif suffix == ".rs":
             source = read_bytes_or_none(path)
             if source is None:

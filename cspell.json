@@ -21,6 +21,7 @@
   ],
   "words": [
     "aiohttp",
+    "httprouter",
     "Trendshift",
     "phuryn",
     "qdrant",
