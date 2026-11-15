@@ -67,3 +67,38 @@ async fn health() -> HttpResponse { HttpResponse::Ok().finish() }
 pub async fn make(id: String) -> HttpResponse { HttpResponse::Ok().finish() }
 """
     assert _routes(tmp_path, code) == [("GET", "/health"), ("POST", "/items/{id}")]
+
+
+def test_attribute_route_registered_under_a_scope_gets_the_prefix(tmp_path):
+    code = """
+use actix_web::{get, web, App, HttpServer};
+
+#[get("/health")]
+async fn health() -> &'static str { "ok" }
+
+#[get("/list")]
+async fn list() -> &'static str { "ok" }
+
+fn main() {
+    App::new()
+        .service(health)
+        .service(web::scope("/api").service(list));
+}
+"""
+    assert _routes(tmp_path, code) == [("GET", "/api/list"), ("GET", "/health")]
+
+
+def test_attribute_route_in_a_configure_function_keeps_the_unapplied_prefix_note(tmp_path):
+    code = """
+use actix_web::{get, web};
+
+#[get("/list")]
+async fn list() -> &'static str { "ok" }
+
+pub fn init(cfg: &mut web::ServiceConfig) {
+    cfg.service(list);
+}
+"""
+    (tmp_path / "routes.rs").write_text(code)
+    eps = map_api_endpoints(tmp_path)["endpoints"]
+    assert [(e["path"], bool(e["note"])) for e in eps] == [("/list", True)]

@@ -1043,12 +1043,18 @@ def _extract_actix_routes(root: Node, source: bytes, rel_path: str) -> list[dict
             }
         )
 
-    def evaluate(node: Node, prefix: str, depth: int = 0) -> None:
+    service_prefixes: dict[str, list[str]] = {}  # handler fn name -> prefixes it is registered under (known chains only)
+
+    def evaluate(node: Node, prefix: str, depth: int = 0, known: bool | None = None) -> None:
         if depth > 20:
             return
         base, calls = _actix_unroll(node, source)
         if base is None:
             return
+        if known is None:
+            # a chain rooted at a call (`App::new()`, `web::scope(..)`) has a known prefix; one rooted at a variable
+            # (`cfg` in a `configure` function) may sit under any scope
+            known = base.type == "call_expression"
         resource: str | None = None
         if base.type == "call_expression":
             name = _actix_callee(base, source)
@@ -1078,22 +1084,14 @@ def _extract_actix_routes(root: Node, source: bytes, rel_path: str) -> list[dict
             elif field in ("service", "configure") and named:
                 for arg in named:
                     if arg.type == "call_expression":
-                        evaluate(arg, prefix, depth + 1)
+                        evaluate(arg, prefix, depth + 1, known)
+                    elif arg.type in ("identifier", "scoped_identifier") and field == "service" and known:
+                        prefixes = service_prefixes.setdefault(_actix_text(arg, source).split("::")[-1], [])
+                        if prefix not in prefixes:
+                            prefixes.append(prefix)
 
     text = source.decode(errors="replace")
-    for m in _ACTIX_ATTRIBUTE_ROUTE.finditer(text):
-        entries.append(
-            {
-                "method": m.group(1).upper(),
-                "path": m.group(2) or "/",
-                "framework": "actix",
-                "file": rel_path,
-                "line": text.count("\n", 0, m.start()) + 1,
-                "handler": m.group(3),
-                "unresolved": False,
-                "note": "attribute route: a surrounding web::scope prefix is not applied",
-            }
-        )
+    attribute_matches = list(_ACTIX_ATTRIBUTE_ROUTE.finditer(text))
 
     for n in _walk_tree(root):
         if n.type != "call_expression" or any(a <= n.start_byte and n.end_byte <= b for a, b in covered):
@@ -1111,6 +1109,23 @@ def _extract_actix_routes(root: Node, source: bytes, rel_path: str) -> list[dict
         # configure-style parameter; nested ones are reached recursively.
         evaluate(n, "")
         covered.append((n.start_byte, n.end_byte))
+
+    for m in attribute_matches:
+        line = text.count("\n", 0, m.start()) + 1
+        prefixes = service_prefixes.get(m.group(3))
+        for prefix in prefixes or [None]:
+            entries.append(
+                {
+                    "method": m.group(1).upper(),
+                    "path": _actix_join(prefix, m.group(2)) if prefix is not None else (m.group(2) or "/"),
+                    "framework": "actix",
+                    "file": rel_path,
+                    "line": line,
+                    "handler": m.group(3),
+                    "unresolved": False,
+                    "note": None if prefix is not None else "attribute route: a surrounding web::scope prefix is not applied",
+                }
+            )
     return entries
 
 
