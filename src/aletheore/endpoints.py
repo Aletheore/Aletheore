@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -1621,6 +1622,92 @@ def _laravel_group_note(call_node: Node, source: bytes) -> str | None:
     return None
 
 
+_SYMFONY_ROUTE = re.compile(
+    r"#\[\s*(?:\\?Symfony\\Component\\Routing\\(?:Attribute|Annotation)\\)?Route\s*\(([^()]*)\)\s*\]"
+    r"\s*(?:#\[[^\]]*\]\s*)*(?:(?:public|private|protected|final|abstract|static|readonly)\s+)*(class|function)\s+(\w+)",
+    re.S,
+)
+_SLIM_ROUTE = re.compile(r"\$\w+\s*->\s*(get|post|put|delete|patch|options|any)\s*\(\s*(['\"])([^'\"]*)\2")
+_SLIM_GROUP = re.compile(r"->\s*group\s*\(\s*(['\"])([^'\"]*)\1\s*,\s*(?:static\s+)?(?:function|fn)[^{]*\{")
+_PHP_STRING = re.compile(r"""['"]([^'"]*)['"]""")
+
+
+def _php_brace_end(text: str, open_index: int) -> int:
+    depth = 0
+    for index in range(open_index, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return len(text)
+
+
+def _extract_symfony_routes(source: bytes, rel_path: str) -> list[dict]:
+    """Symfony attribute routes: `#[Route('/api')]` on a class prefixes the `#[Route('/x', methods: ['GET', 'POST'])]`
+    on its methods (any HTTP method when `methods` is absent). Routes configured in YAML or by docblock annotations
+    are not read."""
+    text = source.decode(errors="replace")
+    entries: list[dict] = []
+    class_prefixes: dict[str, str] = {}
+    class_starts = [(m.start(), m.group(1)) for m in re.finditer(r"\bclass\s+(\w+)", text)]
+    for match in _SYMFONY_ROUTE.finditer(text):
+        args, kind, name = match.group(1), match.group(2), match.group(3)
+        head = re.sub(r"\bmethods\s*:\s*\[[^\]]*\]", "", args)
+        path_match = re.search(r"(?:\bpath\s*:\s*)?['\"]([^'\"]*)['\"]", head)
+        path = path_match.group(1) if path_match else ""
+        if kind == "class":
+            class_prefixes[name] = path
+            continue
+        enclosing = next((cname for start, cname in reversed(class_starts) if start < match.start()), None)
+        class_prefix = class_prefixes.get(enclosing or "", "")
+        methods_match = re.search(r"\bmethods\s*:\s*\[([^\]]*)\]", args)
+        methods = [m.upper() for m in _PHP_STRING.findall(methods_match.group(1))] if methods_match else ["ANY"]
+        full = (class_prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") if class_prefix else path
+        for method in methods:
+            entries.append(
+                {
+                    "method": method,
+                    "path": full or "/",
+                    "framework": "symfony",
+                    "file": rel_path,
+                    "line": text.count("\n", 0, match.start()) + 1,
+                    "handler": name,
+                    "unresolved": False,
+                    "note": None,
+                }
+            )
+    return entries
+
+
+def _extract_slim_routes(source: bytes, rel_path: str) -> list[dict]:
+    """Slim routes: `$app->get('/x', $handler)` (also post, put, delete, patch, options, any), inside any number of
+    `$app->group('/api', function (...) { ... })` closures whose prefixes are composed."""
+    text = source.decode(errors="replace")
+    groups = [(m.end() - 1, _php_brace_end(text, m.end() - 1), m.group(2)) for m in _SLIM_GROUP.finditer(text)]
+    entries: list[dict] = []
+    for match in _SLIM_ROUTE.finditer(text):
+        prefix = "".join("/" + g[2].strip("/") for g in sorted(groups) if g[0] < match.start() < g[1] and g[2].strip("/"))
+        path = match.group(3)
+        if path and not path.startswith(("/", "[")):
+            continue  # `$settings->get('displayErrorDetails')`: a container or config lookup, not a route
+        full = (prefix + "/" + path.lstrip("/")).rstrip("/") if prefix else path
+        entries.append(
+            {
+                "method": "ANY" if match.group(1) == "any" else match.group(1).upper(),
+                "path": full or "/",
+                "framework": "slim",
+                "file": rel_path,
+                "line": text.count("\n", 0, match.start()) + 1,
+                "handler": "unknown",
+                "unresolved": False,
+                "note": None,
+            }
+        )
+    return entries
+
+
 def _extract_laravel_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
@@ -2029,6 +2116,14 @@ def map_api_endpoints(
                 continue
             tree = parsers["php"].parse(source)
             endpoints.extend(_extract_laravel_routes(tree.root_node, source, rel_path))
+        elif suffix == ".php":
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
+            if b"Route(" in source and b"#[" in source:
+                endpoints.extend(_extract_symfony_routes(source, rel_path))
+            if b"Slim\\" in source or b"Slim/" in source:
+                endpoints.extend(_extract_slim_routes(source, rel_path))
         elif suffix == ".cs":
             source = read_bytes_or_none(path)
             if source is None:
