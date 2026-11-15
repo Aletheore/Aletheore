@@ -56,3 +56,18 @@ def test_hono_sub_app_mounted_twice_is_listed_at_both(tmp_path):
 def test_plain_express_files_are_unchanged(tmp_path):
     code = "const router = require('express').Router()\nrouter.get('/x', h)\n"
     assert _routes(tmp_path, {"r.js": code}) == [("GET", "/x")]
+
+
+def test_koa_root_prefix_does_not_double_the_slash(tmp_path):
+    code = "const Router = require('@koa/router')\nconst r = new Router({ prefix: '/' })\nr.get('/api', h)\n"
+    assert _routes(tmp_path, {"a.js": code}) == [("GET", "/api")]
+
+
+def test_prefix_call_on_a_non_router_in_a_file_without_koa_is_ignored(tmp_path):
+    code = "const router = require('express').Router()\nconst thing = makeThing()\nthing.prefix('/x')\nrouter.get('/a', h)\n"
+    assert _routes(tmp_path, {"a.js": code}) == [("GET", "/a")]
+
+
+def test_two_routes_on_one_line_each_get_their_own_receiver(tmp_path):
+    code = "import { Hono } from 'hono'\nconst app = new Hono()\nconst api = new Hono().basePath('/v1')\napp.get('/a', h); api.get('/b', h)\napp.route('/api', api)\n"
+    assert _routes(tmp_path, {"i.ts": code}) == [("GET", "/a"), ("GET", "/api/v1/b")]

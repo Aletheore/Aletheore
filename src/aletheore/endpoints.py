@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -688,7 +689,7 @@ def _koa_router_prefixes(root: Node, source: bytes) -> dict[str, str]:
             args = value.child_by_field_name("arguments")
             obj = next((a for a in (args.named_children if args is not None else []) if a.type == "object"), None)
             prefix = _js_string_arg(_object_value(obj, source, "prefix"), source) if obj is not None else None
-            if prefix:
+            if prefix and prefix.strip("/"):
                 found[source[name.start_byte : name.end_byte].decode()] = "/" + prefix.strip("/")
         elif n.type == "call_expression":
             func = n.child_by_field_name("function")
@@ -697,7 +698,7 @@ def _koa_router_prefixes(root: Node, source: bytes) -> dict[str, str]:
                 prop, obj = func.child_by_field_name("property"), func.child_by_field_name("object")
                 if prop is not None and obj is not None and obj.type == "identifier" and source[prop.start_byte : prop.end_byte].decode() == "prefix":
                     literal = _js_string_arg(args.named_children[0] if args.named_children else None, source)
-                    if literal:
+                    if literal and literal.strip("/"):
                         found[source[obj.start_byte : obj.end_byte].decode()] = "/" + literal.strip("/")
     return found
 
@@ -709,17 +710,26 @@ def _extract_express_family_routes(
     router's `prefix`, and the `route('/p', sub)` mounts and `basePath` of a Hono app (mounts across files are in
     `hono_prefixes`). The receiver of each call is found by its line."""
     entries = _extract_express_routes(root, source, rel_path)
-    koa = _koa_router_prefixes(root, source) if b"koa" in source.lower() else {}
+    koa = _koa_router_prefixes(root, source) if re.search(rb"""['"](?:@koa/router|koa-router|koa-tree-router|@koa/[\w-]*router)['"]""", source) else {}
     hono = {key[1]: prefixes for key, prefixes in (hono_prefixes or {}).items() if key[0] == rel_path}
     if not entries or not (koa or hono):
         return entries
-    receivers: dict[int, str | None] = {}
+    verbs = {"get", "post", "put", "delete", "patch", "head", "options", "all", "use", "route"}
+    receivers: dict[int, list[str | None]] = {}
     for call in _walk_tree(root):
-        if call.type == "call_expression":
-            receivers.setdefault(call.start_point[0] + 1, _js_call_receiver(call, source))  # the outer call of a line comes first
+        if call.type != "call_expression":
+            continue
+        func = call.child_by_field_name("function")
+        prop = func.child_by_field_name("property") if func is not None and func.type == "member_expression" else None
+        if prop is not None and source[prop.start_byte : prop.end_byte].decode() in verbs:
+            receivers.setdefault(call.start_point[0] + 1, []).append(_js_call_receiver(call, source))  # source order
+    taken: dict[int, int] = {}
     adjusted: list[dict] = []
     for entry in entries:
-        receiver = receivers.get(entry["line"])
+        on_line = receivers.get(entry["line"], [])
+        index = taken.get(entry["line"], 0)  # several routes on one line take their receivers in source order
+        taken[entry["line"]] = index + 1
+        receiver = on_line[index] if index < len(on_line) else None
         if receiver in koa:
             adjusted.append({**entry, "path": koa[receiver] + entry["path"] if entry["path"] != "/" else koa[receiver]})
         elif receiver in hono and hono[receiver] != [""]:
