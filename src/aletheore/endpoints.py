@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -1906,6 +1907,9 @@ def _resolve_js_module_spec(repo_path: Path, from_path: Path, spec: str) -> str 
     return None
 
 
+_JS_REEXPORT = re.compile(rb"\bexport\s+(?:\*|\{[^}]*\})(?:\s+as\s+\w+)?\s+from\b")
+
+
 def map_api_endpoints(
     repo_path: Path,
     *,
@@ -1981,7 +1985,7 @@ def map_api_endpoints(
             continue
         source = read_bytes_or_none(path)
         if source is None or (b"express" not in source and b".use(" not in source and b"Router" not in source
-                              and not (b"export" in source and b" from " in source)):  # a barrel that re-exports routers
+                              and not _JS_REEXPORT.search(source)):  # a barrel that re-exports routers
             continue
         tree = parsers[parser_key].parse(source)
         express_facts.append(_em.collect_file_facts(

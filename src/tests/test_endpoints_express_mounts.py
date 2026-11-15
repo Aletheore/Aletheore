@@ -201,3 +201,19 @@ def test_router_variable_built_by_a_local_factory_keeps_its_mount_prefix(tmp_pat
         "users.js": "import { Router } from 'express';\nfunction makeRouter() { const r = Router(); return r; }\nexport const users = makeRouter();\nusers.get('/me', h);\n",
     })
     assert ("GET", "/users/me") in got
+
+
+def test_export_star_as_a_namespace_is_not_followed_as_a_star_reexport(tmp_path):
+    got = _routes(tmp_path, {
+        "app.js": "import express from 'express';\nimport { admin } from './routes/index.js';\nconst app = express();\napp.use('/admin', admin);\n",
+        "routes/index.js": "export * as ns from './other.js';\n",
+        "routes/other.js": "import { Router } from 'express';\nexport const admin = Router();\nadmin.get('/stats', h);\n",
+    })
+    assert ("GET", "/admin/stats") not in got  # `admin` is not exported by the barrel: only `ns` is
+
+
+def test_module_that_only_mentions_export_and_from_is_not_collected(tmp_path):
+    from aletheore.endpoints import _JS_REEXPORT
+
+    assert not _JS_REEXPORT.search(b"module.exports = helper; const x = require('y'); // export and from")
+    assert _JS_REEXPORT.search(b"export { a as b } from './x'") and _JS_REEXPORT.search(b"export * from './x'")

@@ -217,7 +217,8 @@ def collect_file_facts(root: Node, source: bytes, rel_path: str, resolve_module:
             if file:
                 clause = next((c for c in n.children if c.type == "export_clause"), None)
                 if clause is None:
-                    star_reexports.append(file)
+                    if not any(c.type == "namespace_export" for c in n.children):  # `export * as ns from` names a namespace
+                        star_reexports.append(file)
                 else:
                     for part in clause.named_children:
                         if part.type == "export_specifier":
