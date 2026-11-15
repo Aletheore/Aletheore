@@ -22,8 +22,8 @@ env:
 
 jobs:
   retrieval-mrr:
-    # Pinned, not ubuntu-latest: the same commit scored MRR 0.4661 on ubuntu-24.04 (2026-10-29) and 0.4487 on
-    # ubuntu-26.04 (2026-11-14), which failed the gate on PRs that change nothing about retrieval.
+    # Pinned, not ubuntu-latest, so a runner-image change cannot move the score unnoticed; baseline.json was
+    # measured on this image. (Pinning did not fix the 2026-11 drop by itself, see baseline.json's comment.)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -36,11 +36,7 @@ jobs:
 
       - name: Install Aletheore
         working-directory: src
-        run: |
-          pip install -e "."
-          # EXPERIMENT: the versions in the last green run (2026-10-29); tree-sitter moved 0.26.0 -> 0.26.1 and
-          # pyarrow 26.0.0 -> 26.0.1 between that run and the first failing one.
-          pip install "tree-sitter==0.26.0" "pyarrow==26.0.0"
+        run: pip install -e "."
 
       # Local, not hosted - build_fixture.py's `aletheore index` and
       # score.py's search_index() both call with allow_hosted=False, so
