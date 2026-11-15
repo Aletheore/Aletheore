@@ -5,7 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- Rocket routes are found, with the prefix of the mount that names each handler, including mounts in another file.
+- Rocket routes are found, with the prefix of the mount that names each handler, including mounts in another file. warp filter chains (`warp::path("a").and(warp::get())`, `path!` segments, `.or(...)` alternatives) are read as one route each.
 
 ## 0.13.0 - 2026-11-14
 

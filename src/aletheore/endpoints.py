@@ -977,6 +977,83 @@ def _extract_rocket_routes(
     return entries
 
 
+_WARP_VERB = re.compile(r"warp::(get|post|put|delete|patch|head|options)\s*\(\s*\)")
+_WARP_PATH_CALL = re.compile(r'warp::path\s*\(\s*"([^"]*)"\s*\)')
+_WARP_PATH_MACRO = re.compile(r"warp::path!\s*\(([^)]*)\)")
+_WARP_PARAM = re.compile(r"warp::path::param\b")
+_WARP_HANDLER = re.compile(r"\.(?:and_then|then)\(\s*(?:[\w:]*::)?(\w+)\s*\)")
+
+
+def _warp_split_alternatives(text: str) -> list[str]:
+    """Split a filter chain at its top-level `.or(...)` combinators: `a.or(b).or(c)` -> [a, b, c], each alternative cut at
+    the parenthesis that closes its own `.or(`."""
+    pieces: list[str] = []
+    depth = 0
+    first_end: int | None = None
+    i = 0
+    while i < len(text):
+        if depth == 0 and text.startswith(".or(", i):
+            if first_end is None:
+                first_end = i
+                pieces.append(text[:i])
+            start = i + 4
+            inner = 1
+            j = start
+            while j < len(text) and inner:
+                inner += {"(": 1, ")": -1}.get(text[j], 0)
+                j += 1
+            pieces.append(text[start : j - 1])
+            i = j
+            continue
+        if text[i] in "([{":
+            depth += 1
+        elif text[i] in ")]}":
+            depth -= 1
+        i += 1
+    return pieces or [text]
+
+
+def _extract_warp_routes(source: bytes, rel_path: str) -> list[dict]:
+    """warp filters: each `let name = warp::path("users").and(warp::get())...;` chain (and each of its `.or(...)`
+    alternatives) is one route: the `warp::path("a")` / `warp::path!("a" / "b" / u32)` segments in order (a non-literal
+    segment or `path::param` is `{param}`), the `warp::get()` ... verb (any method when none is named), and the
+    `and_then(handler)` name. A filter composed only of other named filters is not followed."""
+    text = source.decode(errors="replace")
+    entries: list[dict] = []
+    for statement in re.finditer(r"let\s+(?:mut\s+)?\w+\s*(?::[^=]+)?=\s*((?:[^;{}]|\{[^{}]*\})*?warp::[^;]*);", text, re.S):
+        body = statement.group(1)
+        for piece in _warp_split_alternatives(body):
+            events: list[tuple[int, str]] = []
+            for m in _WARP_PATH_CALL.finditer(piece):
+                events.append((m.start(), m.group(1)))
+            for m in _WARP_PATH_MACRO.finditer(piece):
+                for part in (p.strip() for p in m.group(1).split("/")):
+                    if part:
+                        events.append((m.start(), part.strip('"') if part.startswith('"') else "{param}"))
+            for m in _WARP_PARAM.finditer(piece):
+                events.append((m.start(), "{param}"))
+            verb = _WARP_VERB.search(piece)
+            if not events and verb is None:
+                continue
+            if not events and "path::end" not in piece:
+                continue
+            segments = [seg.strip("/") for _pos, seg in sorted(events, key=lambda item: item[0]) if seg.strip("/") or seg == ""]
+            handler = _WARP_HANDLER.search(piece)
+            entries.append(
+                {
+                    "method": verb.group(1).upper() if verb else "ANY",
+                    "path": "/" + "/".join(s for s in segments if s),
+                    "framework": "warp",
+                    "file": rel_path,
+                    "line": text.count("\n", 0, statement.start(1)) + 1,
+                    "handler": handler.group(1) if handler else "closure",
+                    "unresolved": False,
+                    "note": "read from the text of one filter chain; filters combined elsewhere are not followed",
+                }
+            )
+    return entries
+
+
 def _extract_axum_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
@@ -2081,6 +2158,8 @@ def map_api_endpoints(
             endpoints.extend(_extract_axum_routes(tree.root_node, source, rel_path))
             if b"rocket" in source:
                 endpoints.extend(_extract_rocket_routes(source, rel_path, rocket_mounts))
+            if b"warp::" in source:
+                endpoints.extend(_extract_warp_routes(source, rel_path))
         elif suffix == ".java":
             source = read_bytes_or_none(path)
             if source is None:

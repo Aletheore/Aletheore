@@ -56,3 +56,33 @@ def test_mount_in_another_file_prefixes_the_handler_of_that_module(tmp_path):
 def test_query_part_of_the_route_is_not_part_of_the_path(tmp_path):
     code = '#[get("/articles?<limit>&<offset>")]\nfn list(limit: u8, offset: u8) {}\nfn b() { rocket::build().mount("/api", routes![list]); }\n'
     assert _entries(tmp_path, code) == [("GET", "/api/articles", False)]
+
+
+def _warp(tmp_path, code):
+    (tmp_path / "main.rs").write_text(code)
+    return sorted((e["method"], e["path"], e["handler"]) for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "warp")
+
+
+def test_warp_path_filters_verbs_and_macro_segments(tmp_path):
+    code = '''
+use warp::Filter;
+fn main() {
+    let list = warp::path("users").and(warp::get()).and_then(list_users);
+    let one = warp::path!("users" / u32).and(warp::get()).map(|id| id.to_string());
+    let create = warp::path("users").and(warp::path::end()).and(warp::post()).and_then(create_user);
+    let hello = warp::path!("hello" / String).map(|name| name);
+}
+'''
+    assert _warp(tmp_path, code) == [
+        ("ANY", "/hello/{param}", "closure"), ("GET", "/users", "list_users"), ("GET", "/users/{param}", "closure"),
+        ("POST", "/users", "create_user"),
+    ]
+
+
+def test_warp_or_alternatives_are_separate_routes(tmp_path):
+    code = 'use warp::Filter;\nfn f() {\n    let r = warp::path("a").and(warp::get()).or(warp::path("b").and(warp::delete()));\n}\n'
+    assert _warp(tmp_path, code) == [("DELETE", "/b", "closure"), ("GET", "/a", "closure")]
+
+
+def test_warp_without_the_crate_is_ignored(tmp_path):
+    assert _warp(tmp_path, 'fn f() { let x = path("a"); }\n') == []
