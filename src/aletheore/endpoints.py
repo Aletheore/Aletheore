@@ -521,6 +521,215 @@ def _looks_like_express_path(path: str) -> bool:
     return path == "*" or path.startswith("/")
 
 
+_JS_RESOLVE_SUFFIXES = ("", ".ts", ".tsx", ".js", ".jsx", ".mjs", "/index.ts", "/index.tsx", "/index.js")
+
+
+def _js_resolve_relative(repo_path: Path, from_file: Path, spec: str) -> str | None:
+    """A relative import specifier -> the repo-relative file it names (`./users` -> `src/users.ts`), None otherwise."""
+    if not spec.startswith("."):
+        return None
+    base = (from_file.parent / spec).resolve()
+    for suffix in _JS_RESOLVE_SUFFIXES:
+        candidate = Path(str(base) + suffix)
+        if candidate.is_file():
+            try:
+                return candidate.relative_to(repo_path.resolve()).as_posix()
+            except ValueError:
+                return None
+    return None
+
+
+def _js_call_receiver(call: Node, source: bytes) -> str | None:
+    """The variable a (possibly chained) method call starts from: `app.get(..).post(..)` -> `app`."""
+    func = call.child_by_field_name("function")
+    node = func.child_by_field_name("object") if func is not None and func.type == "member_expression" else None
+    while node is not None and node.type == "call_expression":
+        inner = node.child_by_field_name("function")
+        node = inner.child_by_field_name("object") if inner is not None and inner.type == "member_expression" else None
+    return source[node.start_byte : node.end_byte].decode() if node is not None and node.type == "identifier" else None
+
+
+def _js_string_arg(node: Node | None, source: bytes) -> str | None:
+    return _js_string_literal_text(node, source) if node is not None and node.type == "string" else None
+
+
+def _hono_chain_base_path(value: Node | None, source: bytes) -> str | None:
+    """`new Hono()` -> ""; `new Hono().basePath('/v1')` -> "/v1"; anything else -> None (not a Hono instance)."""
+    base = ""
+    node = value
+    while node is not None and node.type == "call_expression":
+        func = node.child_by_field_name("function")
+        if func is None or func.type != "member_expression":
+            return None
+        prop = func.child_by_field_name("property")
+        if prop is None or source[prop.start_byte : prop.end_byte].decode() != "basePath":
+            return None
+        args = node.child_by_field_name("arguments")
+        literal = _js_string_arg(args.named_children[0] if args is not None and args.named_children else None, source)
+        base = "/" + literal.strip("/") + base if literal and literal.strip("/") else base
+        node = func.child_by_field_name("object")
+    if node is not None and node.type == "new_expression":
+        ctor = node.child_by_field_name("constructor")
+        if ctor is not None and source[ctor.start_byte : ctor.end_byte].decode() in ("Hono", "OpenAPIHono"):
+            return base
+    return None
+
+
+def _hono_file_facts(root: Node, source: bytes, rel_path: str, resolve_module) -> dict:
+    instances: dict[str, str] = {}
+    mounts: list[tuple[str, str, str]] = []  # (parent var, mount path, sub-app identifier)
+    imports: dict[str, tuple[str, str]] = {}  # local name -> (file, exported name or "default")
+    exports: dict[str, str] = {}  # exported name -> local var
+    for n in _walk_tree(root):
+        if n.type == "variable_declarator":
+            name = n.child_by_field_name("name")
+            base = _hono_chain_base_path(n.child_by_field_name("value"), source)
+            if name is not None and name.type == "identifier" and base is not None:
+                instances[source[name.start_byte : name.end_byte].decode()] = base
+                parent = n.parent.parent if n.parent is not None else None
+                if parent is not None and parent.type == "export_statement":
+                    exports[source[name.start_byte : name.end_byte].decode()] = source[name.start_byte : name.end_byte].decode()
+        elif n.type == "call_expression":
+            func = n.child_by_field_name("function")
+            args = n.child_by_field_name("arguments")
+            if func is not None and func.type == "member_expression" and args is not None:
+                prop = func.child_by_field_name("property")
+                obj = func.child_by_field_name("object")
+                named = args.named_children
+                if prop is not None and source[prop.start_byte : prop.end_byte].decode() == "route" and obj is not None \
+                        and obj.type == "identifier" and len(named) >= 2 and named[1].type == "identifier":
+                    mount_path = _js_string_arg(named[0], source)
+                    if mount_path is not None:
+                        mounts.append((source[obj.start_byte : obj.end_byte].decode(), mount_path, source[named[1].start_byte : named[1].end_byte].decode()))
+        elif n.type == "import_statement":
+            spec = _js_string_arg(n.child_by_field_name("source"), source)
+            file = resolve_module(spec) if spec else None
+            if not file:
+                continue
+            for clause in (c for c in n.children if c.type == "import_clause"):
+                for part in clause.children:
+                    if part.type == "identifier":
+                        imports[source[part.start_byte : part.end_byte].decode()] = (file, "default")
+                    elif part.type == "named_imports":
+                        for spec_node in (c for c in part.children if c.type == "import_specifier"):
+                            nm, alias = spec_node.child_by_field_name("name"), spec_node.child_by_field_name("alias")
+                            if nm is not None:
+                                imports[source[(alias or nm).start_byte : (alias or nm).end_byte].decode()] = (file, source[nm.start_byte : nm.end_byte].decode())
+        elif n.type == "export_statement":
+            if any(c.type == "default" for c in n.children):
+                value = n.child_by_field_name("value")
+                if value is not None and value.type == "identifier":
+                    exports["default"] = source[value.start_byte : value.end_byte].decode()
+            for clause in (c for c in n.children if c.type == "export_clause"):
+                for spec_node in (c for c in clause.children if c.type == "export_specifier"):
+                    nm, alias = spec_node.child_by_field_name("name"), spec_node.child_by_field_name("alias")
+                    if nm is not None:
+                        exports[source[(alias or nm).start_byte : (alias or nm).end_byte].decode()] = source[nm.start_byte : nm.end_byte].decode()
+    return {"file": rel_path, "instances": instances, "mounts": mounts, "imports": imports, "exports": exports}
+
+
+def _hono_resolve_prefixes(all_facts: list[dict]) -> dict[tuple[str, str], list[str]]:
+    """(file, Hono instance variable) -> every path prefix its routes are served at: the mount path of each `parent.route(
+    '/p', sub)` in front of the instance's own `basePath`, on top of the parent's prefixes."""
+    by_file = {f["file"]: f for f in all_facts}
+    incoming: dict[tuple[str, str], list[tuple[tuple[str, str], str]]] = {}
+    for facts in all_facts:
+        for parent, mount_path, sub in facts["mounts"]:
+            if parent not in facts["instances"]:
+                continue
+            target: tuple[str, str] | None = None
+            if sub in facts["instances"]:
+                target = (facts["file"], sub)
+            elif sub in facts["imports"]:
+                file, name = facts["imports"][sub]
+                other = by_file.get(file)
+                var = other["exports"].get(name) if other else None
+                if var and other and var in other["instances"]:
+                    target = (file, var)
+            if target is not None:
+                incoming.setdefault(target, []).append(((facts["file"], parent), mount_path))
+
+    def prefixes(node: tuple[str, str], depth: int = 0) -> list[str]:
+        base = by_file[node[0]]["instances"].get(node[1], "")
+        if node not in incoming or depth > 8:
+            return [base]
+        out: list[str] = []
+        for parent, mount_path in incoming[node]:
+            for parent_prefix in prefixes(parent, depth + 1):
+                mount = "/" + mount_path.strip("/") if mount_path.strip("/") else ""
+                joined = parent_prefix + mount + base
+                if joined not in out:
+                    out.append(joined)
+        return out
+
+    return {(f["file"], var): prefixes((f["file"], var)) for f in all_facts for var in f["instances"]}
+
+
+def _object_value(obj: Node, source: bytes, key_name: str) -> Node | None:
+    """The value node of `key_name: value` in a JavaScript / TypeScript object literal."""
+    for pair in (c for c in obj.named_children if c.type == "pair"):
+        key = pair.child_by_field_name("key")
+        if key is not None and source[key.start_byte : key.end_byte].decode().strip("'\"") == key_name:
+            return pair.child_by_field_name("value")
+    return None
+
+
+def _koa_router_prefixes(root: Node, source: bytes) -> dict[str, str]:
+    """`const r = new Router({ prefix: '/api' })` and `r.prefix('/api')` in a file that uses Koa -> {r: '/api'}."""
+    found: dict[str, str] = {}
+    for n in _walk_tree(root):
+        if n.type == "variable_declarator":
+            name, value = n.child_by_field_name("name"), n.child_by_field_name("value")
+            if name is None or value is None or value.type not in ("new_expression", "call_expression"):
+                continue
+            ctor = value.child_by_field_name("constructor") or value.child_by_field_name("function")
+            if ctor is None or ctor.type != "identifier" or source[ctor.start_byte : ctor.end_byte].decode() not in ("Router", "KoaRouter"):
+                continue
+            args = value.child_by_field_name("arguments")
+            obj = next((a for a in (args.named_children if args is not None else []) if a.type == "object"), None)
+            prefix = _js_string_arg(_object_value(obj, source, "prefix"), source) if obj is not None else None
+            if prefix:
+                found[source[name.start_byte : name.end_byte].decode()] = "/" + prefix.strip("/")
+        elif n.type == "call_expression":
+            func = n.child_by_field_name("function")
+            args = n.child_by_field_name("arguments")
+            if func is not None and func.type == "member_expression" and args is not None:
+                prop, obj = func.child_by_field_name("property"), func.child_by_field_name("object")
+                if prop is not None and obj is not None and obj.type == "identifier" and source[prop.start_byte : prop.end_byte].decode() == "prefix":
+                    literal = _js_string_arg(args.named_children[0] if args.named_children else None, source)
+                    if literal:
+                        found[source[obj.start_byte : obj.end_byte].decode()] = "/" + literal.strip("/")
+    return found
+
+
+def _extract_express_family_routes(
+    root: Node, source: bytes, rel_path: str, hono_prefixes: dict[tuple[str, str], list[str]] | None = None
+) -> list[dict]:
+    """Express-style route calls, with the path prefixes of the frameworks that set one on the router object: a Koa
+    router's `prefix`, and the `route('/p', sub)` mounts and `basePath` of a Hono app (mounts across files are in
+    `hono_prefixes`). The receiver of each call is found by its line."""
+    entries = _extract_express_routes(root, source, rel_path)
+    koa = _koa_router_prefixes(root, source) if b"koa" in source.lower() else {}
+    hono = {key[1]: prefixes for key, prefixes in (hono_prefixes or {}).items() if key[0] == rel_path}
+    if not entries or not (koa or hono):
+        return entries
+    receivers: dict[int, str | None] = {}
+    for call in _walk_tree(root):
+        if call.type == "call_expression":
+            receivers.setdefault(call.start_point[0] + 1, _js_call_receiver(call, source))  # the outer call of a line comes first
+    adjusted: list[dict] = []
+    for entry in entries:
+        receiver = receivers.get(entry["line"])
+        if receiver in koa:
+            adjusted.append({**entry, "path": koa[receiver] + entry["path"] if entry["path"] != "/" else koa[receiver]})
+        elif receiver in hono and hono[receiver] != [""]:
+            for prefix in hono[receiver]:
+                adjusted.append({**entry, "path": (prefix + entry["path"]) if entry["path"] != "/" else (prefix or "/")})
+        else:
+            adjusted.append(entry)
+    return adjusted
+
+
 def _extract_express_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
@@ -1949,6 +2158,25 @@ def map_api_endpoints(
     # changed - see docs/audits/Claude_Audit.md finding 20.
     cross_file_mount_defining_files = {defining_file for defining_file, _router in cross_file_router_mounts}
 
+    # Hono: `app.route('/api', sub)` mounts a sub-app that can live in another file, so every file that mentions Hono
+    # is read afresh each scan, never reused from the cache.
+    hono_facts: list[dict] = []
+    for path in source_paths:
+        hono_key = {".js": "js", ".jsx": "js", ".ts": "ts", ".tsx": "tsx"}.get(path.suffix)
+        if hono_key is None:
+            continue
+        hono_source = read_bytes_or_none(path)
+        if hono_source is None or b"hono" not in hono_source.lower():
+            continue
+        cross_file_mount_defining_files.add(_rel(repo_path, path))
+        hono_facts.append(
+            _hono_file_facts(
+                parsers[hono_key].parse(hono_source).root_node, hono_source, _rel(repo_path, path),
+                lambda spec, _p=path: _js_resolve_relative(repo_path, _p, spec),
+            )
+        )
+    hono_prefixes = _hono_resolve_prefixes(hono_facts) if hono_facts else {}
+
     for path in source_paths:
         rel_path = _rel(repo_path, path)
 
@@ -1979,19 +2207,19 @@ def map_api_endpoints(
             if source is None:
                 continue
             tree = parsers["js"].parse(source)
-            endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes))
         elif suffix == ".ts":
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["ts"].parse(source)
-            endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes))
         elif suffix == ".tsx":
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["tsx"].parse(source)
-            endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes))
         elif suffix == ".go":
             source = read_bytes_or_none(path)
             if source is None:
