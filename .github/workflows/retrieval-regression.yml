@@ -36,7 +36,11 @@ jobs:
 
       - name: Install Aletheore
         working-directory: src
-        run: pip install -e "."
+        run: |
+          pip install -e "."
+          # EXPERIMENT: the versions in the last green run (2026-10-29); tree-sitter moved 0.26.0 -> 0.26.1 and
+          # pyarrow 26.0.0 -> 26.0.1 between that run and the first failing one.
+          pip install "tree-sitter==0.26.0" "pyarrow==26.0.0"
 
       # Local, not hosted - build_fixture.py's `aletheore index` and
       # score.py's search_index() both call with allow_hosted=False, so
@@ -83,6 +87,7 @@ jobs:
           path: benchmarks/retrieval-regression/.fixture-cache
           key: >-
             retrieval-fixture-${{ hashFiles(
+              '.github/workflows/retrieval-regression.yml',
               'benchmarks/retrieval-regression/fixture.json',
               'src/aletheore/search_index.py',
               'src/aletheore/scanner/graph.py'
