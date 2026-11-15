@@ -1898,3 +1898,17 @@ def test_extract_aspnet_route_under_a_non_literal_class_route_is_flagged_unresol
     )
 
     assert _extract_aspnet_attribute_routes(root, source, "U.cs")[0]["unresolved"] is True
+
+
+def test_extract_flask_route_methods_given_as_a_tuple_or_a_set():
+    for literal in ('("POST",)', '{"GET", "POST"}', '["POST"]'):
+        root, source = parse_python(f'@bp.route("/api/users", methods={literal})\ndef users():\n    pass\n')
+        methods = {e["method"] for e in _extract_flask_fastapi_routes(root, source, "views.py")}
+        assert methods == ({"GET", "POST"} if "GET" in literal else {"POST"}), literal
+
+
+def test_swift_route_segments_that_start_with_a_slash_do_not_double_it(tmp_path):
+    # Hummingbird-style `router.get("/users")` goes through the Vapor matcher: no `//users`
+    (tmp_path / "a.swift").write_text('import Hummingbird\nlet router = Router()\nrouter.get("/users") { _, _ in "x" }\nrouter.post("items", "{id}") { _, _ in "y" }\n')
+    got = sorted((e["method"], e["path"]) for e in map_api_endpoints(tmp_path)["endpoints"])
+    assert got == [("GET", "/users"), ("POST", "/items/{id}")]

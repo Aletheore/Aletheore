@@ -1,10 +1,10 @@
 {
-  "_comment": "Real measured baseline, not a guess - 30 questions (zod.json + zod_vocab.json) against a fresh index built by build_fixture.py from this repo's own code at the commit noted below. score.py fails the check if a PR's MRR drops more than --max-mrr-drop below this. Update via 'python3 score.py --update-baseline' after a deliberate, reviewed ranking change - never to silence a real regression.",
-  "measured_at_commit": "21097b471fe7bb471681852cfa1bd63f4b696ef2",
-  "measured_date": "2026-09-02",
+  "_comment": "Real measured baseline, not a guess - 30 questions (zod.json + zod_vocab.json) against a fresh index built by build_fixture.py from this repo's own code at the commit noted below. score.py fails the check if a PR's MRR drops more than --max-mrr-drop below this. Update via 'python3 score.py --update-baseline' after a deliberate, reviewed ranking change - never to silence a real regression. Re-measured 2026-11-15 from the CI job itself (ubuntu-24.04): the same commit that scored 0.4661 on 2026-10-29 now scores 0.4487 deterministically; pinning the runner image, tree-sitter and pyarrow did not change it, so the shift is in the CI machines, not this repo.",
+  "measured_at_commit": "08d16285a45fb9e1d04a7bac2b3472575bf12257",
+  "measured_date": "2026-11-15",
   "n": 30,
-  "top1": 11,
-  "top3": 17,
+  "top1": 10,
+  "top3": 16,
   "top5": 19,
-  "mrr": 0.46976190476190477
+  "mrr": 0.44865079365079363
 }

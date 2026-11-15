@@ -231,21 +231,23 @@ def test_build_module_graph_kotlin_top_level_val_import_resolves(tmp_path):
     ) in edges
 
 
-def test_build_module_graph_kotlin_wildcard_import_resolves_every_file_in_package(tmp_path):
+def test_build_module_graph_kotlin_wildcard_import_resolves_the_files_whose_names_are_used(tmp_path):
+    # A wildcard import is a visibility rule, not a dependency on every file of the package: only the file
+    # declaring a type the importer names is linked (see test_graph_kotlin_name_references.py).
     repo = tmp_path / "repo"
     src = repo / "src" / "main" / "kotlin" / "com" / "example"
     (src / "data").mkdir(parents=True)
     (src / "data" / "A.kt").write_text("package com.example.data\n\nclass A\n")
     (src / "data" / "B.kt").write_text("package com.example.data\n\nclass B\n")
     (src / "Main.kt").write_text(
-        "package com.example\n\nimport com.example.data.*\n\nfun main() {}\n"
+        "package com.example\n\nimport com.example.data.*\n\nfun main() { A() }\n"
     )
 
     _, dependency_graph, _ = build_module_graph(repo)
     edges = {tuple(edge) for edge in dependency_graph["edges"]}
 
     assert ("src/main/kotlin/com/example/Main.kt", "src/main/kotlin/com/example/data/A.kt") in edges
-    assert ("src/main/kotlin/com/example/Main.kt", "src/main/kotlin/com/example/data/B.kt") in edges
+    assert ("src/main/kotlin/com/example/Main.kt", "src/main/kotlin/com/example/data/B.kt") not in edges
 
 
 def test_build_module_graph_kotlin_unresolvable_import_does_not_crash(tmp_path):
