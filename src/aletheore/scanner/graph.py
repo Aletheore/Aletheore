@@ -1651,12 +1651,11 @@ def _rust_reexport_targets(
                 nested = _rust_reexport_targets(repo_path, target_file, f"{base}::{item}", resolved, depth + 1)
                 if not nested:
                     continue
-                found.append(resolved)
-                found.extend(nested)
+                found.extend(nested)  # the files that define the item, not the re-exporting crate root on the way
                 continue
         else:
-            found.append(resolved)
-            found.extend(_rust_reexport_targets(repo_path, target_file, base, resolved, depth + 1))
+            deeper = _rust_reexport_targets(repo_path, target_file, base, resolved, depth + 1)
+            found.extend(deeper or [resolved])  # a module that only re-exports is not a dependency of its own
     return found
 
 

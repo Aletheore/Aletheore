@@ -254,3 +254,18 @@ def test_rust_inline_workspace_crate_path_follows_the_reexport_of_its_first_item
         "app/src/main.rs": "fn main() { let _ = facade::Level::TRACE; }\n",
     })
     assert ("app/src/main.rs", "core/src/metadata.rs") in edges_of(repo)
+
+
+def test_reexport_chain_links_the_defining_file_not_the_modules_on_the_way(tmp_path):
+    repo = write(tmp_path / "r", {
+        "Cargo.toml": pkg("c"),
+        "src/lib.rs": "mod a;\nmod user;\n",
+        "src/a/mod.rs": "mod b;\npub use b::Thing;\n",
+        "src/a/b/mod.rs": "mod c;\npub use c::Thing;\n",
+        "src/a/b/c.rs": "pub struct Thing;\n",
+        "src/user.rs": "use crate::a::Thing;\n",
+    })
+    edges = edges_of(repo)
+    assert ("src/user.rs", "src/a/b/c.rs") in edges  # where the item is defined
+    assert ("src/user.rs", "src/a/mod.rs") in edges  # the module the path names
+    assert ("src/user.rs", "src/a/b/mod.rs") not in edges  # only passed through
