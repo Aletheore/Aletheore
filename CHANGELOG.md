@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Micronaut controllers written in Java or Kotlin are found, with class prefixes.
 - Bottle and Litestar decorator routes, Tornado application routes, Falcon resource routes and Pyramid views (with the pattern of their `add_route` name) are found.
 - Koa router prefixes and Hono basePath / route mounts (also across files) are applied to route paths.
 - Next.js app-router and pages-router API routes are found from their file paths.
