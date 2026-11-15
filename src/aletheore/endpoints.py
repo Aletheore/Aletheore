@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -519,6 +520,73 @@ def _looks_like_express_path(path: str) -> bool:
     # starts with "/" (or is the "*" wildcard) - this cheaply rejects the
     # overwhelming majority of false positives with no risk to real routes.
     return path == "*" or path.startswith("/")
+
+
+_NEXT_APP_ROUTE = re.compile(r"(?:^|/)(?:src/)?app/((?:[^/]+/)*)route\.(?:ts|js|tsx|jsx)$")
+_NEXT_PAGES_API = re.compile(r"(?:^|/)(?:src/)?pages/(api(?:/[^/]+)*)\.(?:ts|js|tsx|jsx)$")
+_NEXT_HTTP_EXPORT = re.compile(
+    r"export\s+(?:async\s+)?(?:function\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b|const\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b)"
+)
+_NEXT_EXPORT_LIST = re.compile(r"export\s*\{([^}]*)\}")
+
+
+def _next_segment(segment: str) -> str | None:
+    """One folder / file name of a Next.js route -> its URL segment; None when it adds nothing (route groups, slots)."""
+    if (segment.startswith("(") and segment.endswith(")")) or segment.startswith("@"):
+        return None
+    optional = re.fullmatch(r"\[\[\.\.\.(\w+)\]\]", segment)
+    if optional:
+        return "{..." + optional.group(1) + "?}"
+    catch_all = re.fullmatch(r"\[\.\.\.(\w+)\]", segment)
+    if catch_all:
+        return "{..." + catch_all.group(1) + "}"
+    dynamic = re.fullmatch(r"\[(\w+)\]", segment)
+    return "{" + dynamic.group(1) + "}" if dynamic else segment
+
+
+def _extract_nextjs_routes(rel_path: str, source: bytes) -> list[dict]:
+    """Next.js file-system API routes. App router: `app/**/route.ts` (or under `src/`) exporting `GET`, `POST`, ... (a
+    function, a const, or `export { GET }`); route groups `(group)` and slots `@slot` are not part of the URL and `[id]` /
+    `[...slug]` become `{id}` / `{...slug}`. Pages router: every file under `pages/api/`, answering any method.
+    A configured `basePath` is not applied."""
+    text = source.decode(errors="replace")
+    entries: list[dict] = []
+
+    def emit(method: str, url_segments: list[str], line: int) -> None:
+        parts = [seg for seg in (_next_segment(s) for s in url_segments) if seg]
+        entries.append(
+            {
+                "method": method,
+                "path": "/" + "/".join(parts),
+                "framework": "nextjs",
+                "file": rel_path,
+                "line": line,
+                "handler": method if method != "ANY" else "default",
+                "unresolved": False,
+                "note": None,
+            }
+        )
+
+    app = _NEXT_APP_ROUTE.search(rel_path)
+    if app:
+        folders = [f for f in app.group(1).split("/") if f]
+        found: dict[str, int] = {}
+        for match in _NEXT_HTTP_EXPORT.finditer(text):
+            found.setdefault(match.group(1) or match.group(2), text.count("\n", 0, match.start()) + 1)
+        for match in _NEXT_EXPORT_LIST.finditer(text):
+            for name in (item.split(" as ")[-1].strip() for item in match.group(1).split(",")):
+                if name in ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"):
+                    found.setdefault(name, text.count("\n", 0, match.start()) + 1)
+        for method, line in sorted(found.items()):
+            emit(method, folders, line)
+        return entries
+    pages = _NEXT_PAGES_API.search(rel_path)
+    if pages and re.search(r"export\s+default\b", text):
+        segments = pages.group(1).split("/")
+        if segments[-1] == "index":
+            segments = segments[:-1]
+        emit("ANY", segments, 1)
+    return entries
 
 
 def _extract_express_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
@@ -1980,18 +2048,21 @@ def map_api_endpoints(
                 continue
             tree = parsers["js"].parse(source)
             endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_nextjs_routes(rel_path, source))
         elif suffix == ".ts":
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["ts"].parse(source)
             endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_nextjs_routes(rel_path, source))
         elif suffix == ".tsx":
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["tsx"].parse(source)
             endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_nextjs_routes(rel_path, source))
         elif suffix == ".go":
             source = read_bytes_or_none(path)
             if source is None:
