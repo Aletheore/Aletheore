@@ -451,3 +451,17 @@ def test_swift_try_question_mark_is_a_handler_but_plain_try_and_force_try_are_no
 def test_rust_fully_qualified_result_map_err_is_a_handler_but_an_unrelated_path_is_not(tmp_path):
     got = _rust_handlers(tmp_path, "fn f() {\n  let a = Result::map_err(g(), |e| Wrapped::from(e));\n  let b = Mine::map_err(g());\n}\n")
     assert len(got) == 1
+
+
+def test_rust_option_or_else_without_an_error_parameter_is_not_a_handler(tmp_path):
+    assert _rust_handlers(tmp_path, "fn f() {\n  let a = o.or_else(|| default());\n}\n") == []
+
+
+def test_rust_or_else_with_a_function_path_or_error_parameter_is_a_handler(tmp_path):
+    got = _rust_handlers(tmp_path, "fn f() {\n  let a = g().or_else(recover);\n  let b = g().or_else(|e| fix(e));\n}\n")
+    assert len(got) == 2
+
+
+def test_rust_let_else_on_ok_is_a_handler(tmp_path):
+    got = _rust_handlers(tmp_path, "fn f() {\n  let Ok(v) = g() else { return; };\n  let Some(w) = h() else { return; };\n}\n")
+    assert got == [["(any)"]]
