@@ -1280,7 +1280,7 @@ def _extract_vapor_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                                 # Normalized to a leading "/" for consistency
                                 # with every other framework's stored paths -
                                 # Vapor's own source never writes one.
-                                "path": "/" + "/".join(path_segments),
+                                "path": "/" + "/".join(seg.strip("/") for seg in path_segments if seg.strip("/")),
                                 "framework": "vapor",
                                 "file": rel_path,
                                 "line": n.start_point[0] + 1,
