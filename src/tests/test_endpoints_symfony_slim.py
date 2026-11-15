@@ -70,3 +70,35 @@ class B {
 def test_slim_config_lookups_are_not_routes(tmp_path):
     code = "<?php\nuse Slim\\App;\n$v = $settings->get('displayErrorDetails');\n$app->get('/real', 'h');\n"
     assert _routes(tmp_path, code, "slim", "index.php") == [("GET", "/real")]
+
+
+def test_symfony_named_arguments_before_path_and_parentheses_in_arguments(tmp_path):
+    code = """<?php
+use Symfony\\Component\\Routing\\Attribute\\Route;
+class C {
+    #[Route(name: 'api_home', path: '/home', methods: ['GET'])]
+    public function a() {}
+    #[Route('/own', methods: [Request::METHOD_GET, strtoupper('post')])]
+    public function b() {}
+}
+"""
+    assert _routes(tmp_path, code, "symfony") == [("GET", "/home"), ("GET", "/own"), ("POST", "/own")]
+
+
+def test_slim_handler_names_and_braces_inside_strings(tmp_path):
+    code = """<?php
+use Slim\\App;
+$app->group('/api', function ($g) {
+    $g->get('/a', 'ItemController:list');
+    echo "}";   // a stray brace in a string and a comment }
+    $g->post('/b', ItemController::class);
+    $g->put('/c', function ($req, $res) {});
+});
+$app->get('/after', 'H');
+"""
+    (tmp_path / "index.php").write_text(code)
+    got = sorted((e["method"], e["path"], e["handler"]) for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "slim")
+    assert got == [
+        ("GET", "/after", "H"), ("GET", "/api/a", "ItemController:list"), ("POST", "/api/b", "ItemController::class"),
+        ("PUT", "/api/c", "closure"),
+    ]

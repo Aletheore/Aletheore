@@ -1623,25 +1623,65 @@ def _laravel_group_note(call_node: Node, source: bytes) -> str | None:
 
 
 _SYMFONY_ROUTE = re.compile(
-    r"#\[\s*(?:\\?Symfony\\Component\\Routing\\(?:Attribute|Annotation)\\)?Route\s*\(([^()]*)\)\s*\]"
+    r"#\[\s*(?:\\?Symfony\\Component\\Routing\\(?:Attribute|Annotation)\\)?Route\s*\(((?:[^()]|\([^()]*\))*)\)\s*\]"
     r"\s*(?:#\[[^\]]*\]\s*)*(?:(?:public|private|protected|final|abstract|static|readonly)\s+)*(class|function)\s+(\w+)",
     re.S,
 )
-_SLIM_ROUTE = re.compile(r"\$\w+\s*->\s*(get|post|put|delete|patch|options|any)\s*\(\s*(['\"])([^'\"]*)\2")
+_SLIM_ROUTE = re.compile(
+    r"\$\w+\s*->\s*(get|post|put|delete|patch|options|any)\s*\(\s*(['\"])([^'\"]*)\2"
+    r"(?:\s*,\s*(['\"][\w\\\\:]+['\"]|[\w\\\\]+::class|\[[^\]]*\]|(?:static\s+)?(?:function|fn)\b))?"
+)
 _SLIM_GROUP = re.compile(r"->\s*group\s*\(\s*(['\"])([^'\"]*)\1\s*,\s*(?:static\s+)?(?:function|fn)[^{]*\{")
 _PHP_STRING = re.compile(r"""['"]([^'"]*)['"]""")
 
 
 def _php_brace_end(text: str, open_index: int) -> int:
+    """Index of the `}` closing the `{` at `open_index`; braces inside strings and comments are not counted."""
     depth = 0
-    for index in range(open_index, len(text)):
-        if text[index] == "{":
+    i = open_index
+    while i < len(text):
+        char = text[i]
+        if char in "'\"":
+            i += 1
+            while i < len(text) and text[i] != char:
+                i += 2 if text[i] == "\\" else 1
+        elif text.startswith("//", i) or char == "#" and not text.startswith("#[", i):
+            i = text.find("\n", i) if text.find("\n", i) >= 0 else len(text)
+            continue
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = end + 1 if end >= 0 else len(text)
+        elif char == "{":
             depth += 1
-        elif text[index] == "}":
+        elif char == "}":
             depth -= 1
             if depth == 0:
-                return index
+                return i
+        i += 1
     return len(text)
+
+
+def _php_split_arguments(body: str) -> list[str]:
+    """Top-level comma-separated arguments of an attribute (brackets, parentheses and strings kept whole)."""
+    parts: list[str] = []
+    depth = 0
+    quote = ""
+    start = 0
+    for i, char in enumerate(body):
+        if quote:
+            if char == quote and body[i - 1] != "\\":
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(body[start:i])
+            start = i + 1
+    parts.append(body[start:])
+    return [p.strip() for p in parts if p.strip()]
 
 
 def _extract_symfony_routes(source: bytes, rel_path: str) -> list[dict]:
@@ -1654,16 +1694,23 @@ def _extract_symfony_routes(source: bytes, rel_path: str) -> list[dict]:
     class_starts = [(m.start(), m.group(1)) for m in re.finditer(r"\bclass\s+(\w+)", text)]
     for match in _SYMFONY_ROUTE.finditer(text):
         args, kind, name = match.group(1), match.group(2), match.group(3)
-        head = re.sub(r"\bmethods\s*:\s*\[[^\]]*\]", "", args)
-        path_match = re.search(r"(?:\bpath\s*:\s*)?['\"]([^'\"]*)['\"]", head)
-        path = path_match.group(1) if path_match else ""
+        path = ""
+        for index, argument in enumerate(_php_split_arguments(args)):
+            named = re.match(r"(\w+)\s*:\s*(.*)$", argument, re.S)
+            literal = _PHP_STRING.fullmatch((named.group(2) if named else argument).strip())
+            if literal and ((named and named.group(1) == "path") or (not named and index == 0)):
+                path = literal.group(1)
         if kind == "class":
             class_prefixes[name] = path
             continue
         enclosing = next((cname for start, cname in reversed(class_starts) if start < match.start()), None)
         class_prefix = class_prefixes.get(enclosing or "", "")
         methods_match = re.search(r"\bmethods\s*:\s*\[([^\]]*)\]", args)
-        methods = [m.upper() for m in _PHP_STRING.findall(methods_match.group(1))] if methods_match else ["ANY"]
+        methods = (
+            [m.upper() for m in _PHP_STRING.findall(methods_match.group(1))]
+            + re.findall(r"\bMETHOD_([A-Z]+)\b", methods_match.group(1))  # Request::METHOD_GET
+            if methods_match else ["ANY"]
+        )
         full = (class_prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") if class_prefix else path
         for method in methods:
             entries.append(
@@ -1700,12 +1747,20 @@ def _extract_slim_routes(source: bytes, rel_path: str) -> list[dict]:
                 "framework": "slim",
                 "file": rel_path,
                 "line": text.count("\n", 0, match.start()) + 1,
-                "handler": "unknown",
+                "handler": _slim_handler_label(match.group(4)),
                 "unresolved": False,
                 "note": None,
             }
         )
     return entries
+
+
+def _slim_handler_label(raw: str | None) -> str:
+    if not raw:
+        return "unknown"
+    if raw.startswith(("function", "fn", "static")):
+        return "closure"
+    return raw.strip("'\"")
 
 
 def _extract_laravel_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
