@@ -12,7 +12,7 @@ def test_route_object_with_a_method_and_url(tmp_path):
 
 
 def test_method_array_and_path_key(tmp_path):
-    code = "app.route({\n  method: ['GET', 'HEAD'],\n  path: '/status',\n  handler: async () => 'ok',\n})\n"
+    code = "const app = require('fastify')()\napp.route({\n  method: ['GET', 'HEAD'],\n  path: '/status',\n  handler: async () => 'ok',\n})\n"
     assert _routes(tmp_path, code) == [("fastify", "GET", "/status"), ("fastify", "HEAD", "/status")]
 
 
@@ -37,3 +37,18 @@ server.route([
     assert _routes(tmp_path, code) == [
         ("hapi", "GET", "/users"), ("hapi", "PATCH", "/items/{id}"), ("hapi", "POST", "/items"), ("hapi", "PUT", "/items/{id}"),
     ]
+
+
+def test_fastify_file_that_mentions_hapi_in_a_comment_stays_fastify(tmp_path):
+    code = "// migrated from hapi\nconst fastify = require('fastify')()\nfastify.route({ method: 'GET', url: '/x', handler: h })\n"
+    assert _routes(tmp_path, code) == [("fastify", "GET", "/x")]
+
+
+def test_object_route_in_a_file_with_neither_framework_is_ignored(tmp_path):
+    code = "somelib.route({ method: 'GET', url: '/x', handler: h })\n"
+    assert _routes(tmp_path, code) == []
+
+
+def test_array_of_route_objects_is_only_read_for_hapi(tmp_path):
+    code = "const fastify = require('fastify')()\nfastify.route([{ method: 'GET', url: '/x', handler: h }])\n"
+    assert _routes(tmp_path, code) == []

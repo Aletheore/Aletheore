@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -527,7 +528,7 @@ def _js_object_pairs(obj: Node, source: bytes) -> dict[str, Node]:
         if child.type == "pair":
             key, value = child.child_by_field_name("key"), child.child_by_field_name("value")
             if key is not None and value is not None:
-                pairs[source[key.start_byte : key.end_byte].decode().strip("'\"")] = value
+                pairs[source[key.start_byte : key.end_byte].decode().strip("'\"`")] = value
         elif child.type in ("method_definition", "shorthand_property_identifier"):
             name = child.child_by_field_name("name") or child
             pairs.setdefault(source[name.start_byte : name.end_byte].decode(), child)
@@ -540,7 +541,11 @@ def _extract_js_route_objects(root: Node, source: bytes, rel_path: str) -> list[
     The framework is named by what the file mentions (hapi, otherwise Fastify). The verb shorthands
     (`fastify.get('/x', h)`) are the Express matcher's."""
     entries: list[dict] = []
-    framework = "hapi" if b"hapi" in source else "fastify"
+    lowered = source.lower()
+    if b"fastify" not in lowered and b"hapi" not in lowered:
+        return entries  # an object-form `.route({...})` needs one of the two frameworks to be in play
+    # hapi is named by its package (`@hapi/hapi`, `require('hapi')`), not by the word anywhere in the file
+    framework = "hapi" if re.search(rb"""['"]@?hapi(?:/hapi)?['"]""", source) and b"fastify" not in lowered else "fastify"
     for call in _walk_tree(root):
         if call.type != "call_expression":
             continue
@@ -552,8 +557,8 @@ def _extract_js_route_objects(root: Node, source: bytes, rel_path: str) -> list[
         if prop is None or source[prop.start_byte : prop.end_byte].decode() != "route" or args is None:
             continue
         first = next((a for a in args.named_children if a.type in ("object", "array")), None)
-        if first is None:
-            continue
+        if first is None or (first.type == "array" and framework != "hapi"):
+            continue  # an array of routes is hapi's form; Fastify's route() takes one object
         objects = [first] if first.type == "object" else [o for o in first.named_children if o.type == "object"]  # hapi: an array
         for obj in objects:
             entries.extend(_js_route_object_entries(obj, call, source, rel_path, framework))
