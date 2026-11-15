@@ -59,6 +59,8 @@ class PFrame:
     safe_exprs: set = field(default_factory=set)
     included: set = field(default_factory=set)
     validated: set = field(default_factory=set)  # ids of tainted values a guard has validated
+    glob: dict | None = None  # the script's top-level variables, shared with the functions it calls (`global $x`, `$GLOBALS`)
+    gdecl: set = field(default_factory=set)  # names this function declared `global`
 
 
 def _t(n: Node | None) -> str:
@@ -367,6 +369,10 @@ class PhpInterp:
             return UNKNOWN
         base_n = kids[0]
         idx_n = kids[1] if len(kids) > 1 else None
+        if base_n.type == "variable_name" and _vname(base_n) == "GLOBALS" and idx_n is not None:
+            gk = self.eval(idx_n, fr)
+            if isinstance(gk, Const) and fr.glob is not None:
+                return fr.glob.get(_s(gk.value), UNKNOWN)
         base = self.eval(base_n, fr)
         idx = self.eval(idx_n, fr) if idx_n is not None else UNKNOWN
         if base_n.type == "variable_name" and isinstance(idx, Const):
@@ -529,6 +535,13 @@ class PhpInterp:
         if target is None:
             return
         t = target.type
+        if t == "subscript_expression" and fr.glob is not None:
+            gk = target.named_children
+            if len(gk) > 1 and gk[0].type == "variable_name" and _vname(gk[0]) == "GLOBALS":
+                key = self.eval(gk[1], fr)
+                if isinstance(key, Const):
+                    fr.glob[_s(key.value)] = val
+                    return
         if t == "variable_name":
             name = _vname(target)
             fr.env[name] = val
@@ -710,7 +723,7 @@ class PhpInterp:
     def _call_closure(self, c: ClosureV, args: list[Val], fr: PFrame) -> Val:
         if fr.depth + 1 > self.MAX_DEPTH or id(c.node) in self._active:
             return self._opaque(None, args)
-        inner = PFrame(c.file, fr.cls, fr.this_obj, fr.depth + 1)
+        inner = PFrame(c.file, fr.cls, fr.this_obj, fr.depth + 1, glob=fr.glob)
         inner.env.update(c.env)
         self._bind_params(c.node, args, inner)
         body = c.node.child_by_field_name("body")
@@ -900,7 +913,7 @@ class PhpInterp:
         body = fn.child_by_field_name("body")
         if body is None:
             return self._opaque(this_obj, args)
-        inner = PFrame(file, cls, this_obj, fr.depth + 1)
+        inner = PFrame(file, cls, this_obj, fr.depth + 1, glob=fr.glob)
         self._bind_params(fn, args, inner)
         outs, self._outs = self._outs, None
         self._active.add(id(fn))
@@ -908,6 +921,10 @@ class PhpInterp:
             self.exec(body, inner)
         finally:
             self._active.discard(id(fn))
+            for g in inner.gdecl:
+                if g in inner.env and inner.glob is not None:
+                    old = inner.glob.get(g)
+                    inner.glob[g] = join(old, inner.env[g]) if old is not None and inner.env[g] is not old else inner.env[g]
         if outs:
             params = fn.child_by_field_name("parameters")
             plist = [p for p in (params.named_children if params is not None else []) if p.type in ("simple_parameter", "property_promotion_parameter", "variadic_parameter")]
@@ -1243,7 +1260,12 @@ class PhpInterp:
         if t == "global_declaration":
             for c in n.named_children:
                 if c.type == "variable_name":
-                    fr.env.setdefault(_vname(c), UNKNOWN)
+                    nm = _vname(c)
+                    if fr.glob is not None and fr.glob is not fr.env:
+                        fr.gdecl.add(nm)
+                        fr.env[nm] = fr.glob.get(nm, UNKNOWN)
+                    else:
+                        fr.env.setdefault(nm, UNKNOWN)
             return False
         if t in ("function_definition", "class_declaration", "interface_declaration", "trait_declaration", "namespace_definition",
                  "namespace_use_declaration", "php_tag", "text", "comment", "break_statement", "continue_statement", "declare_statement",

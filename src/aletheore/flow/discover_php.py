@@ -203,6 +203,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                     fr = PFrame(pf, cls, this, 0)
                     try:
                         if fn is None:
+                            fr.glob = fr.env
                             interp.exec(pf.root, fr)
                         else:
                             interp.bind_entry(fn, fr, route_now[0])
@@ -322,6 +323,7 @@ def validate_php_finding(repo: Path, rel_path: str, start: tuple[int, int], end:
         interp.probe_keys.add((id(pf), p.start_byte, p.end_byte))
     try:
         if scope.type == "program":
+            fr.glob = fr.env
             interp.exec(pf.root, fr)
         else:
             interp.bind_entry(scope, fr)
