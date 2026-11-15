@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Sinatra routes are found, including `route` with several verbs and nested `namespace` prefixes; Grape APIs are read with their `resource`, `namespace` and `route_param` nesting and class-level `prefix`/`version`.
 - Kotlin Spring controllers: routes are found with class-level prefixes, multiple paths and property placeholders that have defaults.
 - Go endpoints: chi, Fiber and httprouter routes are found, and Echo routes are labelled `echo` instead of `gin`; nested chi `Route` closures and Echo/Fiber `Group` prefixes are composed.
 
