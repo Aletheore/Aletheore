@@ -3838,12 +3838,13 @@ def _csharp_shadowing_members(importer: Path, index: dict) -> set[str]:
     if not members_of and not bases_of:
         for summary in summaries.values():
             for type_name, found in (summary.get("members") or {}).items():
-                members_of.setdefault(type_name, {}).update(found)
+                members_of.setdefault(type_name, []).append(found)  # one map per declaring file
             for type_name, parents in (summary.get("bases") or {}).items():
                 bases_of.setdefault(type_name, set()).update(parents)
-        members_of.setdefault("", {})  # marks the maps as built even when empty
+        members_of.setdefault("", [])  # marks the maps as built even when empty
     shadow: set[str] = set()
     pending = list((info.get("types") or {}).keys())
+    visited_is_own = {name: True for name in pending}
     visited: set[str] = set()
     for _ in range(8):
         next_round: list[str] = []
@@ -3851,8 +3852,13 @@ def _csharp_shadowing_members(importer: Path, index: dict) -> set[str]:
             if type_name in visited:
                 continue
             visited.add(type_name)
-            for member, declared_type in members_of.get(type_name, {}).items():
-                if declared_type != member:
+            declarations = members_of.get(type_name, [])
+            own = (info.get("members") or {}).get(type_name)
+            if own is not None and visited_is_own.get(type_name):
+                declarations = [own]  # the importer's own type: its own declaration, not a same-named type elsewhere
+            for member, declared_type in (declarations[0] if declarations else {}).items():
+                # a type name declared in several files (namespaces): count a member only if every declaration has it
+                if declared_type != member and all(member in other and other[member] != member for other in declarations):
                     shadow.add(member)
             next_round.extend(bases_of.get(type_name, ()))
         pending = next_round

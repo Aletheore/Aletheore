@@ -85,3 +85,25 @@ def test_a_type_position_use_is_kept_even_if_a_member_shares_the_name(tmp_path):
         "T.cs": "namespace App;\npublic class T : Base { void Run() { var m = new Mapper(); Mapper.Map(); } }\n",
     }
     assert "Mapper.cs" in _imports(tmp_path, files, "T.cs")
+
+
+def test_same_named_own_type_in_another_namespace_does_not_shadow(tmp_path):
+    # N2.T has a Mapper property; N1.T does not, so inside N1.T `Mapper` is the type
+    files = {
+        "Mapper.cs": MAPPER,
+        "IMapper.cs": IMAPPER,
+        "N1/T.cs": "namespace App.N1;\npublic class T { void Run() { Mapper.Map(); } }\n",
+        "N2/T.cs": "namespace App.N2;\npublic class T { public IMapper Mapper { get; set; } }\n",
+    }
+    assert "Mapper.cs" in _imports(tmp_path, files, "N1/T.cs")
+
+
+def test_member_of_only_one_of_two_same_named_bases_does_not_shadow(tmp_path):
+    files = {
+        "Mapper.cs": MAPPER,
+        "IMapper.cs": IMAPPER,
+        "A/Base.cs": "namespace App.A;\npublic class Base { protected IMapper Mapper { get; set; } }\n",
+        "B/Base.cs": "namespace App.B;\npublic class Base { }\n",
+        "T.cs": "namespace App;\nusing App.B;\npublic class T : Base { void Run() { Mapper.Map(); } }\n",
+    }
+    assert "Mapper.cs" in _imports(tmp_path, files, "T.cs")
