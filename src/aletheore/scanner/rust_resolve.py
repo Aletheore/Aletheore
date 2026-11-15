@@ -260,10 +260,10 @@ def flatten_use(tree: str, keep_glob: bool = False) -> list[str]:
 
 
 @lru_cache(maxsize=1024)
-def _macro_registry(crate_dir: str) -> dict[str, tuple[list[str], list[str]]]:
-    """macro name -> (module names declared at the top of its expansion, flattened `use` paths), for zero-argument
+def _macro_registry(crate_dir: str) -> dict[str, tuple[list[str], list[str], list[str]]]:
+    """macro name -> (module names declared at the top of its expansion, flattened `use` paths, the `pub use` subset), for zero-argument
     macros (`() => { ... }` as the only arm) defined anywhere in the crate directory."""
-    registry: dict[str, tuple[list[str], list[str]]] = {}
+    registry: dict[str, tuple[list[str], list[str], list[str]]] = {}
     for dirpath, dirnames, filenames in os.walk(crate_dir):
         dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
         for name in filenames:
@@ -292,7 +292,10 @@ def _macro_registry(crate_dir: str) -> dict[str, tuple[list[str], list[str]]]:
                 uses: list[str] = []
                 for u in re.findall(r"(?:^|[;\s\]])use\s+([^;]+);", flat):
                     uses.extend(flatten_use(u))
-                registry[m.group(1)] = (mods, uses)
+                pub_uses: list[str] = []
+                for u in _PUB_USE.findall(flat):
+                    pub_uses.extend(flatten_use(u))
+                registry[m.group(1)] = (mods, uses, pub_uses)
     return registry
 
 
@@ -314,6 +317,24 @@ def module_items(file_path: str) -> tuple[frozenset[str], tuple[str, ...]]:
     for m in _PUB_USE.finditer(text):
         uses.extend(flatten_use(m.group(1), keep_glob=True))
     return declared, tuple(uses)
+
+
+def root_reexports(repo_path: Path, root_file: Path) -> tuple[str, ...]:
+    """Flattened `pub use` paths of a crate root file, including those written inside a zero-argument item
+    macro the file invokes (`crate_root!();` expanding to `pub use other_crate::{de, ser};`)."""
+    _declared, uses = module_items(str(root_file))
+    out = list(uses)
+    try:
+        text = clean_source(Path(root_file).read_text(encoding="utf-8", errors="ignore"))
+    except OSError:
+        return tuple(out)
+    if "!" in text:
+        crate_dir = nearest_manifest_dir(repo_path, root_file) or repo_path
+        registry = _macro_registry(str(crate_dir))
+        for name in _INVOKE.findall(_strip_macro_defs(text)):
+            if name in registry:
+                out.extend(registry[name][2])
+    return tuple(out)
 
 
 _INVOKE = re.compile(r"(?m)^[ \t]*([A-Za-z_]\w*)!\s*(?:\(\s*\)|\{\s*\})")
@@ -415,7 +436,7 @@ def extra_imports(repo_path: Path, from_file: Path, source: str) -> list[str]:
     if registry:
         for name in _INVOKE.findall(cleaned):
             if name in registry:
-                mods, uses = registry[name]
+                mods, uses, _pub = registry[name]
                 out.extend(f"self::{m}" for m in mods)
                 out.extend(uses)
     if "!" in cleaned:
@@ -436,6 +457,10 @@ def extra_imports(repo_path: Path, from_file: Path, source: str) -> list[str]:
         pattern = re.compile(r"(?<![\w$:.])(" + "|".join(re.escape(a) for a in aliases) + r")((?:::[A-Za-z_]\w*)+)")
         for m in pattern.finditer(body):
             out.append(m.group(1) + m.group(2))
+            segments = m.group(2).split("::")[1:]
+            if len(segments) > 1:
+                # `tracing::Level::TRACE`: the item the crate re-exports is the first segment after the crate name
+                out.append(f"{m.group(1)}::{segments[0]}")
     seen: set[str] = set()
     unique = []
     for p in out:

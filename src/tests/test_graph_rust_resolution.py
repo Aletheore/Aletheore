@@ -175,3 +175,97 @@ def test_flatten_use_groups_and_aliases():
         "serde_core::Deserialize",
     ]
     assert rust_resolve.flatten_use("crate::a::*") == ["crate::a"]
+
+
+def _facade_workspace(tmp_path, reexport: str):
+    """core crate defines `de`; facade crate re-exports it (`pub use core::de`), directly or inside a macro."""
+    repo = tmp_path / "ws"
+    files = {
+        "Cargo.toml": '[workspace]\nmembers = ["core", "facade", "user"]\n',
+        "core/Cargo.toml": '[package]\nname = "core_lib"\nversion = "0.1.0"\n',
+        "core/src/lib.rs": "pub mod de;\npub mod other;\n",
+        "core/src/de/mod.rs": "pub trait Deserialize {}\npub mod value;\n",
+        "core/src/de/value.rs": "pub struct V;\n",
+        "core/src/other.rs": "pub struct O;\n",
+        "facade/Cargo.toml": '[package]\nname = "facade"\nversion = "0.1.0"\n[dependencies]\ncore_lib = { path = "../core" }\n',
+        "facade/src/lib.rs": reexport,
+        "facade/src/inner.rs": "use crate::de::Deserialize;\npub struct I;\n",
+        "user/Cargo.toml": '[package]\nname = "user"\nversion = "0.1.0"\n[dependencies]\nfacade = { path = "../facade" }\n',
+        "user/src/lib.rs": "use facade::de::Deserialize;\nuse facade::de::value::V;\n",
+    }
+    for rel, body in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+    modules, _, _ = build_module_graph(repo)
+    return {m["path"]: set(m["imports"]) for m in modules}
+
+
+def test_rust_crate_path_follows_a_module_reexported_from_a_sibling_crate(tmp_path):
+    imp = _facade_workspace(tmp_path, "pub use core_lib::{de, other};\nmod inner;\n")
+    assert "core/src/de/mod.rs" in imp["facade/src/inner.rs"]
+
+
+def test_rust_crate_path_follows_a_module_reexported_inside_a_macro(tmp_path):
+    macro = "macro_rules! root {\n    () => {\n        pub use core_lib::{de, other};\n        mod inner;\n    };\n}\nroot!();\n"
+    imp = _facade_workspace(tmp_path, macro)
+    assert "core/src/de/mod.rs" in imp["facade/src/inner.rs"]
+
+
+def test_rust_other_crate_path_adds_the_reexported_module_next_to_the_facade_root(tmp_path):
+    imp = _facade_workspace(tmp_path, "pub use core_lib::{de, other};\nmod inner;\n")
+    # the facade root stays a dependency (the path goes through it); the module is added, not its submodules
+    assert {"facade/src/lib.rs", "core/src/de/mod.rs"} <= imp["user/src/lib.rs"]
+    assert "core/src/de/value.rs" not in imp["user/src/lib.rs"]
+
+
+def test_rust_private_use_is_not_treated_as_a_reexport(tmp_path):
+    imp = _facade_workspace(tmp_path, "use core_lib::{de, other};\nmod inner;\n")
+    assert "core/src/de/mod.rs" not in imp["facade/src/inner.rs"]
+
+
+def test_rust_glob_reexport_of_a_crate_follows_that_crates_own_reexport(tmp_path):
+    # facade: `pub use builder_crate::*;`  builder_crate: `pub use crate::builder::Command;`  user: `use facade::Command;`
+    repo = write(tmp_path / "glob", {
+        "Cargo.toml": '[workspace]\nmembers = ["builder", "facade", "user"]\n',
+        "builder/Cargo.toml": pkg("builder-crate"),
+        "builder/src/lib.rs": "pub mod builder;\npub use crate::builder::Command;\n",
+        "builder/src/builder/mod.rs": "mod command;\npub use self::command::Command;\n",
+        "builder/src/builder/command.rs": "pub struct Command;\n",
+        "facade/Cargo.toml": pkg("facade", 'builder-crate = { path = "../builder" }\n'),
+        "facade/src/lib.rs": "pub use builder_crate::*;\n",
+        "user/Cargo.toml": pkg("user", 'facade = { path = "../facade" }\n'),
+        "user/src/lib.rs": "use facade::Command;\n",
+    })
+    assert ("user/src/lib.rs", "builder/src/builder/command.rs") in edges_of(repo)
+
+
+
+def test_rust_inline_workspace_crate_path_follows_the_reexport_of_its_first_item(tmp_path):
+    # `facade::Level::TRACE` written inline (no `use`): Level is re-exported from the core crate's metadata.rs
+    repo = write(tmp_path / "inl", {
+        "Cargo.toml": '[workspace]\nmembers = ["core", "facade", "app"]\n',
+        "core/Cargo.toml": pkg("core-crate"),
+        "core/src/lib.rs": "mod metadata;\npub use self::metadata::Level;\n",
+        "core/src/metadata.rs": "pub struct Level;\n",
+        "facade/Cargo.toml": pkg("facade", 'core-crate = { path = "../core" }\n'),
+        "facade/src/lib.rs": "pub use core_crate::Level;\n",
+        "app/Cargo.toml": pkg("app", 'facade = { path = "../facade" }\n'),
+        "app/src/main.rs": "fn main() { let _ = facade::Level::TRACE; }\n",
+    })
+    assert ("app/src/main.rs", "core/src/metadata.rs") in edges_of(repo)
+
+
+def test_reexport_chain_links_the_defining_file_not_the_modules_on_the_way(tmp_path):
+    repo = write(tmp_path / "r", {
+        "Cargo.toml": pkg("c"),
+        "src/lib.rs": "mod a;\nmod user;\n",
+        "src/a/mod.rs": "mod b;\npub use b::Thing;\n",
+        "src/a/b/mod.rs": "mod c;\npub use c::Thing;\n",
+        "src/a/b/c.rs": "pub struct Thing;\n",
+        "src/user.rs": "use crate::a::Thing;\n",
+    })
+    edges = edges_of(repo)
+    assert ("src/user.rs", "src/a/b/c.rs") in edges  # where the item is defined
+    assert ("src/user.rs", "src/a/mod.rs") in edges  # the module the path names
+    assert ("src/user.rs", "src/a/b/mod.rs") not in edges  # only passed through
