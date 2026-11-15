@@ -579,3 +579,23 @@ def test_java_local_class_nested_only_in_a_lambda_is_not_public(tmp_path):
     by_name = {c["name"]: c for c in modules[0]["symbols"]["classes"]}
     assert by_name["LocalHelper"]["is_public"] is False
     assert by_name["Outer"]["is_public"] is True
+
+
+def test_java_wildcard_import_sees_main_classes_when_the_test_root_holds_the_same_package(tmp_path):
+    # `import app.core.*;` from a test: the package exists under both src/main/java and src/test/java, and the main
+    # classes the test uses must still be linked (the test root used to shadow the main one entirely).
+    repo = tmp_path / "jv"
+    files = {
+        "src/main/java/app/core/Parser.java": "package app.core;\npublic class Parser { }\n",
+        "src/main/java/app/core/Token.java": "package app.core;\npublic class Token { }\n",
+        "src/test/java/app/core/TestHelper.java": "package app.core;\npublic class TestHelper { }\n",
+        "src/test/java/perf/PerfTest.java": "package perf;\nimport app.core.*;\npublic class PerfTest { Parser p; Token t; }\n",
+    }
+    for rel, body in files.items():
+        f = repo / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body)
+    modules, _, _ = build_module_graph(repo)
+    imports = set(next(m for m in modules if m["path"] == "src/test/java/perf/PerfTest.java")["imports"])
+    assert {"src/main/java/app/core/Parser.java", "src/main/java/app/core/Token.java"} <= imports
+    assert "src/test/java/app/core/TestHelper.java" not in imports  # not used, so not a dependency
