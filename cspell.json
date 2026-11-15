@@ -20,6 +20,7 @@
     "docs/**/*.md"
   ],
   "words": [
+    "aiohttp",
     "Sinatra",
     "httprouter",
     "Trendshift",
