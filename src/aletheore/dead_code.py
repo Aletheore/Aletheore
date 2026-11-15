@@ -1616,7 +1616,7 @@ _TOOL_CONFIG_VARIANT = re.compile(r"^[\w-]+\.config\.[\w.-]+\.(?:js|cjs|mjs|ts|m
 # root files named after the tool they configure: vitest.root.mjs, rollup.browser.js, eslint.shared.mjs
 _TOOL_NAMED_FILE = re.compile(
     r"^(?:vitest|jest|vite|rollup|webpack|babel|eslint|postcss|tailwind|playwright|cypress|karma|tsup|esbuild|"
-    r"prettier|stylelint|commitlint|release|lint-staged)[\w.-]*\.(?:js|cjs|mjs|ts|mts|cts|json|ya?ml)$"
+    r"prettier|stylelint|commitlint|release|lint-staged)(?:[.-][\w.-]*)?\.(?:js|cjs|mjs|ts|mts|cts|json|ya?ml)$"
 )
 # config folders whose files name tools and plugins, and stylesheet folders that `@import` / `@plugin` packages
 _CONFIG_FOLDERS = (".circleci", ".changeset", ".vscode", ".husky", ".storybook", ".config", ".gitlab")

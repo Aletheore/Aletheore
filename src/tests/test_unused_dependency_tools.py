@@ -80,3 +80,13 @@ def test_tool_named_in_dot_config_folders_stylesheets_and_tool_named_files_is_no
     (tmp_path / "vitest.root.mjs").write_text("import { defineConfig } from 'vite'\n")
     (tmp_path / "index.js").write_text("x\n")
     assert _unused(tmp_path) == {("left-pad", None)}
+
+
+def test_files_that_merely_start_with_a_tool_name_are_not_config(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({"devDependencies": {"jest": "1", "vite": "1"}}))
+    (tmp_path / "release_notes.ts").write_text("// jest\n")
+    (tmp_path / "vite_helpers.mts").write_text("// vite\n")
+    (tmp_path / "index.js").write_text("x\n")
+    assert _unused(tmp_path) == {("jest", None), ("vite", None)}
+    (tmp_path / "vitest.root.mjs").write_text("import 'vite'\n")
+    assert _unused(tmp_path) == {("jest", None)}
