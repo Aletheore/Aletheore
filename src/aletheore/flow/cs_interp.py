@@ -87,8 +87,11 @@ class CsInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
 
-    def __init__(self, index: CsIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None):
+    def __init__(self, index: CsIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None, stash: dict | None = None):
         self.index = index
+        # request data one action wrote to a field of its class (a controller's static or instance field outlives the request), for another
+        # action to read back: {"Class.field": value}, filled across a second pass over the file's entry points
+        self.stash = stash if stash is not None else {}
         self.cwes = cwes or set()
         self.sink_hook = sink_hook    # hook(node, name, recv_text, args, recv, frame)
         self.store_hook = store_hook  # hook(node, base_text, key, value, frame)
@@ -239,9 +242,19 @@ class CsInterp:
                 items.append(self.eval(c, fr))
         return ListV(items, birth_depth=fr.branch)
 
+    def _stored(self, cls, fname: str) -> Val | None:
+        return self.stash.get(f"{cls.name}.{fname}") if cls is not None and fname in cls.fields else None
+
+    def _remember(self, cls, fname: str, val: Val) -> None:
+        if cls is not None and fname in cls.fields and classify(val) == "tainted":
+            self.stash[f"{cls.name}.{fname}"] = val
+
     def _lookup(self, name: str, fr: CFrame) -> Val:
         if name in fr.env:
             return fr.env[name]
+        got = self._stored(fr.cls, name)
+        if got is not None:
+            return got
         if fr.this_obj is not None and name in fr.this_obj.fields:
             return fr.this_obj.fields[name]
         c = fr.cls
@@ -302,10 +315,17 @@ class CsInterp:
     def _member(self, n: Node, fr: CFrame) -> Val:
         expr, name_n = n.child_by_field_name("expression"), n.child_by_field_name("name")
         name = _t(name_n)
+        if expr is not None and expr.type == "this_expression":
+            got = self._stored(fr.cls, name)
+            if got is not None:
+                return got
         if expr is not None and expr.type == "identifier":
             cname = _t(expr)
             if cname not in fr.env and not (fr.this_obj and cname in fr.this_obj.fields):
                 cls = self.index.cls(cname, fr.file)
+                got = self._stored(cls, name)
+                if got is not None:
+                    return got
                 if cls is not None and name in cls.consts:
                     return self._const_value(cls, name, fr)
                 if cname in ("string", "String") and name == "Empty":
@@ -420,6 +440,8 @@ class CsInterp:
             self._deconstruct(target, val, fr)
         elif t == "identifier":
             name = _t(target)
+            if name not in fr.env:
+                self._remember(fr.cls, name, val)
             if name in fr.env or not (fr.this_obj is not None and name in fr.this_obj.fields):
                 fr.env[name] = val
             else:
@@ -427,6 +449,10 @@ class CsInterp:
                 fr.this_obj.fields[name] = join(old, val) if (fr.branch > 0 and old is not None) else val
         elif t == "member_access_expression":
             expr, name = target.child_by_field_name("expression"), _t(target.child_by_field_name("name"))
+            if expr is not None and expr.type == "this_expression":
+                self._remember(fr.cls, name, val)
+            elif expr is not None and expr.type == "identifier" and _t(expr) not in fr.env and _t(expr)[:1].isupper():
+                self._remember(self.index.cls(_t(expr), fr.file), name, val)
             base = self.eval(expr, fr)
             if self.store_hook is not None:
                 self.store_hook(target, _t(expr), Const(name), val, fr)

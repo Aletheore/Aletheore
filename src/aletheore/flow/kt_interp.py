@@ -85,8 +85,10 @@ class KtInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
 
-    def __init__(self, index: KtIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None):
+    def __init__(self, index: KtIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None, stash: dict | None = None):
         self.index = index
+        # request data one handler wrote to a property of its class (or of its companion), for another handler to read back: {"Class.prop": value}
+        self.stash = stash if stash is not None else {}
         self.cwes = cwes or set()
         self.sink_hook = sink_hook    # hook(node, name, recv_text, args, recv, fr)
         self.store_hook = store_hook  # hook(node, base_text, key, value, fr)
@@ -250,9 +252,19 @@ class KtInterp:
             return Const("".join(_s(p.value) for p in parts))
         return self._combine(*parts)
 
+    def _stored(self, cls, pname: str) -> Val | None:
+        return self.stash.get(f"{cls.name}.{pname}") if cls is not None and pname in cls.props else None
+
+    def _remember(self, cls, pname: str, val: Val) -> None:
+        if cls is not None and pname in cls.props and classify(val) == "tainted":
+            self.stash[f"{cls.name}.{pname}"] = val
+
     def _ident(self, name: str, fr: KFrame) -> Val:
         if name in fr.env:
             return fr.env[name]
+        got = self._stored(fr.cls, name)
+        if got is not None:
+            return got
         if name == "true":
             return Const(True)
         if name == "false":
@@ -301,10 +313,17 @@ class KtInterp:
 
     def _member(self, n: Node, fr: KFrame) -> Val:
         recv_n, name, _ = self._split_nav(n)
+        if recv_n is not None and recv_n.type == "this_expression":
+            got = self._stored(fr.cls, name)
+            if got is not None:
+                return got
         if recv_n is not None and recv_n.type == "identifier":
             cname = _t(recv_n)
             if cname not in fr.env and not (fr.this_obj and cname in fr.this_obj.fields):
                 cls = self.index.cls(cname, fr.file)
+                got = self._stored(cls, name)
+                if got is not None:
+                    return got
                 if cls is not None and name in cls.consts:
                     return self._const_value(cls, name, fr)
                 if cname in ("Integer", "Long", "Double", "Math", "Int", "System", "TimeUnit", "Charsets", "StandardCharsets", "MediaType", "HttpStatus") or name in ("MAX_VALUE", "MIN_VALUE", "EMPTY"):
@@ -428,6 +447,8 @@ class KtInterp:
         t = target.type
         if t == "identifier":
             name = _t(target)
+            if name not in fr.env:
+                self._remember(fr.cls, name, val)
             is_prop = fr.this_obj is not None and (name in fr.this_obj.fields or (fr.cls is not None and name in fr.cls.props))
             if name in fr.env or not is_prop:
                 fr.env[name] = val
@@ -436,6 +457,10 @@ class KtInterp:
                 fr.this_obj.fields[name] = join(old, val) if (fr.branch > 0 and old is not None) else val
         elif t == "navigation_expression":
             recv_n, name, _ = self._split_nav(target)
+            if recv_n is not None and recv_n.type == "this_expression":
+                self._remember(fr.cls, name, val)
+            elif recv_n is not None and recv_n.type == "identifier" and _t(recv_n) not in fr.env and _t(recv_n)[:1].isupper():
+                self._remember(self.index.cls(_t(recv_n), fr.file), name, val)
             base = self.eval(recv_n, fr)
             if self.store_hook is not None:
                 self.store_hook(target, _t(recv_n), Const(name), val, fr)

@@ -193,11 +193,12 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
 
                 runs = [(None, None)] + list(_functions(pf))
                 skip_lib = not library or cwe in _lib.SKIP_CWES or _lib.skipped_path(_rel_parts(path, repo))
-                for cls, fn in runs:
-                    if budget.over(budget_seconds):
+                stash: dict = {}
+                for step, (cls, fn) in enumerate(runs + runs):  # a second pass sees request data another entry point stored
+                    if budget.over(budget_seconds) or (step >= len(runs) and not stash):
                         break
                     route_now[0] = (not skip_lib) and fn is not None and _public_php(cls, fn)
-                    interp = PhpInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                    interp = PhpInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
                     interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                     this = coverage.safe_this(interp, cls, pf) if cls is not None else None
                     fr = PFrame(pf, cls, this, 0)
@@ -208,6 +209,7 @@ def discover_php(repo: Path, index: PhpIndex | None = None, budget_seconds: floa
                         else:
                             interp.bind_entry(fn, fr, route_now[0])
                             interp.exec(fn.child_by_field_name("body"), fr)
+                        interp.publish(fr)
                     except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                         coverage.note(path)
                         continue

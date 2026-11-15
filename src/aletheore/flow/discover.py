@@ -147,8 +147,10 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                 continue
             skip_lib = not library or _lib.skipped_path(_rel_parts(path, repo))
             for cwe in cwes:
-                for cls, method in _methods(jf):
-                    if budget.over(budget_seconds):
+                stash: dict = {}
+                entries = list(_methods(jf))
+                for step, (cls, method) in enumerate(entries + entries):  # a second pass sees request data another entry point stored in a field
+                    if budget.over(budget_seconds) or (step >= len(entries) and not stash):
                         break
                     body = method.child_by_field_name("body")
                     if body is None:
@@ -216,7 +218,7 @@ def discover_java(repo: Path, index: JavaIndex | None = None, budget_seconds: fl
                                 )
                                 return
 
-                    interp = Interp(index, {cwe}, sink_hook=hook, annotated_sources=True)
+                    interp = Interp(index, {cwe}, sink_hook=hook, annotated_sources=True, stash=stash)
                     fr = Frame(file=jf, cls=cls, this_obj=coverage.safe_this(interp, cls, jf), depth=0)
                     if fr.this_obj is not None and (cls.superclass or "").split(".")[-1] in _STRUTS_BASES:
                         for fname, ftype in cls.field_types.items():  # Struts fills the action's fields from request parameters through their setters

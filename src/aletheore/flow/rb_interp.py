@@ -100,8 +100,12 @@ class RbInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
 
-    def __init__(self, index: RbIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None):
+    def __init__(self, index: RbIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None, stash: dict | None = None):
         self.index = index
+        # request data one action stored in a global (`$x`) or class variable (`@@x`), for another action to read back, filled across a
+        # second pass over the file's entry points
+        self.stash = stash if stash is not None else {}
+        self.cvars: dict[str, Val] = {}
         self.cwes = cwes or set()
         self.sink_hook = sink_hook    # hook(node, name, recv_text, args, recv, fr)
         self.store_hook = store_hook  # hook(node, base_text, key, value, fr)
@@ -213,9 +217,10 @@ class RbInterp:
         if t == "instance_variable":
             return fr.this_obj.fields.get(_t(n), UNKNOWN) if fr.this_obj is not None else UNKNOWN
         if t == "global_variable":
-            return self.globals.get(_t(n), UNKNOWN)
+            return self.globals[_t(n)] if _t(n) in self.globals else self.stash.get("g:" + _t(n), UNKNOWN)
         if t == "class_variable":
-            return UNKNOWN
+            key = f"{fr.cls.name if fr.cls is not None else ''}{_t(n)}"
+            return self.cvars[key] if key in self.cvars else self.stash.get("c:" + key, UNKNOWN)
         if t == "parenthesized_statements":
             v: Val = Const(None)
             for c in n.named_children:
@@ -544,6 +549,14 @@ class RbInterp:
         elif t == "global_variable":
             old = self.globals.get(_t(target))
             self.globals[_t(target)] = join(old, val) if (fr.branch > 0 and old is not None) else val
+            if classify(val) == "tainted":
+                self.stash["g:" + _t(target)] = val
+        elif t == "class_variable":
+            key = f"{fr.cls.name if fr.cls is not None else ''}{_t(target)}"
+            old = self.cvars.get(key)
+            self.cvars[key] = join(old, val) if (fr.branch > 0 and old is not None) else val
+            if classify(val) == "tainted":
+                self.stash["c:" + key] = val
         elif t == "instance_variable":
             if fr.this_obj is not None:
                 name = _t(target)

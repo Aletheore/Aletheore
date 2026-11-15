@@ -189,12 +189,14 @@ def discover_cs(repo: Path, index: CsIndex | None = None, budget_seconds: float 
                     elif _cwe == 501 and base_text.endswith("Session") and (_tainted_string(key) or _tainted_string(value)):
                         record(node, fr, "write to the session")
 
-                for cls in cf.classes:
-                    if budget.over(budget_seconds):
+                stash: dict = {}
+                entries = [(cls, m) for cls in cf.classes for m, _ in _entry_methods(cls)]
+                for step, (cls, m) in enumerate(entries + entries):  # a second pass sees request data another action stored in a field
+                    if budget.over(budget_seconds) or (step >= len(entries) and not stash):
                         break
                     action_cls = _is_controller(cls)
-                    for m, _ in _entry_methods(cls):
-                        interp = CsInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                    if True:
+                        interp = CsInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
                         interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                         fr = CFrame(cf, cls, coverage.safe_this(interp, cls, cf), 0)
                         if fr.this_obj is not None:

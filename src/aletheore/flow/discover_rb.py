@@ -186,54 +186,58 @@ def discover_rb(repo: Path, index: RbIndex | None = None, budget_seconds: float 
                     if _cwe == 501 and base_text.endswith("session") and (_tainted_string(key) or _tainted_string(value)):
                         record(node, fr, "write to the session")
 
-                for cls in rf.classes:
-                    if budget.over(budget_seconds):
+                stash: dict = {}
+                for _pass in (0, 1):  # a second pass sees request data another action stored in a global or class variable
+                    if _pass and not stash:
                         break
-                    action_cls = _is_controller(cls)
-                    entries: list[tuple[Node, bool, bool]] = []
-                    for ms in cls.methods.values():
-                        for m in ms:
-                            entries.append((m, action_cls and m.start_byte not in cls.private, False))
-                    for ms in cls.smethods.values():
-                        for m in ms:
-                            entries.append((m, False, True))
-                    skip_lib = not library or cwe in _lib.SKIP_CWES or _lib.skipped_path(_rel_parts(path, repo))
-                    for m, is_action, singleton in entries:
-                        route_now[0] = (not is_action) and not skip_lib and (singleton or m.start_byte not in cls.private)
-                        interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
-                        interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                        fr = RFrame(rf, cls, coverage.safe_this(interp, cls, rf) if not singleton else Obj(cls=cls, type_name=cls.name), 0, singleton=singleton)
-                        try:
-                            interp.bind_entry(m, fr, "lib" if route_now[0] else is_action)
-                            body = m.child_by_field_name("body")
-                            if body is not None:
-                                if body.type in ("body_statement", "begin"):
-                                    interp.exec(body, fr)
-                                else:
-                                    interp.eval(body, fr)
-                        except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
-                            coverage.note(path)
-                            continue
-                    if cls.name == "<main>":
-                        for st in cls.node.named_children:  # config.ru / app.rb: `run ->(env) { ... }`
-                            if st.type == "call" and st.child_by_field_name("receiver") is None and _t(st.child_by_field_name("method")) in ("run", "map"):
-                                an = st.child_by_field_name("arguments")
-                                lam = an.named_children[0] if an is not None and an.named_children else None
-                                if lam is not None and lam.type == "lambda":
-                                    interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
-                                    try:
-                                        interp._run_rack_lambda(lam, RFrame(rf, cls, Obj(cls=cls, type_name=cls.name), 0))
-                                    except Exception:
-                                        coverage.note(path)
-                    for blk in _sinatra_blocks(cls):
-                        interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store)
-                        interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
-                        fr = RFrame(rf, cls, Obj(cls=cls, type_name=cls.name), 0)
-                        try:
-                            _exec_block(interp, blk, fr)
-                        except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
-                            coverage.note(path)
-                            continue
+                    for cls in rf.classes:
+                        if budget.over(budget_seconds):
+                            break
+                        action_cls = _is_controller(cls)
+                        entries: list[tuple[Node, bool, bool]] = []
+                        for ms in cls.methods.values():
+                            for m in ms:
+                                entries.append((m, action_cls and m.start_byte not in cls.private, False))
+                        for ms in cls.smethods.values():
+                            for m in ms:
+                                entries.append((m, False, True))
+                        skip_lib = not library or cwe in _lib.SKIP_CWES or _lib.skipped_path(_rel_parts(path, repo))
+                        for m, is_action, singleton in entries:
+                            route_now[0] = (not is_action) and not skip_lib and (singleton or m.start_byte not in cls.private)
+                            interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
+                            interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
+                            fr = RFrame(rf, cls, coverage.safe_this(interp, cls, rf) if not singleton else Obj(cls=cls, type_name=cls.name), 0, singleton=singleton)
+                            try:
+                                interp.bind_entry(m, fr, "lib" if route_now[0] else is_action)
+                                body = m.child_by_field_name("body")
+                                if body is not None:
+                                    if body.type in ("body_statement", "begin"):
+                                        interp.exec(body, fr)
+                                    else:
+                                        interp.eval(body, fr)
+                            except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
+                                coverage.note(path)
+                                continue
+                        if cls.name == "<main>":
+                            for st in cls.node.named_children:  # config.ru / app.rb: `run ->(env) { ... }`
+                                if st.type == "call" and st.child_by_field_name("receiver") is None and _t(st.child_by_field_name("method")) in ("run", "map"):
+                                    an = st.child_by_field_name("arguments")
+                                    lam = an.named_children[0] if an is not None and an.named_children else None
+                                    if lam is not None and lam.type == "lambda":
+                                        interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
+                                        try:
+                                            interp._run_rack_lambda(lam, RFrame(rf, cls, Obj(cls=cls, type_name=cls.name), 0))
+                                        except Exception:
+                                            coverage.note(path)
+                        for blk in _sinatra_blocks(cls):
+                            interp = RbInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
+                            interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
+                            fr = RFrame(rf, cls, Obj(cls=cls, type_name=cls.name), 0)
+                            try:
+                                _exec_block(interp, blk, fr)
+                            except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
+                                coverage.note(path)
+                                continue
     return sorted(found.values(), key=lambda f: (f["path"], f["line"], f["rule_id"]))
 
 

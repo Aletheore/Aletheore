@@ -172,6 +172,7 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                     if _cwe == 501 and base_text.lower().endswith("session") and (_tainted_string(key) or _tainted_string(value)):
                         record(node, fr, "write to the session")
 
+                stash: dict = {}
                 if b"call." in data and cwe in DISCOVER_CWES_KT:
                     for lam in _ktor_handlers(kf.root):
                         interp = KtInterp(index, {cwe}, sink_hook=sink, store_hook=store)
@@ -182,12 +183,13 @@ def discover_kt(repo: Path, index: KtIndex | None = None, budget_seconds: float 
                         except Exception:  # a construct the engine mishandles must cost one entry point, never the scan
                             coverage.note(path)
                             continue
-                for cls in kf.classes:
-                    if budget.over(budget_seconds):
+                entries = [(cls, fn) for cls in kf.classes for fns in cls.funcs.values() for fn in fns]
+                for step, (cls, fn) in enumerate(entries + entries):  # a second pass sees request data another handler stored in a property
+                    if budget.over(budget_seconds) or (step >= len(entries) and not stash):
                         break
-                    for fns in cls.funcs.values():
-                        for fn in fns:
-                            interp = KtInterp(index, {cwe}, sink_hook=sink, store_hook=store)
+                    if True:
+                        if True:
+                            interp = KtInterp(index, {cwe}, sink_hook=sink, store_hook=store, stash=stash)
                             interp.MAX_STEPS = max(interp.MAX_STEPS, len(data) // 4)  # big files get a proportionally bigger budget
                             fr = KFrame(kf, cls, coverage.safe_this(interp, cls, kf) if cls.name != "<main>" else None, 0)
                             try:

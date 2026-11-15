@@ -211,8 +211,11 @@ class Interp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
 
-    def __init__(self, index: JavaIndex, cwes: set[int] | None = None, sink_hook=None, annotated_sources: bool = False):
+    def __init__(self, index: JavaIndex, cwes: set[int] | None = None, sink_hook=None, annotated_sources: bool = False, stash: dict | None = None):
         self.index = index
+        # request data one entry point wrote to a field of its class (a controller is one object for every request; a static field is shared
+        # outright), for another entry point to read back: {"Class.field": value}, filled across a second pass over the file's entry points
+        self.stash = stash if stash is not None else {}
         self.cwes = cwes or set()
         self.sink_hook = sink_hook  # called as hook(node, name, cname, recv_type, recv_text, args, frame, recv)
         self.annotated_sources = annotated_sources
@@ -466,9 +469,19 @@ class Interp:
             fr.env, fr.types = saved_env, saved_types
             del fr.rets[saved_rets:]
 
+    def _stored(self, cls: ClassInfo | None, fname: str) -> Val | None:
+        return self.stash.get(f"{cls.name}.{fname}") if cls is not None and fname in cls.field_inits else None
+
+    def _remember(self, cls: ClassInfo | None, fname: str, val: Val) -> None:
+        if cls is not None and fname in cls.field_inits and classify(val) == "tainted":
+            self.stash[f"{cls.name}.{fname}"] = val
+
     def _lookup(self, name: str, fr: Frame) -> Val:
         if name in fr.env:
             return fr.env[name]
+        got = self._stored(fr.cls, name)
+        if got is not None:
+            return got
         if fr.this_obj is not None and name in fr.this_obj.fields:
             return fr.this_obj.fields[name]
         cls = fr.cls
@@ -497,6 +510,9 @@ class Interp:
         obj_node = node.child_by_field_name("object")
         fname = _t(node.child_by_field_name("field"))
         if obj_node is not None and obj_node.type == "this":
+            got = self._stored(fr.cls, fname)
+            if got is not None:
+                return got
             if fr.this_obj is not None and fname in fr.this_obj.fields:
                 return fr.this_obj.fields[fname]
             lazy = self._lazy_field(fname, fr)
@@ -531,6 +547,9 @@ class Interp:
     def _static_field(self, cname: str, fname: str, fr: Frame) -> Val:
         cls = self.index.resolve_class(cname, fr.file)
         if cls is not None:
+            got = self._stored(cls, fname)
+            if got is not None:
+                return got
             if fname in cls.static_finals:
                 return self._static_init_value(cls, fname, fr)
             return UNKNOWN
@@ -630,6 +649,14 @@ class Interp:
         return rhs
 
     def _store(self, target: Node, val: Val, fr: Frame) -> None:
+        if target.type == "identifier" and _t(target) not in fr.env:
+            self._remember(fr.cls, _t(target), val)
+        elif target.type == "field_access":
+            on, fn_ = target.child_by_field_name("object"), _t(target.child_by_field_name("field"))
+            if on is not None and on.type == "this":
+                self._remember(fr.cls, fn_, val)
+            elif on is not None and on.type in ("identifier", "field_access") and _t(on)[:1].isupper():
+                self._remember(self.index.resolve_class(_t(on).split(".")[-1], fr.file), fn_, val)
         if target.type == "identifier":
             name = _t(target)
             is_field = fr.this_obj is not None and (name in fr.this_obj.fields or (name not in fr.env and fr.cls is not None and name in fr.cls.field_inits))

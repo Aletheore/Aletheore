@@ -95,7 +95,7 @@ class PhpInterp:
     MAX_STEPS = 60000
     MAX_DEPTH = 6
 
-    def __init__(self, index: PhpIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None):
+    def __init__(self, index: PhpIndex, cwes: set[int] | None = None, sink_hook=None, store_hook=None, stash: dict | None = None):
         self.index = index
         self.cwes = cwes or set()
         self.sink_hook = sink_hook    # hook(node, name, recv_text, args, recv, frame)
@@ -103,6 +103,9 @@ class PhpInterp:
         self.steps = 0
         self._outs: list | None = None
         self.static_props: dict[str, Val] = {}
+        # request data one entry point stored in a static property or a `global` variable, for another entry point to read back (a
+        # second pass over the file's entry points, as for Go and JavaScript)
+        self.stash = stash if stash is not None else {}
         self.probes: dict[tuple, list] = {}
         self.probe_keys: set[tuple] = set()
         self.dead: list[tuple] = []
@@ -279,7 +282,8 @@ class PhpInterp:
         if t == "subscript_expression":
             return self._subscript(n, fr)
         if t == "scoped_property_access_expression":
-            return self.static_props.get(self._static_key(n, fr), UNKNOWN)
+            key = self._static_key(n, fr)
+            return self.static_props[key] if key in self.static_props else self.stash.get("static:" + key, UNKNOWN)
         if t == "member_access_expression":
             return self._member(n, fr)
         if t == "function_call_expression":
@@ -557,6 +561,8 @@ class PhpInterp:
             key = self._static_key(target, fr)
             old = self.static_props.get(key)
             self.static_props[key] = join(old, val) if (fr.branch > 0 and old is not None) else val
+            if classify(val) == "tainted":
+                self.stash["static:" + key] = val
         elif t == "member_access_expression":
             base = self.eval(target.child_by_field_name("object"), fr)
             name_n = target.child_by_field_name("name")
@@ -921,10 +927,7 @@ class PhpInterp:
             self.exec(body, inner)
         finally:
             self._active.discard(id(fn))
-            for g in inner.gdecl:
-                if g in inner.env and inner.glob is not None:
-                    old = inner.glob.get(g)
-                    inner.glob[g] = join(old, inner.env[g]) if old is not None and inner.env[g] is not old else inner.env[g]
+            self.publish(inner)
         if outs:
             params = fn.child_by_field_name("parameters")
             plist = [p for p in (params.named_children if params is not None else []) if p.type in ("simple_parameter", "property_promotion_parameter", "variadic_parameter")]
@@ -934,6 +937,22 @@ class PhpInterp:
                     if nm is not None and _vname(nm) in inner.env:
                         self._bind(target, inner.env[_vname(nm)], fr)
         return join_all(inner.rets) if inner.rets else Const(None)
+
+    def publish(self, fr: PFrame) -> None:
+        """Write what a frame set on its `global` variables back: to the script's variables when it was called from the script, else to the
+        stash where other entry points read it. A tainted top-level variable of a script is published the same way."""
+        for g in fr.gdecl:
+            if g not in fr.env:
+                continue
+            if fr.glob is not None and fr.glob is not fr.env:
+                old = fr.glob.get(g)
+                fr.glob[g] = join(old, fr.env[g]) if old is not None and fr.env[g] is not old else fr.env[g]
+            elif classify(fr.env[g]) == "tainted":
+                self.stash["global:" + g] = fr.env[g]
+        if fr.glob is not None and fr.glob is fr.env:
+            for k, v in fr.env.items():
+                if classify(v) == "tainted":
+                    self.stash.setdefault("global:" + k, v)
 
     def _bind_params(self, fn: Node, args: list[Val], inner: PFrame) -> None:
         params = fn.child_by_field_name("parameters")
@@ -1264,6 +1283,9 @@ class PhpInterp:
                     if fr.glob is not None and fr.glob is not fr.env:
                         fr.gdecl.add(nm)
                         fr.env[nm] = fr.glob.get(nm, UNKNOWN)
+                    elif fr.glob is None:
+                        fr.gdecl.add(nm)  # an entry point that is a function: the script's variables are what other entry points stored
+                        fr.env[nm] = self.stash.get("global:" + nm, UNKNOWN)
                     else:
                         fr.env.setdefault(nm, UNKNOWN)
             return False
