@@ -9,6 +9,9 @@ on:
     paths:
       - "src/aletheore/search_index.py"
       - "src/aletheore/scanner/graph.py"
+      - ".github/workflows/retrieval-regression.yml"
+  # Lets the score be measured on master itself, not only on PRs that touch the two files above.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,7 +22,9 @@ env:
 
 jobs:
   retrieval-mrr:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the same commit scored MRR 0.4661 on ubuntu-24.04 (2026-10-29) and 0.4487 on
+    # ubuntu-26.04 (2026-11-14), which failed the gate on PRs that change nothing about retrieval.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
