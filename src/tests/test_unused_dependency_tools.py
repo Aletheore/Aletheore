@@ -55,3 +55,28 @@ def test_tool_called_from_an_extensionless_or_shell_script_is_not_unused(tmp_pat
     (tmp_path / "requirements.txt").write_text("ruff\nmkdocs\nleft-pad\n")
     (tmp_path / "app.py").write_text("x = 1\n")
     assert _unused(tmp_path) == {("left-pad", None)}
+
+
+def test_pins_in_a_requirements_folder_are_judged_against_the_whole_repo(tmp_path):
+    (tmp_path / "requirements").mkdir()
+    (tmp_path / "requirements" / "requirements.txt").write_text("brotli==1.0\nleft-pad==1.0\n")
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "a.py").write_text("try:\n    import brotli\nexcept ImportError:\n    pass\n")
+    modules = [{"path": "pkg/a.py", "imports": []}]
+    out = find_dead_code(tmp_path, modules, None)["unused_dependencies"]
+    assert {e["package"] for e in out} == {"left-pad"}
+
+
+def test_tool_named_in_dot_config_folders_stylesheets_and_tool_named_files_is_not_unused(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({
+        "devDependencies": {"coveralls": "1", "@changesets/changelog-github": "1", "tw-animate-css": "1", "vite": "1", "left-pad": "1"},
+    }))
+    (tmp_path / ".circleci").mkdir()
+    (tmp_path / ".circleci" / "config.yml").write_text("run: npx coveralls\n")
+    (tmp_path / ".changeset").mkdir()
+    (tmp_path / ".changeset" / "config.json").write_text('{"changelog": "@changesets/changelog-github"}\n')
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "index.css").write_text('@import "tw-animate-css";\n')
+    (tmp_path / "vitest.root.mjs").write_text("import { defineConfig } from 'vite'\n")
+    (tmp_path / "index.js").write_text("x\n")
+    assert _unused(tmp_path) == {("left-pad", None)}

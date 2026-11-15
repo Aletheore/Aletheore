@@ -1613,6 +1613,15 @@ _TOOL_CONFIG_SUFFIXES = (
 )
 # vitest.config.build.ts, jest.config.base.js: a tool config split into variants
 _TOOL_CONFIG_VARIANT = re.compile(r"^[\w-]+\.config\.[\w.-]+\.(?:js|cjs|mjs|ts|mts|cts|json)$")
+# root files named after the tool they configure: vitest.root.mjs, rollup.browser.js, eslint.shared.mjs
+_TOOL_NAMED_FILE = re.compile(
+    r"^(?:vitest|jest|vite|rollup|webpack|babel|eslint|postcss|tailwind|playwright|cypress|karma|tsup|esbuild|"
+    r"prettier|stylelint|commitlint|release|lint-staged)[\w.-]*\.(?:js|cjs|mjs|ts|mts|cts|json|ya?ml)$"
+)
+# config folders whose files name tools and plugins, and stylesheet folders that `@import` / `@plugin` packages
+_CONFIG_FOLDERS = (".circleci", ".changeset", ".vscode", ".husky", ".storybook", ".config", ".gitlab")
+_STYLE_FOLDERS = ("", "src", "app", "styles", "src/styles", "src/app")
+_STYLE_SUFFIXES = (".css", ".scss", ".less", ".sass")
 # repository helper scripts: extensionless or shell files directly under these folders
 _SCRIPT_FOLDERS = ("scripts", "script", "bin", "tools", "ci", ".ci")
 _SCRIPT_SUFFIXES = ("", ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd")
@@ -1643,13 +1652,26 @@ def _tool_usage_text(directory: Path, repo_path: Path | None = None) -> str:
             continue
     for entry in entries:
         name = entry.name
-        if name in _TOOL_CONFIG_NAMES or name.endswith(_TOOL_CONFIG_SUFFIXES) or _TOOL_CONFIG_VARIANT.match(name):
+        if name in _TOOL_CONFIG_NAMES or name.endswith(_TOOL_CONFIG_SUFFIXES) or _TOOL_CONFIG_VARIANT.match(name) \
+                or _TOOL_NAMED_FILE.match(name):
             candidates.append(entry)
         elif name.startswith(".") and ("rc" in name or name.endswith((".json", ".yml", ".yaml", ".js", ".cjs"))):
             candidates.append(entry)
         elif name.startswith("tsconfig") and name.endswith(".json"):
             candidates.append(entry)
     for folder in ([directory, repo_path] if repo_path is not None and repo_path != directory else [directory]):
+        for config_folder in _CONFIG_FOLDERS:
+            try:
+                candidates.extend(sorted(e for e in (folder / config_folder).iterdir() if e.is_file())[:40])
+            except OSError:
+                continue
+        for style_folder in _STYLE_FOLDERS:
+            try:
+                candidates.extend(
+                    sorted(e for e in (folder / style_folder).iterdir() if e.is_file() and e.suffix in _STYLE_SUFFIXES)[:20]
+                )
+            except OSError:
+                continue
         for script_folder in _SCRIPT_FOLDERS:
             try:
                 candidates.extend(
@@ -1870,9 +1892,18 @@ def find_dead_code(
         if not declared:
             continue
         tool_text = _tool_usage_text(directory, repo_path)
+        # A folder holding only pip pin files (requirements/base.txt) is a dependency list for the whole
+        # repository, not a package with its own sources.
+        pins_only_folder = rel_dir != "." and (
+            directory.name.lower() in {"requirements", "reqs", "deps"}
+            or not any(
+                (directory / marker).exists()
+                for marker in ("package.json", "pyproject.toml", "setup.py", "setup.cfg", "Cargo.toml", "go.mod")
+            )
+        )
         scoped = (
             modules
-            if rel_dir == "."
+            if rel_dir == "." or pins_only_folder
             else [m for m in modules if m["path"].startswith(rel_dir + "/")]
         )
         if rel_dir != "." and not scoped:
