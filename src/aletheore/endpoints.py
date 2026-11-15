@@ -1044,6 +1044,7 @@ def _extract_actix_routes(root: Node, source: bytes, rel_path: str) -> list[dict
         )
 
     service_prefixes: dict[str, list[str]] = {}  # handler fn name -> prefixes it is registered under (known chains only)
+    app_variables = set(re.findall(r"\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=]+)?=\s*(?:actix_web::)?App::new\s*\(", source.decode(errors="replace")))
 
     def evaluate(node: Node, prefix: str, depth: int = 0, known: bool | None = None) -> None:
         if depth > 20:
@@ -1054,7 +1055,9 @@ def _extract_actix_routes(root: Node, source: bytes, rel_path: str) -> list[dict
         if known is None:
             # a chain rooted at a call (`App::new()`, `web::scope(..)`) has a known prefix; one rooted at a variable
             # (`cfg` in a `configure` function) may sit under any scope
-            known = base.type == "call_expression"
+            known = base.type == "call_expression" or (
+                base.type == "identifier" and _actix_text(base, source) in app_variables  # `let app = App::new(); app.service(..)`
+            )
         resource: str | None = None
         if base.type == "call_expression":
             name = _actix_callee(base, source)

@@ -102,3 +102,34 @@ pub fn init(cfg: &mut web::ServiceConfig) {
     (tmp_path / "routes.rs").write_text(code)
     eps = map_api_endpoints(tmp_path)["endpoints"]
     assert [(e["path"], bool(e["note"])) for e in eps] == [("/list", True)]
+
+
+def test_attribute_route_registered_on_an_app_variable_gets_its_scope_prefix(tmp_path):
+    code = """
+use actix_web::{get, web, App};
+
+#[get("/list")]
+async fn list() -> &'static str { "ok" }
+
+fn main() {
+    let mut app = App::new();
+    app = app.service(web::scope("/api").service(list));
+}
+"""
+    assert _routes(tmp_path, code) == [("GET", "/api/list")]
+
+
+def test_chain_on_a_configure_parameter_still_keeps_the_note(tmp_path):
+    code = """
+use actix_web::{get, web};
+
+#[get("/list")]
+async fn list() -> &'static str { "ok" }
+
+pub fn init(cfg: &mut web::ServiceConfig) {
+    cfg.service(web::scope("/api").service(list));
+}
+"""
+    (tmp_path / "routes.rs").write_text(code)
+    eps = map_api_endpoints(tmp_path)["endpoints"]
+    assert [(e["path"], bool(e["note"])) for e in eps] == [("/list", True)]
