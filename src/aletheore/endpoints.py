@@ -1091,7 +1091,9 @@ def _jaxrs_annotations(modifiers: Node | None, source: bytes) -> list[tuple[str,
     return found
 
 
-def _extract_jaxrs_routes(root: Node, source: bytes, rel_path: str, application_path: str = "") -> list[dict]:
+def _extract_jaxrs_routes(
+    root: Node, source: bytes, rel_path: str, application_path: str = "", ambiguous_application_path: bool = False
+) -> list[dict]:
     """JAX-RS resources (javax.ws.rs / jakarta.ws.rs): a class `@Path` prefix, methods annotated `@GET` ... `@PATCH` with
     an optional `@Path`. The application-wide `@ApplicationPath`, declared on another class, is prepended when the
     repository has exactly one."""
@@ -1121,7 +1123,11 @@ def _extract_jaxrs_routes(root: Node, source: bytes, rel_path: str, application_
                         "line": method.start_point[0] + 1,
                         "handler": handler,
                         "unresolved": False,
-                        "note": "prefix from @ApplicationPath found elsewhere in the repository" if application_path else None,
+                        "note": (
+                            "prefix from @ApplicationPath found elsewhere in the repository" if application_path
+                            else "the repository declares several different @ApplicationPath values: none is applied"
+                            if ambiguous_application_path else None
+                        ),
                     }
                 )
     return entries
@@ -2019,8 +2025,10 @@ def map_api_endpoints(
         if jaxrs_source is None or b"ws.rs" not in jaxrs_source:
             continue
         cross_file_mount_defining_files.add(_rel(repo_path, path))
-        jaxrs_application_paths.update(_JAXRS_APPLICATION_PATH.findall(jaxrs_source.decode(errors="replace")))
+        uncommented = re.sub(r"/\*.*?\*/|//[^\n]*", " ", jaxrs_source.decode(errors="replace"), flags=re.S)
+        jaxrs_application_paths.update(_JAXRS_APPLICATION_PATH.findall(uncommented))
     jaxrs_application_path = next(iter(jaxrs_application_paths)) if len(jaxrs_application_paths) == 1 else ""
+    jaxrs_ambiguous_application_path = len(jaxrs_application_paths) > 1
 
     for path in source_paths:
         rel_path = _rel(repo_path, path)
@@ -2085,7 +2093,9 @@ def map_api_endpoints(
             tree = parsers["java"].parse(source)
             endpoints.extend(_extract_spring_boot_routes(tree.root_node, source, rel_path))
             if b"ws.rs" in source:
-                endpoints.extend(_extract_jaxrs_routes(tree.root_node, source, rel_path, jaxrs_application_path))
+                endpoints.extend(
+                    _extract_jaxrs_routes(tree.root_node, source, rel_path, jaxrs_application_path, jaxrs_ambiguous_application_path)
+                )
         elif suffix == ".swift":
             source = read_bytes_or_none(path)
             if source is None:

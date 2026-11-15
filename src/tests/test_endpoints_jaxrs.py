@@ -40,3 +40,19 @@ def test_method_without_a_path_on_a_class_without_one_is_the_root(tmp_path):
 def test_java_without_ws_rs_is_ignored(tmp_path):
     code = '@Path("/x")\npublic class A {\n    @GET\n    public String g() { return ""; }\n}\n'
     assert _routes(tmp_path, {"A.java": code}) == []
+
+
+def test_several_application_paths_are_not_applied_but_say_so(tmp_path):
+    app = 'import jakarta.ws.rs.ApplicationPath;\n@ApplicationPath("{}")\npublic class {} extends Application {{}}\n'
+    (tmp_path / "Users.java").write_text(RESOURCE)
+    (tmp_path / "A.java").write_text(app.format("/one", "A"))
+    (tmp_path / "B.java").write_text(app.format("/two", "B"))
+    notes = {e["note"] for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "jaxrs"}
+    assert notes == {"the repository declares several different @ApplicationPath values: none is applied"}
+
+
+def test_commented_out_application_path_is_ignored(tmp_path):
+    (tmp_path / "Users.java").write_text(RESOURCE)
+    (tmp_path / "App.java").write_text('import jakarta.ws.rs.ApplicationPath;\n// @ApplicationPath("/old")\n@ApplicationPath("/api")\npublic class App extends Application {}\n')
+    got = sorted(e["path"] for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "jaxrs")
+    assert "/api/users" in got
