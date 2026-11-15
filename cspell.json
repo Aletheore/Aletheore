@@ -21,6 +21,7 @@
   ],
   "words": [
     "Sinatra",
+    "httprouter",
     "Trendshift",
     "phuryn",
     "qdrant",
