@@ -21,6 +21,7 @@
   ],
   "words": [
     "Fastify",
+    "httprouter",
     "Trendshift",
     "phuryn",
     "qdrant",
