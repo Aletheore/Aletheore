@@ -204,6 +204,8 @@ class GoInterp:
             if name in fr.env:
                 return fr.env[name]
             v = self._package_value(name, fr)
+            if v is UNKNOWN and ("pkg", name) in self.stash:
+                return Tainted("stored package variable")
             if v is UNKNOWN:
                 hit = self.index.function(name, fr.file)
                 if hit is not None:
@@ -692,6 +694,8 @@ class GoInterp:
             t = target.type if target is not None else ""
         if t == "identifier":
             if _t(target) != "_":
+                if _t(target) not in fr.env and classify(val) == "tainted" and self.index.package_var(_t(target), fr.file):
+                    self.stash.add(("pkg", _t(target)))  # a request value written to a package variable: another handler reads it back
                 fr.env[_t(target)] = val
         elif t == "selector_expression":
             base = self.eval(target.child_by_field_name("operand"), fr)
@@ -705,6 +709,8 @@ class GoInterp:
             idx = self.eval(target.child_by_field_name("index"), fr)
             if self.store_hook is not None:
                 self.store_hook(target, _t(base_n), idx, val, fr)
+            if base_n.type == "identifier" and _t(base_n) not in fr.env and (classify(val) == "tainted" or classify(idx) == "tainted") and self.index.package_var(_t(base_n), fr.file):
+                self.stash.add(("pkg", _t(base_n)))
             if isinstance(base, MapV):
                 self._mutating(fr, base)
                 if isinstance(idx, Const):

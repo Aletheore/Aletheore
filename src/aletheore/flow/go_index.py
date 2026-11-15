@@ -36,6 +36,7 @@ class GoFile:
     types: set[str] = field(default_factory=set)
     controller_types: set[str] = field(default_factory=set)  # beego controllers: every method is a handler reading the request
     request_types: set[str] = field(default_factory=set)  # struct types that hold the *http.Request (or a framework context)
+    top_vars: set[str] = field(default_factory=set)               # package-level `var` names (state a handler can write and another read)
     assigned: set[str] = field(default_factory=set)               # names that are assigned after their declaration somewhere in this file
     values: dict[str, Node] = field(default_factory=dict)       # package-level const/var name -> initializer expression
     embeds: dict[str, list[str]] = field(default_factory=dict)  # struct type -> the types it embeds (their methods are promoted)
@@ -81,6 +82,8 @@ def _scan(f: GoFile) -> None:
                     f.controller_types.add(_t(n.child_by_field_name("name")))
         elif t in ("const_spec", "var_spec") and _top_level(n):
             names = [c for c in n.named_children if c.type == "identifier"]
+            if t == "var_spec":
+                f.top_vars.update(_t(c) for c in names)
             val_n = n.child_by_field_name("value")
             vals = list(val_n.named_children) if val_n is not None else []
             if len(vals) == len(names):
@@ -176,6 +179,9 @@ class GoIndex:
         """A package-level const or var of the same package: (file, initializer node) or None when absent or ambiguous."""
         hits = self._package(from_file.path.parent)[1].get(name, ())
         return hits[0] if len(hits) == 1 else None
+
+    def package_var(self, name: str, from_file: GoFile) -> bool:
+        return any(name in f.top_vars for f in self._package(from_file.path.parent)[0])
 
     def package_assigned(self, name: str, from_file: GoFile) -> bool:
         return name in self._package(from_file.path.parent)[4]
