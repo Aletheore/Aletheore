@@ -915,6 +915,73 @@ def _collect_axum_combinators(node: Node, source: bytes) -> list[tuple[str, str]
     return results
 
 
+_SINATRA_VERBS = {"get", "post", "put", "delete", "patch", "head", "options", "link", "unlink"}
+
+
+def _sinatra_string(node: Node | None, source: bytes) -> tuple[str | None, bool]:
+    """(text, dynamic) of a Ruby string argument; (None, False) when the argument is not a string at all."""
+    if node is None or node.type != "string":
+        return None, False
+    if any(c.type == "interpolation" for c in node.children):
+        return None, True
+    return "".join(source[c.start_byte : c.end_byte].decode() for c in node.children if c.type == "string_content"), False
+
+
+def _extract_sinatra_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Sinatra routes: `get '/users/:id' do ... end`, `post("/x") { }` and `route :get, :post, '/x' do`, with the
+    `namespace '/api' do ... end` blocks (sinatra-contrib) around them composed into the path."""
+    entries: list[dict] = []
+    for node in _walk_tree(root):
+        if node.type != "call":
+            continue
+        name_node = node.child_by_field_name("method") or next((c for c in node.children if c.type == "identifier"), None)
+        if name_node is None or node.child_by_field_name("receiver") is not None:
+            continue
+        name = source[name_node.start_byte : name_node.end_byte].decode()
+        args_node = node.child_by_field_name("arguments") or next((c for c in node.children if c.type == "argument_list"), None)
+        if args_node is None or not any(c.type in ("do_block", "block") for c in node.children):
+            continue
+        args = args_node.named_children
+        methods: list[str]
+        if name in _SINATRA_VERBS:
+            methods = [name.upper()]
+        elif name == "route":
+            methods = [source[a.start_byte + 1 : a.end_byte].decode().upper() for a in args if a.type == "simple_symbol"]
+            if not methods:
+                continue
+        else:
+            continue
+        path_node = next((a for a in args if a.type == "string"), None)
+        path, dynamic = _sinatra_string(path_node, source)
+        if path is None and not dynamic:
+            continue  # a regular expression or a constant: not a literal route
+        prefix = ""
+        ancestor = node.parent
+        while ancestor is not None:
+            if ancestor.type == "call":
+                anc_name = ancestor.child_by_field_name("method") or next((c for c in ancestor.children if c.type == "identifier"), None)
+                if anc_name is not None and source[anc_name.start_byte : anc_name.end_byte].decode() == "namespace":
+                    anc_args = ancestor.child_by_field_name("arguments") or next((c for c in ancestor.children if c.type == "argument_list"), None)
+                    anc_path, _ = _sinatra_string(next((a for a in (anc_args.named_children if anc_args else []) if a.type == "string"), None), source)
+                    prefix = "/" + (anc_path or "").strip("/") + prefix if anc_path else prefix
+            ancestor = ancestor.parent
+        for method in methods:
+            full = (prefix + "/" + (path or "").lstrip("/")).rstrip("/") if prefix else (path or "")
+            entries.append(
+                {
+                    "method": method,
+                    "path": full or "/",
+                    "framework": "sinatra",
+                    "file": rel_path,
+                    "line": node.start_point[0] + 1,
+                    "handler": "block",
+                    "unresolved": dynamic,
+                    "note": "path is built at run time" if dynamic else None,
+                }
+            )
+    return entries
+
+
 def _extract_axum_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
@@ -2023,6 +2090,12 @@ def map_api_endpoints(
                 continue
             tree = parsers["rb"].parse(source)
             endpoints.extend(_extract_rails_routes(tree.root_node, source, rel_path))
+        elif suffix == ".rb":
+            source = read_bytes_or_none(path)
+            if source is None or b"sinatra" not in source.lower():
+                continue
+            tree = parsers["rb"].parse(source)
+            endpoints.extend(_extract_sinatra_routes(tree.root_node, source, rel_path))
         elif suffix == ".php" and "routes" in Path(rel_path).parts:
             source = read_bytes_or_none(path)
             if source is None:
