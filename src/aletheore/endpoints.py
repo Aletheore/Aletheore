@@ -218,6 +218,167 @@ def _walk_tree(root: Node):
         stack.extend(reversed(node.children))
 
 
+_PYMISC_VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
+_PYMISC_HANDLER_METHODS = ("get", "post", "put", "delete", "patch", "head", "options")
+
+
+def _pymisc_text(node: Node | None, source: bytes) -> str:
+    return source[node.start_byte : node.end_byte].decode() if node is not None else ""
+
+
+def _pymisc_string(node: Node | None, source: bytes) -> str | None:
+    if node is None or node.type != "string" or any(c.type == "interpolation" for c in node.children):
+        return None
+    return "".join(_pymisc_text(c, source) for c in node.children if c.type == "string_content")
+
+
+def _pymisc_call_args(call: Node, source: bytes) -> tuple[list[Node], dict[str, Node]]:
+    args = call.child_by_field_name("arguments")
+    positional: list[Node] = []
+    keyword: dict[str, Node] = {}
+    for child in (args.named_children if args is not None else []):
+        if child.type == "keyword_argument":
+            key, value = child.child_by_field_name("name"), child.child_by_field_name("value")
+            if key is not None and value is not None:
+                keyword[_pymisc_text(key, source)] = value
+        else:
+            positional.append(child)
+    return positional, keyword
+
+
+def _pymisc_strings(node: Node | None, source: bytes) -> list[str]:
+    """Every string literal in a string or a list of strings."""
+    if node is None:
+        return []
+    if node.type == "string":
+        text = _pymisc_string(node, source)
+        return [text] if text is not None else []
+    return [t for c in node.named_children for t in _pymisc_strings(c, source)]
+
+
+def _pymisc_entry(framework: str, method: str, path: str, rel_path: str, node: Node, handler: str, note: str | None = None) -> dict:
+    return {
+        "method": method,
+        "path": path or "/",
+        "framework": framework,
+        "file": rel_path,
+        "line": node.start_point[0] + 1,
+        "handler": handler,
+        "unresolved": False,
+        "note": note,
+    }
+
+
+def _pymisc_class_methods(root: Node, source: bytes, class_name: str) -> list[str] | None:
+    for cls in _walk_tree(root):
+        if cls.type == "class_definition" and _pymisc_text(cls.child_by_field_name("name"), source) == class_name:
+            body = cls.child_by_field_name("body")
+            names = []
+            for child in (body.named_children if body is not None else []):
+                fn = child.child_by_field_name("definition") if child.type == "decorated_definition" else child
+                if fn is not None and fn.type == "function_definition":
+                    names.append(_pymisc_text(fn.child_by_field_name("name"), source))
+            return names
+    return None
+
+
+def _extract_python_decorator_routes(root: Node, source: bytes, rel_path: str, framework: str) -> list[dict]:
+    """Bottle and Litestar: the bare decorators `@get('/x')`, `@post`, `@route('/x', method='POST')` (Bottle; GET when no
+    method is given) and `@route('/x', http_method=[...])` (Litestar), where a Litestar `Controller`'s `path = '/p'` prefixes
+    its handlers. A decorator on a receiver (`@app.get`) is the Flask/FastAPI matcher's."""
+    entries: list[dict] = []
+    for decorated in _walk_tree(root):
+        if decorated.type != "decorated_definition":
+            continue
+        fn = decorated.child_by_field_name("definition")
+        if fn is None or fn.type != "function_definition":
+            continue
+        handler = _pymisc_text(fn.child_by_field_name("name"), source)
+        prefix = ""
+        enclosing = decorated.parent
+        while enclosing is not None and enclosing.type != "class_definition":
+            enclosing = enclosing.parent
+        if enclosing is not None and framework == "litestar":
+            body = enclosing.child_by_field_name("body")
+            for stmt in (body.named_children if body is not None else []):
+                assign = stmt.named_children[0] if stmt.type == "expression_statement" and stmt.named_children else None
+                if assign is not None and assign.type == "assignment" and _pymisc_text(assign.child_by_field_name("left"), source) == "path":
+                    prefix = _pymisc_string(assign.child_by_field_name("right"), source) or ""
+        for decorator in (c for c in decorated.children if c.type == "decorator"):
+            call = next((c for c in decorator.named_children if c.type == "call"), None)
+            if call is None:
+                continue
+            func = call.child_by_field_name("function")
+            if func is None or func.type != "identifier":
+                continue
+            name = _pymisc_text(func, source)
+            positional, keyword = _pymisc_call_args(call, source)
+            if name in _PYMISC_VERBS:
+                methods = [name.upper()]
+            elif name == "route":
+                key = keyword.get("method") or keyword.get("http_method")
+                methods = [m.upper() for m in _pymisc_strings(key, source)] or ["GET"]
+            else:
+                continue
+            paths = _pymisc_strings(positional[0] if positional else keyword.get("path"), source) or ([""] if framework == "litestar" else [])
+            for path in paths:
+                joined = (prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") if prefix else path
+                for method in methods:
+                    entries.append(_pymisc_entry(framework, method, joined, rel_path, decorator, handler))
+    return entries
+
+
+def _extract_tornado_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Tornado: `Application([(r"/users", UserHandler), url(r"/x/(\\d+)", H)])`. The verbs are the handler class's
+    `get` / `post` / ... methods when the class is in the same file, otherwise any method."""
+    entries: list[dict] = []
+    for call in _walk_tree(root):
+        if call.type != "call" or not _pymisc_text(call.child_by_field_name("function"), source).endswith("Application"):
+            continue
+        positional, keyword = _pymisc_call_args(call, source)
+        routes = positional[0] if positional else keyword.get("handlers")
+        for item in (routes.named_children if routes is not None and routes.type == "list" else []):
+            parts = item.named_children
+            if item.type == "call":  # url(r"/x", H)
+                args, _kw = _pymisc_call_args(item, source)
+                parts = args
+            if len(parts) < 2:
+                continue
+            pattern = _pymisc_string(parts[0], source)
+            if pattern is None:
+                continue
+            path = pattern.lstrip("^").rstrip("$")
+            handler = _pymisc_text(parts[1], source).split(".")[-1]
+            methods = _pymisc_class_methods(root, source, handler)
+            verbs = [m.upper() for m in (methods or []) if m in _PYMISC_HANDLER_METHODS]
+            for verb in verbs or ["ANY"]:
+                entries.append(_pymisc_entry("tornado", verb, path, rel_path, item, handler, None if verbs else "handler class not found in this file"))
+    return entries
+
+
+def _extract_falcon_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Falcon: `app.add_route('/x', Resource())`; the verbs are the resource class's `on_get` / `on_post` / ... methods
+    (any method when the class is not in this file)."""
+    entries: list[dict] = []
+    for call in _walk_tree(root):
+        if call.type != "call":
+            continue
+        func = call.child_by_field_name("function")
+        if func is None or func.type != "attribute" or _pymisc_text(func.child_by_field_name("attribute"), source) != "add_route":
+            continue
+        positional, _kw = _pymisc_call_args(call, source)
+        path = _pymisc_string(positional[0], source) if positional else None
+        if path is None or len(positional) < 2:
+            continue
+        target = positional[1]
+        class_name = _pymisc_text(target.child_by_field_name("function") if target.type == "call" else target, source).split(".")[-1]
+        methods = _pymisc_class_methods(root, source, class_name)
+        verbs = [m[3:].upper() for m in (methods or []) if m.startswith("on_") and m[3:] in _PYMISC_HANDLER_METHODS]
+        for verb in verbs or ["ANY"]:
+            entries.append(_pymisc_entry("falcon", verb, path, rel_path, call, class_name, None if verbs else "resource class not found in this file"))
+    return entries
+
+
 def _extract_flask_fastapi_routes(
     root: Node,
     source: bytes,
@@ -1974,6 +2135,14 @@ def map_api_endpoints(
             )
             if path.name == "urls.py":
                 endpoints.extend(_extract_django_routes(tree.root_node, source, rel_path))
+            if b"bottle" in source:
+                endpoints.extend(_extract_python_decorator_routes(tree.root_node, source, rel_path, "bottle"))
+            if b"litestar" in source:
+                endpoints.extend(_extract_python_decorator_routes(tree.root_node, source, rel_path, "litestar"))
+            if b"tornado" in source:
+                endpoints.extend(_extract_tornado_routes(tree.root_node, source, rel_path))
+            if b"falcon" in source:
+                endpoints.extend(_extract_falcon_routes(tree.root_node, source, rel_path))
         elif suffix in (".js", ".jsx"):
             source = read_bytes_or_none(path)
             if source is None:
