@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -1172,6 +1173,134 @@ def _extract_spring_boot_routes(root: Node, source: bytes, rel_path: str) -> lis
     return entries
 
 
+_KOTLIN_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
+_KOTLIN_SPRING_CONTROLLERS = {"RestController", "Controller"}
+
+
+_SPRING_PLACEHOLDER = re.compile(r"\$\{[^}:]*:([^}]*)\}")
+
+
+def _spring_placeholder_defaults(path: str) -> tuple[str, bool]:
+    """`${api.base-path:/api}/users` -> (`/api/users`, True): a Spring property placeholder with a default stands for that
+    default unless configuration overrides it."""
+    replaced = _SPRING_PLACEHOLDER.sub(lambda m: m.group(1), path)
+    return re.sub(r"/{2,}", "/", replaced), replaced != path
+
+
+def _kotlin_annotations(modifiers: Node | None, source: bytes) -> list[tuple[str, str, Node]]:
+    """(annotation name, argument text, node) for every annotation in a Kotlin `modifiers` node."""
+    found: list[tuple[str, str, Node]] = []
+    for ann in (c for c in (modifiers.children if modifiers is not None else []) if c.type == "annotation"):
+        invocation = next((c for c in ann.children if c.type == "constructor_invocation"), None)
+        head = invocation if invocation is not None else next((c for c in ann.children if c.type == "user_type"), None)
+        if head is None:
+            continue
+        name_node = head if head.type == "user_type" else next((c for c in head.children if c.type in ("user_type", "identifier")), head)
+        name = source[name_node.start_byte : name_node.end_byte].decode(errors="replace").split(".")[-1].split("<")[0].strip()
+        args = next((c for c in head.children if c.type == "value_arguments"), None)
+        found.append((name, source[args.start_byte : args.end_byte].decode() if args is not None else "", ann))
+    return found
+
+
+def _kotlin_split_arguments(body: str) -> list[str]:
+    """Top-level comma-separated arguments of an annotation (brackets, parentheses and strings kept whole)."""
+    parts: list[str] = []
+    depth = 0
+    quote = ""
+    start = 0
+    for i, char in enumerate(body):
+        if quote:
+            if char == quote and body[i - 1] != "\\":
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(body[start:i])
+            start = i + 1
+    parts.append(body[start:])
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _kotlin_spring_paths(args_text: str) -> list[str] | None:
+    """The literal paths of a mapping annotation: the first positional argument, or `value =` / `path =` (a string or a list
+    of them). [""] when no path is given; None when one is given but is not a string literal (a constant). Other string
+    attributes (`name = "x"`, `params = "a,b"`) are not paths."""
+    body = args_text.strip()[1:-1] if args_text else ""
+    chosen: str | None = None
+    for index, argument in enumerate(_kotlin_split_arguments(body)):
+        named = re.match(r"(\w+)\s*=\s*(.*)$", argument, re.S)
+        if named and named.group(1) in ("value", "path"):
+            chosen = named.group(2)
+        elif not named and index == 0:
+            chosen = argument
+    if chosen is None:
+        return [""]
+    literals = [text.replace("\\$", "$") for text in _KOTLIN_STRING.findall(chosen)]
+    return literals or None
+
+
+def _extract_kotlin_spring_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Spring MVC controllers written in Kotlin: `@RestController` / `@Controller` classes with a class-level
+    `@RequestMapping` prefix and `@GetMapping` ... `@PatchMapping` / `@RequestMapping(method = [..])` functions."""
+    entries: list[dict] = []
+    for cls in _walk_tree(root):
+        if cls.type != "class_declaration":
+            continue
+        class_annotations = _kotlin_annotations(next((c for c in cls.children if c.type == "modifiers"), None), source)
+        if not any(name in _KOTLIN_SPRING_CONTROLLERS for name, _a, _n in class_annotations):
+            continue
+        prefixes = [""]
+        prefix_is_constant = False
+        for name, args, _node in class_annotations:
+            if name == "RequestMapping":
+                found = _kotlin_spring_paths(args)
+                prefix_is_constant = found is None
+                prefixes = found or [""]
+        body = next((c for c in cls.children if c.type == "class_body"), None)
+        for fn in (c for c in (body.children if body is not None else []) if c.type == "function_declaration"):
+            ident = next((c for c in fn.children if c.type == "identifier"), None)
+            handler = source[ident.start_byte : ident.end_byte].decode() if ident is not None else "unknown"
+            for name, args, node in _kotlin_annotations(next((c for c in fn.children if c.type == "modifiers"), None), source):
+                if name in _SPRING_VERB_ANNOTATIONS:
+                    method = _SPRING_VERB_ANNOTATIONS[name]
+                elif name == "RequestMapping":
+                    found = re.search(r"RequestMethod\.([A-Z]+)", args)
+                    method = found.group(1) if found else "ANY"
+                else:
+                    continue
+                paths = _kotlin_spring_paths(args)
+                for prefix in prefixes:
+                    for path in paths if paths is not None else [None]:
+                        joined = (prefix.rstrip("/") + "/" + (path or "").lstrip("/")).rstrip("/") if (prefix or path) else ""
+                        joined, defaulted = _spring_placeholder_defaults(joined)
+                        note = None
+                        if path is None:
+                            note = "path is a constant, not a string literal"
+                        elif prefix_is_constant:
+                            note = "the controller's @RequestMapping path is a constant, not a string literal"
+                        elif "${" in joined:
+                            note = "path holds a property placeholder with no default"
+                        elif defaulted:
+                            note = "a property placeholder was replaced by its default value"
+                        entries.append(
+                            {
+                                "method": method,
+                                "path": joined or "/",
+                                "framework": "spring_boot",
+                                "file": rel_path,
+                                "line": node.start_point[0] + 1,
+                                "handler": handler,
+                                "unresolved": path is None or prefix_is_constant or "${" in joined,
+                                "note": note,
+                            }
+                        )
+    return entries
+
+
 _KTOR_VERB_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
 
 # Ktor route-definition calls (route(...), routing { }, verb calls) are the
@@ -2154,5 +2283,6 @@ def map_api_endpoints(
                 continue
             tree = parsers["kt"].parse(source)
             endpoints.extend(_extract_ktor_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_kotlin_spring_routes(tree.root_node, source, rel_path))
 
     return {"checked": True, "endpoints": endpoints}
