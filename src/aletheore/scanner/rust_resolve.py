@@ -91,6 +91,33 @@ def _workspace(repo_str: str) -> tuple[dict[str, Path], dict[str, dict]]:
     return by_name, manifests
 
 
+@lru_cache(maxsize=256)
+def manifest_root_dirs(manifest_dir: str) -> tuple[str, ...]:
+    """Directories of the crate roots a Cargo.toml declares outside the default `src/`: `[lib] path` and each
+    `[[bin]] path` whose file is a `lib.rs`/`main.rs` (the names `crate_root_file` understands), for a package whose
+    sources are not under `src/` (ripgrep's `crates/core/main.rs`). A path that leaves the package directory is ignored."""
+    manifest = _load_toml(Path(manifest_dir) / "Cargo.toml")
+    declared: list[object] = []
+    lib = manifest.get("lib")
+    if isinstance(lib, dict):
+        declared.append(lib.get("path"))
+    bins = manifest.get("bin")
+    if isinstance(bins, list):
+        declared.extend(b.get("path") for b in bins if isinstance(b, dict))
+    base = os.path.realpath(manifest_dir)
+    default_src = os.path.join(base, "src")
+    out: list[str] = []
+    for value in declared:
+        if not isinstance(value, str) or os.path.basename(value) not in ("lib.rs", "main.rs"):
+            continue
+        directory = os.path.realpath(os.path.join(base, os.path.dirname(value)))
+        # `[[bin]] path = "main.rs"` / `[lib] path = "lib.rs"` at the package root puts the crate root in the package
+        # directory itself, which is as valid as a subdirectory
+        if directory != default_src and (directory == base or directory.startswith(base + os.sep)) and directory not in out:
+            out.append(directory)
+    return tuple(out)
+
+
 def nearest_manifest_dir(repo_path: Path, from_file: Path) -> Path | None:
     current = from_file.parent
     root = str(repo_path)
@@ -174,7 +201,7 @@ def clean_source(text: str, keep_literals: bool = False) -> str:
 def clear_cache() -> None:
     """Forget directory listings, Cargo manifests, macro registries and module summaries (called once per scan,
     so edits between scans in one process are seen). Also clears the Go package cache."""
-    for cached in (dir_names, _workspace, _macro_registry, _arg_macro_registry, module_items):
+    for cached in (dir_names, _workspace, _macro_registry, _arg_macro_registry, module_items, manifest_root_dirs):
         cached.cache_clear()
     from aletheore.scanner import go_resolve
 

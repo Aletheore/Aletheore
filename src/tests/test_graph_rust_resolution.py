@@ -177,6 +177,25 @@ def test_flatten_use_groups_and_aliases():
     assert rust_resolve.flatten_use("crate::a::*") == ["crate::a"]
 
 
+def _custom_root_repo(tmp_path, manifest: str, root_rel: str, extra: dict[str, str] | None = None):
+    repo = tmp_path / "custom"
+    files = {
+        "Cargo.toml": manifest,
+        root_rel: "mod flags;\nmod util;\nfn main() {}\n",
+        f"{root_rel.rsplit('/', 1)[0]}/util.rs": "pub fn helper() {}\n",
+        f"{root_rel.rsplit('/', 1)[0]}/flags/mod.rs": "pub mod defs;\nuse crate::util::helper;\n",
+        f"{root_rel.rsplit('/', 1)[0]}/flags/defs.rs": "use crate::util::helper;\nuse super::other;\n",
+        f"{root_rel.rsplit('/', 1)[0]}/flags/other.rs": "pub fn x() {}\n",
+    }
+    files.update(extra or {})
+    for rel, body in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+    modules, _, _ = build_module_graph(repo)
+    return {m["path"]: set(m["imports"]) for m in modules}
+
+
 def _facade_workspace(tmp_path, reexport: str):
     """core crate defines `de`; facade crate re-exports it (`pub use core::de`), directly or inside a macro."""
     repo = tmp_path / "ws"
@@ -199,6 +218,145 @@ def _facade_workspace(tmp_path, reexport: str):
         p.write_text(body)
     modules, _, _ = build_module_graph(repo)
     return {m["path"]: set(m["imports"]) for m in modules}
+
+
+def test_rust_bin_root_declared_in_the_manifest_outside_src(tmp_path):
+    manifest = '[package]\nname = "app"\nversion = "0.1.0"\n[[bin]]\nname = "app"\npath = "crates/core/main.rs"\n'
+    imp = _custom_root_repo(tmp_path, manifest, "crates/core/main.rs")
+    assert {"crates/core/flags/mod.rs", "crates/core/util.rs"} <= imp["crates/core/main.rs"]
+    assert "crates/core/util.rs" in imp["crates/core/flags/mod.rs"]
+    assert "crates/core/util.rs" in imp["crates/core/flags/defs.rs"]
+    assert "crates/core/flags/other.rs" in imp["crates/core/flags/defs.rs"]
+
+
+def test_rust_lib_root_declared_in_the_manifest_outside_src(tmp_path):
+    manifest = '[package]\nname = "app"\nversion = "0.1.0"\n[lib]\npath = "lib/lib.rs"\n'
+    imp = _custom_root_repo(tmp_path, manifest, "lib/lib.rs")
+    assert "lib/util.rs" in imp["lib/flags/defs.rs"]
+
+
+def test_rust_default_src_layout_is_unchanged_when_the_manifest_has_no_paths(tmp_path):
+    manifest = '[package]\nname = "app"\nversion = "0.1.0"\n'
+    imp = _custom_root_repo(tmp_path, manifest, "src/main.rs")
+    assert "src/util.rs" in imp["src/flags/defs.rs"]
+
+
+def test_rust_manifest_path_outside_the_repo_is_ignored(tmp_path):
+    manifest = '[package]\nname = "app"\nversion = "0.1.0"\n[[bin]]\nname = "app"\npath = "../../etc/main.rs"\n'
+    imp = _custom_root_repo(tmp_path, manifest, "src/main.rs")
+    assert "src/util.rs" in imp["src/flags/defs.rs"]
+
+
+def test_rust_use_group_keeps_nested_paths_next_to_plain_names(tmp_path):
+    # `use crate::flags::{defs::FLAGS, Other}`: the nested path `defs::FLAGS` is an entry of the group like `Other` is.
+    repo = tmp_path / "grp"
+    files = {
+        "Cargo.toml": '[package]\nname = "app"\nversion = "0.1.0"\n',
+        "src/main.rs": "mod flags;\nmod user;\nfn main() {}\n",
+        "src/flags/mod.rs": "pub mod defs;\npub mod doc;\npub struct Other;\n",
+        "src/flags/defs.rs": "pub const FLAGS: u8 = 1;\n",
+        "src/flags/doc.rs": "pub fn version() {}\n",
+        "src/user.rs": "use crate::flags::{defs::FLAGS, doc::version, Other};\n",
+        "src/multi.rs": "use crate::flags::{\n    defs::FLAGS,\n    doc::version,\n};\n",
+    }
+    for rel, body in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+    modules, _, _ = build_module_graph(repo)
+    imp = {m["path"]: set(m["imports"]) for m in modules}
+    assert {"src/flags/defs.rs", "src/flags/doc.rs", "src/flags/mod.rs"} <= imp["src/user.rs"]
+    assert {"src/flags/defs.rs", "src/flags/doc.rs"} <= imp["src/multi.rs"]
+
+
+def test_rust_top_level_use_list_keeps_nested_paths(tmp_path):
+    from aletheore.scanner.graph import RUST_LANGUAGE, _extract_rust
+    from tree_sitter import Parser
+
+    src = b"use {std::fmt::Write, crate::a::b, c};\n"
+    paths = _extract_rust(Parser(RUST_LANGUAGE).parse(src).root_node, src)[0]
+    assert set(paths) == {"std::fmt::Write", "crate::a::b", "c"}
+
+
+def test_rust_top_level_use_list_keeps_grouped_and_aliased_entries():
+    from aletheore.scanner.graph import RUST_LANGUAGE, _extract_rust
+    from tree_sitter import Parser
+
+    src = b"use {\n    grep_matcher::{ByteSet, LineTerminator},\n    std::io as sio,\n    regex::*,\n};\n"
+    paths = _extract_rust(Parser(RUST_LANGUAGE).parse(src).root_node, src)[0]
+    assert {"grep_matcher::ByteSet", "grep_matcher::LineTerminator", "std::io", "regex"} <= set(paths)
+
+
+def test_rust_integration_test_modules_resolve_crate_paths_to_their_test_root(tmp_path):
+    repo = write(tmp_path / "it", {
+        "Cargo.toml": pkg("app"),
+        "src/lib.rs": "pub fn run() {}\n",
+        "src/util.rs": "pub fn lib_util() {}\n",
+        "tests/tests.rs": "mod util;\nmod binary;\n",
+        "tests/util.rs": "pub fn helper() {}\n",
+        "tests/binary.rs": "use crate::util::helper;\n",
+    })
+    imports = edges_of(repo)
+    assert ("tests/binary.rs", "tests/util.rs") in imports
+    assert ("tests/binary.rs", "src/util.rs") not in imports
+
+
+def test_rust_test_file_without_a_declaring_root_does_not_guess_a_sibling(tmp_path):
+    # Nothing in tests/ says `mod util;`, so `crate::util` is not resolved to tests/util.rs by name alone.
+    repo = write(tmp_path / "it2", {
+        "Cargo.toml": pkg("app"),
+        "src/lib.rs": "pub fn run() {}\n",
+        "tests/util.rs": "pub fn helper() {}\n",
+        "tests/binary.rs": "use crate::util::helper;\n",
+    })
+    assert ("tests/binary.rs", "tests/util.rs") not in edges_of(repo)
+
+
+def test_rust_use_crate_item_follows_the_root_pub_use_to_its_defining_file(tmp_path):
+    repo = write(tmp_path / "re", {
+        "Cargo.toml": pkg("app"),
+        "src/lib.rs": "mod glob;\nmod serde_impl;\npub use crate::glob::{Glob, GlobSet};\n",
+        "src/glob.rs": "pub struct Glob;\npub struct GlobSet;\n",
+        "src/serde_impl.rs": "use crate::{Glob, GlobSet};\n",
+    })
+    imports = edges_of(repo)
+    assert ("src/serde_impl.rs", "src/glob.rs") in imports
+    assert ("src/serde_impl.rs", "src/lib.rs") in imports
+
+
+def test_rust_test_target_in_a_subdirectory_resolves_crate_paths_to_its_main_rs(tmp_path):
+    repo = write(tmp_path / "sub", {
+        "Cargo.toml": pkg("app"),
+        "src/lib.rs": "pub fn run() {}\n",
+        "tests/builder/main.rs": "mod util;\nmod arg;\n",
+        "tests/builder/util.rs": "pub fn helper() {}\n",
+        "tests/builder/arg.rs": "use crate::util::helper;\n",
+    })
+    assert ("tests/builder/arg.rs", "tests/builder/util.rs") in edges_of(repo)
+
+
+def test_rust_standalone_test_crate_is_not_mapped_to_a_siblings_modules(tmp_path):
+    repo = write(tmp_path / "flat", {
+        "Cargo.toml": pkg("app"),
+        "src/lib.rs": "pub fn run() {}\n",
+        "tests/tests.rs": "mod util;\nmod binary;\n",
+        "tests/util.rs": "pub fn helper() {}\n",
+        "tests/binary.rs": "use crate::util::helper;\n",
+        "tests/standalone.rs": "use crate::util::helper;\n",  # its own crate, never declares `mod util;`
+    })
+    edges = edges_of(repo)
+    assert ("tests/binary.rs", "tests/util.rs") in edges
+    assert ("tests/standalone.rs", "tests/util.rs") not in edges
+
+
+def test_rust_package_root_bin_path_without_a_src_directory(tmp_path):
+    repo = write(tmp_path / "rootbin", {
+        "Cargo.toml": '[package]\nname = "app"\nversion = "0.1.0"\n[[bin]]\nname = "app"\npath = "main.rs"\n',
+        "main.rs": "mod util;\nfn main() {}\n",
+        "util.rs": "pub fn helper() {}\n",
+        "other.rs": "use crate::util::helper;\n",
+    })
+    assert ("main.rs", "util.rs") in edges_of(repo)
 
 
 def test_rust_crate_path_follows_a_module_reexported_from_a_sibling_crate(tmp_path):
