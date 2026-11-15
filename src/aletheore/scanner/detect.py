@@ -349,6 +349,28 @@ def git_visible_paths(repo_path: Path) -> tuple[frozenset[str], frozenset[str]] 
     return frozenset(files), frozenset(dirs)
 
 
+# Directory names that are build output in most repos but a real source package or module in others
+# (Java's org.apache.commons.io.build, a Python `pkg/build/` subpackage, Gradle's own `buildSrc` siblings).
+AMBIGUOUS_OUTPUT_DIRS = frozenset({"build", "out", "dist", "release"})
+_SOURCE_TREE_PARTS = frozenset({"src", "source", "sources"})
+
+
+def is_ignored_dir_name(name: str, rel_dir: str, tracked_dirs: frozenset | None = None, rel_path: str = "") -> bool:
+    """True when `name` (a directory directly under `rel_dir`) is skipped as non-source.
+
+    The unambiguous names (node_modules, .git, __pycache__ ...) always are. `build`, `out`, `dist` and `release` are
+    build output unless the directory is clearly source: git tracks it, or a `src`/`source`/`sources` directory is
+    somewhere above it (build output is written next to the sources, never inside a source tree).
+    """
+    if name not in IGNORED_DIRS:
+        return False
+    if name not in AMBIGUOUS_OUTPUT_DIRS:
+        return True
+    if tracked_dirs is not None and rel_path and visible_key(rel_path) in tracked_dirs:
+        return False
+    return not any(part in _SOURCE_TREE_PARTS for part in rel_dir.split("/"))
+
+
 def _iter_pruned_tree(repo_path: Path):
     """Single os.walk yielding (path, is_dir) for every file and directory
     under repo_path, pruning IGNORED_DIRS before descending.
@@ -388,7 +410,7 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
         dirnames[:] = [
             d
             for d in dirnames
-            if d not in IGNORED_DIRS
+            if not is_ignored_dir_name(d, rel_dir, visible[1] if visible else None, f"{rel_dir}/{d}" if rel_dir != "." else d)
             and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
             and (visible is None or visible_key(f"{rel_dir}/{d}" if rel_dir != "." else d) in visible[1])
         ]

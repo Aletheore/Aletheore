@@ -54,9 +54,11 @@ def test_ruby_expression_scope_name_is_not_a_lexical_reference(tmp_path):
     assert "lib/shop/cart.rb" not in imp["lib/shop/pay.rb"]  # o.class::LIMIT
 
 
-def test_ruby_constant_defined_in_two_files_is_skipped(tmp_path):
+def test_ruby_constant_defined_in_two_files_resolves_to_the_zeitwerk_named_one(tmp_path):
+    # Shop::Util is defined in util.rb and util2.rb; Zeitwerk's file for it is shop/util.rb.
+    # (A constant with no single path match stays unresolved: see test_graph_ruby.py.)
     imp = imports_of(ruby_repo(tmp_path))
-    assert imp["lib/shop/user_of_util.rb"] == set()
+    assert imp["lib/shop/user_of_util.rb"] == {"lib/shop/util.rb"}
 
 
 def test_ruby_builtin_constant_reopened_in_repo_adds_no_edge(tmp_path):
