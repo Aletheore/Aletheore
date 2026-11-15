@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: Rust `mod x;` declarations inside item-wrapping macro invocations (`cfg_net! { pub(crate) mod tcp; }`, the usual conditional-compilation wrapper) now link their module files; a `$name` placeholder inside a `macro_rules!` body is never read as a module. mio edge F1 against an independent reference rose from 0.767 to 0.796, and its live modules are no longer reported as unreachable dead code.
 - Added: Ruby `require`/`require_relative` of a path built from `__dir__`, `__FILE__`, `File.dirname`, `File.join`, `File.expand_path` and file-level local variables (`require File.join(dir, "client")`, `require File.expand_path("../../config/environment", __FILE__)`) now resolves like a relative require. An expression that cannot be evaluated statically adds nothing. One HTTP client library's edge F1 against an independent reference rose from 0.901 to 0.988.
 - Fixed: `<?hh` (Hack) files are no longer read as PHP for implicit class references. FastRoute's Hack test fixtures produced seven false edges; edge F1 against an independent reference rose from 0.877 to 1.000.
 
