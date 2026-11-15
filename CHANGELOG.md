@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Next.js app-router and pages-router API routes are found from their file paths.
 - Symfony attribute routes (with class prefixes) and Slim routes (with nested group prefixes) are found.
 - Fastify `route({ method, url, handler })` and hapi `route({ method, path, handler })` object routes (also an array of them) are found.
 - Starlette routes with nested mounts and aiohttp route helpers are found.
