@@ -79,3 +79,8 @@ end
 def map_api_endpoints_in(tmp_path, code):
     (tmp_path / "api.rb").write_text(code)
     return map_api_endpoints(tmp_path)["endpoints"]
+
+
+def test_ruby_file_with_non_utf8_bytes_does_not_abort_the_scan(tmp_path):
+    (tmp_path / "app.rb").write_bytes(b"require 'sinatra'\n# caf\xe9\nget '/x' do\nend\n")
+    assert [e["path"] for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "sinatra"] == ["/x"]

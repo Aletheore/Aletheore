@@ -924,7 +924,7 @@ def _sinatra_string(node: Node | None, source: bytes) -> tuple[str | None, bool]
         return None, False
     if any(c.type == "interpolation" for c in node.children):
         return None, True
-    return "".join(source[c.start_byte : c.end_byte].decode() for c in node.children if c.type == "string_content"), False
+    return "".join(source[c.start_byte : c.end_byte].decode(errors="replace") for c in node.children if c.type == "string_content"), False
 
 
 def _extract_sinatra_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
@@ -937,7 +937,7 @@ def _extract_sinatra_routes(root: Node, source: bytes, rel_path: str) -> list[di
         name_node = node.child_by_field_name("method") or next((c for c in node.children if c.type == "identifier"), None)
         if name_node is None or node.child_by_field_name("receiver") is not None:
             continue
-        name = source[name_node.start_byte : name_node.end_byte].decode()
+        name = source[name_node.start_byte : name_node.end_byte].decode(errors="replace")
         args_node = node.child_by_field_name("arguments") or next((c for c in node.children if c.type == "argument_list"), None)
         if args_node is None or not any(c.type in ("do_block", "block") for c in node.children):
             continue
@@ -946,7 +946,7 @@ def _extract_sinatra_routes(root: Node, source: bytes, rel_path: str) -> list[di
         if name in _SINATRA_VERBS:
             methods = [name.upper()]
         elif name == "route":
-            methods = [source[a.start_byte + 1 : a.end_byte].decode().upper() for a in args if a.type == "simple_symbol"]
+            methods = [source[a.start_byte + 1 : a.end_byte].decode(errors="replace").upper() for a in args if a.type == "simple_symbol"]
             if not methods:
                 continue
         else:
@@ -960,7 +960,7 @@ def _extract_sinatra_routes(root: Node, source: bytes, rel_path: str) -> list[di
         while ancestor is not None:
             if ancestor.type == "call":
                 anc_name = ancestor.child_by_field_name("method") or next((c for c in ancestor.children if c.type == "identifier"), None)
-                if anc_name is not None and source[anc_name.start_byte : anc_name.end_byte].decode() == "namespace":
+                if anc_name is not None and source[anc_name.start_byte : anc_name.end_byte].decode(errors="replace") == "namespace":
                     anc_args = ancestor.child_by_field_name("arguments") or next((c for c in ancestor.children if c.type == "argument_list"), None)
                     anc_path, _ = _sinatra_string(next((a for a in (anc_args.named_children if anc_args else []) if a.type == "string"), None), source)
                     prefix = "/" + (anc_path or "").strip("/") + prefix if anc_path else prefix
@@ -987,7 +987,7 @@ _GRAPE_NESTERS = {"namespace", "resource", "resources", "group", "segment", "rou
 
 def _grape_name(call: Node, source: bytes) -> str:
     name = call.child_by_field_name("method") or next((c for c in call.children if c.type == "identifier"), None)
-    return source[name.start_byte : name.end_byte].decode() if name is not None else ""
+    return source[name.start_byte : name.end_byte].decode(errors="replace") if name is not None else ""
 
 
 def _grape_first_argument(call: Node, source: bytes) -> str | None:
@@ -997,7 +997,7 @@ def _grape_first_argument(call: Node, source: bytes) -> str | None:
     if first is None:
         return None
     if first.type == "simple_symbol":
-        return source[first.start_byte + 1 : first.end_byte].decode()
+        return source[first.start_byte + 1 : first.end_byte].decode(errors="replace")
     text, _dynamic = _sinatra_string(first, source)
     return text.strip("/") if text is not None else None
 
@@ -1011,7 +1011,7 @@ def _extract_grape_routes(root: Node, source: bytes, rel_path: str) -> list[dict
     for call in _walk_tree(root):
         if call.type == "call" and call.child_by_field_name("receiver") is None and _grape_name(call, source) in ("prefix", "version"):
             segment = _grape_first_argument(call, source)
-            using_path = "using: :path" in source[call.start_byte : call.end_byte].decode() or _grape_name(call, source) == "prefix"
+            using_path = "using: :path" in source[call.start_byte : call.end_byte].decode(errors="replace") or _grape_name(call, source) == "prefix"
             klass = call.parent
             while klass is not None and klass.type != "class":
                 klass = klass.parent
