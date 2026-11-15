@@ -22,6 +22,7 @@ from aletheore.scanner.graph import (
     _resolve_python_from_import,
 )
 
+from aletheore import flask_blueprints as _fb
 from aletheore.safe_io import read_bytes_or_none
 
 _ROUTE_VERB_METHODS = {"get", "post", "put", "delete", "patch"}
@@ -108,6 +109,36 @@ def _resolve_from_import_binding(
             )
             if target is not None:
                 return target
+    return None
+
+
+def _resolve_import_binding_with_name(
+    root: Node, source: bytes, name: str, repo_path: Path, path: Path, source_roots: list[Path]
+) -> tuple[str, str] | None:
+    """Like _resolve_from_import_binding, but also gives the name the module itself calls it: for
+    `from app.auth import bp as auth_bp`, `auth_bp` resolves to (the file of app.auth, "bp"). The blueprint
+    registered under an alias is keyed by its real name in the file that defines it."""
+    for n in _walk_tree(root):
+        if n.type != "import_from_statement":
+            continue
+        module_node = n.child_by_field_name("module_name")
+        if module_node is None:
+            continue
+        for name_node in n.children_by_field_name("name"):
+            if name_node.type == "aliased_import":
+                imported_node = name_node.child_by_field_name("name")
+                alias_node = name_node.child_by_field_name("alias")
+                local_name = source[alias_node.start_byte:alias_node.end_byte].decode() if alias_node else None
+            else:
+                imported_node = name_node
+                local_name = source[name_node.start_byte:name_node.end_byte].decode()
+            if local_name != name or imported_node is None:
+                continue
+            module_name = source[module_node.start_byte:module_node.end_byte].decode()
+            imported_name = source[imported_node.start_byte:imported_node.end_byte].decode()
+            target, _ambiguous = _resolve_python_from_import(repo_path, module_name, imported_name, path, source_roots)
+            if target is not None:
+                return target, imported_name
     return None
 
 
@@ -589,6 +620,9 @@ def _extract_flask_fastapi_routes(
     source: bytes,
     rel_path: str,
     external_router_mount_prefixes: dict[tuple[str, str], list[str]] | None = None,
+    flask_blueprint_prefixes: dict[tuple[str, str], list[str]] | None = None,
+    flask_unresolved_blueprints: set[tuple[str, str]] | None = None,
+    flask_key_for=None,
 ) -> list[dict]:
     entries: list[dict] = []
 
@@ -725,6 +759,18 @@ def _extract_flask_fastapi_routes(
                 mount_prefixes = (
                     router_mount_prefixes.get(router_name, []) if router_name is not None else []
                 )
+                blueprint_key = (
+                    (flask_key_for(router_name) if flask_key_for else (rel_path, router_name))
+                    if router_name is not None else None
+                )
+                is_blueprint = bool(flask_blueprint_prefixes) and blueprint_key in flask_blueprint_prefixes
+                bp_unresolved = is_blueprint and blueprint_key in (flask_unresolved_blueprints or set())
+                bp_note = "blueprint url_prefix is not a string literal; the real path is unknown" if bp_unresolved else None
+                if is_blueprint:
+                    # Flask's own rules, resolved across files (see flask_blueprints): the full prefixes this
+                    # blueprint is reachable at replace the FastAPI-style constructor + mount composition.
+                    constructor_prefix = None
+                    mount_prefixes = list(flask_blueprint_prefixes[blueprint_key])
 
                 def compose(mount_prefix: str | None, _path: str = path) -> str:
                     composed = _path
@@ -764,8 +810,8 @@ def _extract_flask_fastapi_routes(
                                     "file": rel_path,
                                     "line": line,
                                     "handler": handler,
-                                    "unresolved": False,
-                                    "note": None,
+                                    "unresolved": bp_unresolved,
+                                    "note": bp_note,
                                 }
                             )
                 elif attribute_name in _ROUTE_VERB_METHODS:
@@ -774,12 +820,12 @@ def _extract_flask_fastapi_routes(
                             {
                                 "method": attribute_name.upper(),
                                 "path": entry_path,
-                                "framework": "flask_or_fastapi",
+                                "framework": "flask" if is_blueprint else "flask_or_fastapi",
                                 "file": rel_path,
                                 "line": line,
                                 "handler": handler,
-                                "unresolved": False,
-                                "note": None,
+                                "unresolved": bp_unresolved,
+                                "note": bp_note,
                             }
                         )
     return entries
@@ -3559,6 +3605,7 @@ def map_api_endpoints(
     # build_module_graph's own four-call version of this).
     source_paths = list(_iter_source_files(repo_path, ignored_paths))
     cross_file_router_mounts: dict[tuple[str, str], list[str]] = {}
+    flask_facts: list[dict] = []
     for path in source_paths:
         if path.suffix != ".py":
             continue
@@ -3571,6 +3618,14 @@ def map_api_endpoints(
         )
         for key, prefixes in collected.items():
             cross_file_router_mounts.setdefault(key, []).extend(prefixes)
+        if b"lueprint" in source or b"add_url_rule" in source:  # Blueprint(...), register_blueprint(...)
+            flask_facts.append(_fb.collect_file_facts(
+                tree.root_node, source, _rel(repo_path, path),
+                lambda name, _r=tree.root_node, _s=source, _p=path: _resolve_import_binding_with_name(
+                    _r, _s, name, repo_path, _p, python_source_roots
+                ),
+            ))
+    flask_prefixes, flask_unresolved = _fb.effective_prefixes(flask_facts)
 
     # A router-defining file's composed endpoint paths depend on every
     # include_router(..., prefix=...) call that targets it, which can live
@@ -3586,6 +3641,8 @@ def map_api_endpoints(
     # correctness that doesn't depend on tracking which mounting file
     # changed - see docs/audits/Claude_Audit.md finding 20.
     cross_file_mount_defining_files = {defining_file for defining_file, _router in cross_file_router_mounts}
+    # a blueprint's routes depend on registrations in other files too (url_prefix, nesting, factories)
+    cross_file_mount_defining_files |= {file for file, _name in flask_prefixes}
 
     # JAX-RS: `@ApplicationPath("/api")` sits on an Application class, apart from the resources it prefixes, so resource
     # files are read afresh each scan, never reused from the cache.
@@ -3683,11 +3740,24 @@ def map_api_endpoints(
             if source is None:
                 continue
             tree = parsers["py"].parse(source)
+            def flask_key_for(name, _r=tree.root_node, _s=source, _p=path, _rel_path=rel_path):
+                # the blueprint a name in THIS file stands for: its own definition, or the one it imports
+                if (_rel_path, name) in flask_prefixes:
+                    return (_rel_path, name)
+                bound = _resolve_import_binding_with_name(_r, _s, name, repo_path, _p, python_source_roots)
+                return bound if bound and bound in flask_prefixes else (_rel_path, name)
+
             endpoints.extend(
                 _extract_flask_fastapi_routes(
-                    tree.root_node, source, rel_path, cross_file_router_mounts
+                    tree.root_node, source, rel_path, cross_file_router_mounts,
+                    flask_blueprint_prefixes=flask_prefixes, flask_unresolved_blueprints=flask_unresolved,
+                    flask_key_for=flask_key_for if flask_prefixes else None,
                 )
             )
+            if b"add_url_rule" in source:
+                endpoints.extend(_fb.extract_add_url_rules(
+                    tree.root_node, source, rel_path, flask_prefixes, flask_unresolved, key_for=flask_key_for
+                ))
             if path.name == "urls.py":
                 endpoints.extend(_extract_django_routes(tree.root_node, source, rel_path))
             if b"starlette" in source:
