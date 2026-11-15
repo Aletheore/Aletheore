@@ -6,6 +6,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 ## Unreleased
 
 - Bottle and Litestar decorator routes, Tornado application routes, Falcon resource routes and Pyramid views (with the pattern of their `add_route` name) are found.
+- Go endpoints: chi, Fiber and httprouter routes are found, and Echo routes are labelled `echo` instead of `gin`; nested chi `Route` closures and Echo/Fiber `Group` prefixes are composed.
 
 ## 0.13.0 - 2026-11-14
 
