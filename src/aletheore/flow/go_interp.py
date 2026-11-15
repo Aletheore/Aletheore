@@ -45,6 +45,7 @@ class GFrame:
     env: dict = field(default_factory=dict)
     rets: list = field(default_factory=list)
     branch: int = 0
+    alias: dict = field(default_factory=dict)  # local name -> the package variable it was copied from (`m := saved` shares the map)
 
 
 def _t(n: Node | None) -> str:
@@ -289,8 +290,8 @@ class GoInterp:
     def _index(self, n: Node, fr: GFrame) -> Val:
         op = n.child_by_field_name("operand")
         idx = self.eval(n.child_by_field_name("index"), fr)
-        if op is not None and op.type == "identifier" and _t(op) not in fr.env and self.stash:
-            name = _t(op)
+        if op is not None and op.type == "identifier" and (_t(op) not in fr.env or _t(op) in fr.alias) and self.stash:
+            name = fr.alias.get(_t(op), _t(op))
             keys = [k[2] for k in self.stash if isinstance(k, tuple) and k[:2] == ("pkg", name) and len(k) == 3]
             if keys:
                 if "*" in keys or not isinstance(idx, Const) or idx.value in keys:
@@ -717,8 +718,14 @@ class GoInterp:
             idx = self.eval(target.child_by_field_name("index"), fr)
             if self.store_hook is not None:
                 self.store_hook(target, _t(base_n), idx, val, fr)
-            if base_n.type == "identifier" and _t(base_n) not in fr.env and (classify(val) == "tainted" or classify(idx) == "tainted") and self.index.package_var(_t(base_n), fr.file):
-                self.stash.add(("pkg", _t(base_n), idx.value if isinstance(idx, Const) and classify(val) == "tainted" else "*"))  # one key, or any
+            pkg = None
+            if base_n.type == "identifier":
+                if _t(base_n) not in fr.env and self.index.package_var(_t(base_n), fr.file):
+                    pkg = _t(base_n)
+                elif _t(base_n) in fr.alias:
+                    pkg = fr.alias[_t(base_n)]
+            if pkg is not None and classify(val) == "tainted":  # a request-chosen key with a constant value stores no request data
+                self.stash.add(("pkg", pkg, idx.value if isinstance(idx, Const) else "*"))  # one key, or any
             if isinstance(base, MapV):
                 self._mutating(fr, base)
                 if isinstance(idx, Const):
@@ -784,6 +791,16 @@ class GoInterp:
                     vals = [Const(cur.value + vals[0].value)]
                 else:
                     vals = [self._combine(cur, vals[0])]
+            for i, tg in enumerate(targets):
+                if tg.type != "identifier":
+                    continue
+                src = rights[i] if len(rights) == len(targets) else None
+                if src is not None and src.type == "identifier" and _t(src) not in fr.env and self.index.package_var(_t(src), fr.file):
+                    fr.alias[_t(tg)] = fr.alias.get(_t(src), _t(src))  # a map or slice copied by name still shares its storage
+                elif src is not None and src.type == "identifier" and _t(src) in fr.alias:
+                    fr.alias[_t(tg)] = fr.alias[_t(src)]
+                else:
+                    fr.alias.pop(_t(tg), None)
             self._bind_many(targets, vals, fr, single_call=bool(rights and rights[0].type == "call_expression"))
             return False
         if t in ("var_declaration", "const_declaration"):
