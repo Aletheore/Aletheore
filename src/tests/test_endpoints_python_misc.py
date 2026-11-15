@@ -42,7 +42,7 @@ class Items(tornado.web.RequestHandler):
 app = tornado.web.Application([(r"/users", Users), url(r"/items/(\\d+)$", Items), (r"/other", Missing)])
 """
     assert _routes(tmp_path, code, "tornado") == [
-        ("ANY", "/other"), ("DELETE", "/items/(\\d+)"), ("GET", "/users"), ("POST", "/users"),
+        ("ANY", "/other"), ("DELETE", "/items/{param}"), ("GET", "/users"), ("POST", "/users"),
     ]
 
 
@@ -93,3 +93,37 @@ def test_pyramid_route_name_defined_in_two_apps_resolves_to_the_nearest_one(tmp_
         (tmp_path / app / "views.py").write_text("from pyramid.view import view_config\n@view_config(route_name='home')\ndef home(request): pass\n")
     got = sorted((e["file"], e["path"]) for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "pyramid")
     assert got == [("a/views.py", "/alpha"), ("b/views.py", "/beta")]
+
+
+def test_tornado_regex_groups_become_parameters(tmp_path):
+    code = """import tornado.web
+class H(tornado.web.RequestHandler):
+    def get(self, *a): pass
+app = tornado.web.Application([(r"/items/(\\d+)/(?P<name>[^/]+)$", H), (r"/x/([^/]+)", H)])
+"""
+    assert _routes(tmp_path, code, "tornado") == [("GET", "/items/{param}/{name}"), ("GET", "/x/{param}")]
+
+
+def test_other_application_classes_are_not_tornado(tmp_path):
+    code = "import tornado.web\nclass MyApplication: pass\napp = MyApplication([(r'/x', H)])\nweb2 = WsgiApplication([(r'/y', H)])\n"
+    assert _routes(tmp_path, code, "tornado") == []
+
+
+def test_nested_function_does_not_inherit_the_litestar_controller_prefix(tmp_path):
+    code = """from litestar import Controller, get
+class C(Controller):
+    path = '/c'
+    def helper(self):
+        @get('/inner')
+        def inner(): pass
+    @get('/own')
+    async def own(self): pass
+"""
+    assert _routes(tmp_path, code, "litestar") == [("GET", "/c/own"), ("GET", "/inner")]
+
+
+def test_class_without_matching_methods_gets_a_different_note_than_a_missing_class(tmp_path):
+    code = "import falcon\nclass R:\n    def on_get_item(self, req, resp): pass\napp = falcon.App()\napp.add_route('/r', R())\napp.add_route('/m', Missing())\n"
+    (tmp_path / "app.py").write_text(code)
+    notes = {e["path"]: e["note"] for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "falcon"}
+    assert notes["/r"] == "resource class has no on_get/on_post/... method" and notes["/m"] == "resource class not found in this file"

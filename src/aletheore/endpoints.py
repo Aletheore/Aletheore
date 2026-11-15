@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -295,9 +296,10 @@ def _extract_python_decorator_routes(root: Node, source: bytes, rel_path: str, f
             continue
         handler = _pymisc_text(fn.child_by_field_name("name"), source)
         prefix = ""
-        enclosing = decorated.parent
-        while enclosing is not None and enclosing.type != "class_definition":
-            enclosing = enclosing.parent
+        block = decorated.parent
+        enclosing = block.parent if block is not None and block.type == "block" else None
+        if enclosing is not None and enclosing.type != "class_definition":
+            enclosing = None  # a handler nested in another function does not belong to the enclosing class
         if enclosing is not None and framework == "litestar":
             body = enclosing.child_by_field_name("body")
             for stmt in (body.named_children if body is not None else []):
@@ -328,13 +330,22 @@ def _extract_python_decorator_routes(root: Node, source: bytes, rel_path: str, f
     return entries
 
 
+def _tornado_pattern_to_path(pattern: str) -> str:
+    """A Tornado route is a regular expression: `/items/(\\d+)$` -> `/items/{param}`, `(?P<id>[^/]+)` -> `{id}`."""
+    path = pattern.lstrip("^").rstrip("$")
+    path = re.sub(r"\(\?P<(\w+)>(?:[^()]|\([^()]*\))*\)", r"{\1}", path)
+    return re.sub(r"\((?:[^()]|\([^()]*\))*\)", "{param}", path)
+
+
 def _extract_tornado_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     """Tornado: `Application([(r"/users", UserHandler), url(r"/x/(\\d+)", H)])`. The verbs are the handler class's
     `get` / `post` / ... methods when the class is in the same file, otherwise any method."""
     entries: list[dict] = []
     for call in _walk_tree(root):
-        if call.type != "call" or not _pymisc_text(call.child_by_field_name("function"), source).endswith("Application"):
-            continue
+        if call.type != "call" or _pymisc_text(call.child_by_field_name("function"), source) not in (
+            "tornado.web.Application", "web.Application", "Application"
+        ):
+            continue  # not MyApplication / WsgiApplication / aiohttp's web.Application
         positional, keyword = _pymisc_call_args(call, source)
         routes = positional[0] if positional else keyword.get("handlers")
         for item in (routes.named_children if routes is not None and routes.type == "list" else []):
@@ -347,12 +358,13 @@ def _extract_tornado_routes(root: Node, source: bytes, rel_path: str) -> list[di
             pattern = _pymisc_string(parts[0], source)
             if pattern is None:
                 continue
-            path = pattern.lstrip("^").rstrip("$")
+            path = _tornado_pattern_to_path(pattern)
             handler = _pymisc_text(parts[1], source).split(".")[-1]
             methods = _pymisc_class_methods(root, source, handler)
             verbs = [m.upper() for m in (methods or []) if m in _PYMISC_HANDLER_METHODS]
             for verb in verbs or ["ANY"]:
-                entries.append(_pymisc_entry("tornado", verb, path, rel_path, item, handler, None if verbs else "handler class not found in this file"))
+                missing = "handler class not found in this file" if methods is None else "handler class defines no get/post/... method"
+                entries.append(_pymisc_entry("tornado", verb, path, rel_path, item, handler, None if verbs else missing))
     return entries
 
 
@@ -375,7 +387,8 @@ def _extract_falcon_routes(root: Node, source: bytes, rel_path: str) -> list[dic
         methods = _pymisc_class_methods(root, source, class_name)
         verbs = [m[3:].upper() for m in (methods or []) if m.startswith("on_") and m[3:] in _PYMISC_HANDLER_METHODS]
         for verb in verbs or ["ANY"]:
-            entries.append(_pymisc_entry("falcon", verb, path, rel_path, call, class_name, None if verbs else "resource class not found in this file"))
+            missing = "resource class not found in this file" if methods is None else "resource class has no on_get/on_post/... method"
+            entries.append(_pymisc_entry("falcon", verb, path, rel_path, call, class_name, None if verbs else missing))
     return entries
 
 
@@ -2202,6 +2215,7 @@ def map_api_endpoints(
     # file (an `includeme(config)` that never imports pyramid), so every file that mentions pyramid or calls add_route is
     # read afresh each scan, never reused from the cache. The table is only used when some file mentions pyramid.
     pyramid_routes: dict[str, dict[str, str]] = {}
+    pyramid_files: list[str] = []
     repo_uses_pyramid = False
     for path in source_paths:
         if path.suffix != ".py":
@@ -2213,10 +2227,12 @@ def map_api_endpoints(
         repo_uses_pyramid = repo_uses_pyramid or mentions
         if not mentions and b"add_route(" not in pyramid_source:
             continue
-        cross_file_mount_defining_files.add(_rel(repo_path, path))
+        pyramid_files.append(_rel(repo_path, path))
         for route_name, pattern in _pyramid_collect_routes(parsers["py"].parse(pyramid_source).root_node, pyramid_source).items():
             pyramid_routes.setdefault(route_name, {})[_rel(repo_path, path)] = pattern
-    if not repo_uses_pyramid:
+    if repo_uses_pyramid:
+        cross_file_mount_defining_files.update(pyramid_files)  # not for a repo whose add_route calls belong to another framework
+    else:
         pyramid_routes = {}
 
     for path in source_paths:
