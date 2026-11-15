@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -1067,6 +1068,53 @@ def _extract_spring_boot_routes(root: Node, source: bytes, rel_path: str) -> lis
     return entries
 
 
+_MICRONAUT_VERBS = {"Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH", "Head": "HEAD",
+                    "Options": "OPTIONS", "Trace": "TRACE"}
+_MICRONAUT_CONTROLLER = re.compile(r"@Controller\b(?:\(([^)]*)\))?")
+_MICRONAUT_ROUTE = re.compile(
+    r"@(Get|Post|Put|Delete|Patch|Head|Options|Trace)\b(?:\(([^)]*)\))?"
+    r"(?:\s*@\w+(?:\([^)]*\))?)*\s*"
+    r"(?:(?:public|private|protected|open|override|suspend|final|abstract|static|default)\s+)*"
+    r"(?:fun\s+(?:<[^>]*>\s*)?(\w+)|[\w<>\[\],.?]+(?:\s*<[^>]*>)?\s+(\w+)\s*\()"
+)
+
+
+def _micronaut_paths(args: str | None) -> list[str]:
+    """Literal paths of a Micronaut annotation: `("/x")`, `(uri = "/x")`, `(value = "/x")`, `(uris = {"/a", "/b"})`."""
+    if not args:
+        return [""]
+    found = re.findall(r"""["']([^"']*)["']""", re.sub(r"\b(?:processes|consumes|produces)\s*=\s*(?:\{[^}]*\}|[^,)]*)", "", args))
+    return found or [""]
+
+
+def _extract_micronaut_routes(source: bytes, rel_path: str) -> list[dict]:
+    """Micronaut controllers in Java or Kotlin: a class `@Controller("/users")` (the root when it has no path) prefixes the
+    `@Get("/{id}")` ... `@Trace` methods that follow it in the file."""
+    text = source.decode(errors="replace")
+    controllers = [(m.start(), _micronaut_paths(m.group(1))[0]) for m in _MICRONAUT_CONTROLLER.finditer(text)]
+    entries: list[dict] = []
+    for match in _MICRONAUT_ROUTE.finditer(text):
+        prefix = next((path for start, path in reversed(controllers) if start < match.start()), None)
+        if prefix is None:
+            continue  # an annotation outside a controller
+        handler = match.group(3) or match.group(4) or "unknown"
+        for path in _micronaut_paths(match.group(2)):
+            joined = (prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") if prefix or path else ""
+            entries.append(
+                {
+                    "method": _MICRONAUT_VERBS[match.group(1)],
+                    "path": joined or "/",
+                    "framework": "micronaut",
+                    "file": rel_path,
+                    "line": text.count("\n", 0, match.start()) + 1,
+                    "handler": handler,
+                    "unresolved": False,
+                    "note": None,
+                }
+            )
+    return entries
+
+
 _KTOR_VERB_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
 
 # Ktor route-definition calls (route(...), routing { }, verb calls) are the
@@ -2011,6 +2059,8 @@ def map_api_endpoints(
                 continue
             tree = parsers["java"].parse(source)
             endpoints.extend(_extract_spring_boot_routes(tree.root_node, source, rel_path))
+            if b"io.micronaut" in source:
+                endpoints.extend(_extract_micronaut_routes(source, rel_path))
         elif suffix == ".swift":
             source = read_bytes_or_none(path)
             if source is None:
@@ -2042,5 +2092,7 @@ def map_api_endpoints(
                 continue
             tree = parsers["kt"].parse(source)
             endpoints.extend(_extract_ktor_routes(tree.root_node, source, rel_path))
+            if b"io.micronaut" in source:
+                endpoints.extend(_extract_micronaut_routes(source, rel_path))
 
     return {"checked": True, "endpoints": endpoints}
