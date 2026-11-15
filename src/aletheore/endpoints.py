@@ -1022,11 +1022,11 @@ def _collect_axum_combinators(node: Node, source: bytes) -> list[tuple[str, str]
 
 
 _ROCKET_ATTRIBUTE_ROUTE = re.compile(
-    r'#\[\s*(get|post|put|delete|patch|head|options)\s*\(\s*"([^"]*)"[^\]]*\]\s*(?:(?://[^\n]*\n|/\*.*?\*/|#\[[^\]]*\])\s*)*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)',
+    r'#\[\s*(get|post|put|delete|patch|head|options)\s*\(\s*"([^"]*)"[^\]]*\](?:\s|//[^\n]*\n|/\*(?:[^*]|\*(?!/))*\*/|#\[[^\]]*\])*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)',
     re.S,
 )
 _ROCKET_ROUTE_ATTRIBUTE = re.compile(
-    r'#\[\s*route\s*\(\s*([A-Z]+)\s*,\s*uri\s*=\s*"([^"]*)"[^\]]*\]\s*(?:(?://[^\n]*\n|/\*.*?\*/|#\[[^\]]*\])\s*)*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)',
+    r'#\[\s*route\s*\(\s*([A-Z]+)\s*,\s*uri\s*=\s*"([^"]*)"[^\]]*\](?:\s|//[^\n]*\n|/\*(?:[^*]|\*(?!/))*\*/|#\[[^\]]*\])*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)',
     re.S,
 )
 _ROCKET_MOUNT = re.compile(r'\.mount\(\s*"([^"]*)"\s*,\s*routes!\[([^\]]*)\]', re.S)
