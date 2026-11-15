@@ -259,6 +259,30 @@ class KtInterp:
         if cls is not None and pname in cls.props and classify(val) == "tainted":
             self.stash[f"{cls.name}.{pname}"] = val
 
+
+    def _field_of(self, base, fr: KFrame) -> str | None:
+        """Which field of the current object holds exactly this object: a write through a local alias (`val a = first; a.value = x`)
+        or a helper's parameter lands on the shared object, so it is remembered under that field."""
+        this = fr.this_obj
+        if this is None or not isinstance(base, Obj):
+            return None
+        for fname, v in this.fields.items():
+            if v is base:
+                return fname
+        return None
+
+    def _nested_key(self, recv_n, name: str, fr: KFrame) -> str | None:
+        """`first.value` where `first` is a property of the class (not a local): the part of a shared object another handler can read back."""
+        if recv_n is None or fr.cls is None:
+            return None
+        if recv_n.type == "identifier" and _t(recv_n) not in fr.env and _t(recv_n) in fr.cls.props:
+            return f"{fr.cls.name}.{_t(recv_n)}.{name}"
+        if recv_n.type == "navigation_expression":
+            inner, nm, _ = self._split_nav(recv_n)
+            if inner is not None and inner.type == "this_expression" and nm in fr.cls.props:
+                return f"{fr.cls.name}.{nm}.{name}"
+        return None
+
     def _ident(self, name: str, fr: KFrame) -> Val:
         if name in fr.env:
             return fr.env[name]
@@ -313,6 +337,9 @@ class KtInterp:
 
     def _member(self, n: Node, fr: KFrame) -> Val:
         recv_n, name, _ = self._split_nav(n)
+        nested = self._nested_key(recv_n, name, fr)
+        if nested is not None and nested in self.stash:
+            return self.stash[nested]
         if recv_n is not None and recv_n.type == "this_expression":
             got = self._stored(fr.cls, name)
             if got is not None:
@@ -457,11 +484,18 @@ class KtInterp:
                 fr.this_obj.fields[name] = join(old, val) if (fr.branch > 0 and old is not None) else val
         elif t == "navigation_expression":
             recv_n, name, _ = self._split_nav(target)
+            nested = self._nested_key(recv_n, name, fr)
+            if nested is not None and classify(val) == "tainted":
+                self.stash[nested] = val
             if recv_n is not None and recv_n.type == "this_expression":
                 self._remember(fr.cls, name, val)
             elif recv_n is not None and recv_n.type == "identifier" and _t(recv_n) not in fr.env and _t(recv_n)[:1].isupper():
                 self._remember(self.index.cls(_t(recv_n), fr.file), name, val)
             base = self.eval(recv_n, fr)
+            if nested is None and classify(val) == "tainted" and fr.cls is not None:
+                owner = self._field_of(base, fr)
+                if owner is not None and owner in fr.cls.props:
+                    self.stash[f"{fr.cls.name}.{owner}.{name}"] = val
             if self.store_hook is not None:
                 self.store_hook(target, _t(recv_n), Const(name), val, fr)
             if isinstance(base, Obj):

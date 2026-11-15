@@ -163,6 +163,19 @@ class RbInterp:
         return UNKNOWN
 
     # ------------------------------------------------------------------ expressions
+    def _class_var_init(self, cls, name: str):
+        """The initializer of a class variable declared in the class body (`@@x = {}`), or None."""
+        stack = list(cls.node.named_children)
+        while stack:
+            c = stack.pop()
+            if c.type == "assignment":
+                left = c.child_by_field_name("left")
+                if left is not None and left.type == "class_variable" and _t(left) == name:
+                    return c.child_by_field_name("right")
+            elif c.type in ("body_statement", "begin"):
+                stack.extend(c.named_children)
+        return None
+
     def eval(self, node: Node | None, fr: RFrame) -> Val:
         if node is None:
             return UNKNOWN
@@ -217,10 +230,20 @@ class RbInterp:
         if t == "instance_variable":
             return fr.this_obj.fields.get(_t(n), UNKNOWN) if fr.this_obj is not None else UNKNOWN
         if t == "global_variable":
-            return self.globals[_t(n)] if _t(n) in self.globals else self.stash.get("g:" + _t(n), UNKNOWN)
+            stored = self.stash.get("g:" + _t(n))
+            if _t(n) in self.globals:
+                return join(self.globals[_t(n)], stored) if stored is not None and isinstance(self.globals[_t(n)], (MapV, ListV)) else self.globals[_t(n)]
+            return stored if stored is not None else UNKNOWN
         if t == "class_variable":
             key = f"{fr.cls.name if fr.cls is not None else ''}{_t(n)}"
-            return self.cvars[key] if key in self.cvars else self.stash.get("c:" + key, UNKNOWN)
+            if key not in self.cvars and fr.cls is not None:
+                init = self._class_var_init(fr.cls, _t(n))
+                if init is not None:
+                    self.cvars[key] = self.eval(init, RFrame(fr.file, fr.cls, fr.this_obj, fr.depth + 1))  # `@@x = {...}` in the class body
+            stored = self.stash.get("c:" + key)
+            if key in self.cvars:
+                return join(self.cvars[key], stored) if stored is not None and isinstance(self.cvars[key], (MapV, ListV)) else self.cvars[key]
+            return stored if stored is not None else UNKNOWN
         if t == "parenthesized_statements":
             v: Val = Const(None)
             for c in n.named_children:
@@ -573,6 +596,21 @@ class RbInterp:
         elif t == "element_reference":
             obj = target.child_by_field_name("object")
             base = self.eval(obj, fr)
+            shared_key = None
+            if obj is not None and obj.type in ("class_variable", "global_variable"):
+                shared_key = ("c:" + f"{fr.cls.name if fr.cls is not None else ''}{_t(obj)}") if obj.type == "class_variable" else ("g:" + _t(obj))
+                if not isinstance(base, (MapV, ListV)) and classify(base) != "tainted":
+                    base = MapV({})  # no initializer to read: the first write creates the container
+                    (self.cvars.__setitem__(shared_key[2:], base) if obj.type == "class_variable" else self.globals.__setitem__(_t(obj), base))
+            elif isinstance(base, (MapV, ListV)):  # a local alias of a shared container (`x = @@first; x["k"] = v`)
+                for k, v in self.cvars.items():
+                    if v is base:
+                        shared_key = "c:" + k
+                for k, v in self.globals.items():
+                    if v is base:
+                        shared_key = "g:" + k
+            if shared_key is not None and classify(val) == "tainted":
+                self.stash[shared_key] = Tainted("stored in a shared container")
             idx_n = next((c for c in target.named_children if c is not obj and c.start_byte > (obj.end_byte if obj is not None else -1)), None)
             idx = self.eval(idx_n, fr) if idx_n is not None else UNKNOWN
             if self.store_hook is not None:

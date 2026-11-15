@@ -472,6 +472,30 @@ class Interp:
     def _stored(self, cls: ClassInfo | None, fname: str) -> Val | None:
         return self.stash.get(f"{cls.name}.{fname}") if cls is not None and fname in cls.field_inits else None
 
+
+    def _field_of(self, base, fr: Frame) -> str | None:
+        """Which field of the current object holds exactly this object: a write through a local alias (`val a = first; a.value = x`)
+        or a helper's parameter lands on the shared object, so it is remembered under that field."""
+        this = fr.this_obj
+        if this is None or not isinstance(base, Obj):
+            return None
+        for fname, v in this.fields.items():
+            if v is base:
+                return fname
+        return None
+
+    def _nested_key(self, obj_n, fname: str, fr: Frame) -> str | None:
+        """`first.value` where `first` is a field of the class (not a local): the part of a shared object another entry point can read back."""
+        if obj_n is None or fr.cls is None:
+            return None
+        if obj_n.type == "identifier" and _t(obj_n) not in fr.env and _t(obj_n) in fr.cls.field_inits:
+            return f"{fr.cls.name}.{_t(obj_n)}.{fname}"
+        if obj_n.type == "field_access":
+            inner, nm = obj_n.child_by_field_name("object"), _t(obj_n.child_by_field_name("field"))
+            if inner is not None and inner.type == "this" and nm in fr.cls.field_inits:
+                return f"{fr.cls.name}.{nm}.{fname}"
+        return None
+
     def _remember(self, cls: ClassInfo | None, fname: str, val: Val) -> None:
         if cls is not None and fname in cls.field_inits and classify(val) == "tainted":
             self.stash[f"{cls.name}.{fname}"] = val
@@ -520,6 +544,9 @@ class Interp:
         cname = self._class_ref(obj_node, fr) if obj_node is not None else None
         if cname is not None:
             return self._static_field(cname, fname, fr)
+        nested = self._nested_key(obj_node, fname, fr)
+        if nested is not None and nested in self.stash:
+            return self.stash[nested]
         base = self.eval(obj_node, fr) if obj_node is not None and obj_node.type != "identifier" else None
         if obj_node is not None and obj_node.type == "identifier" and _t(obj_node) in fr.env:
             base = fr.env[_t(obj_node)]
@@ -653,6 +680,9 @@ class Interp:
             self._remember(fr.cls, _t(target), val)
         elif target.type == "field_access":
             on, fn_ = target.child_by_field_name("object"), _t(target.child_by_field_name("field"))
+            nested = self._nested_key(on, fn_, fr)
+            if nested is not None and classify(val) == "tainted":
+                self.stash[nested] = val
             if on is not None and on.type == "this":
                 self._remember(fr.cls, fn_, val)
             elif on is not None and on.type in ("identifier", "field_access") and _t(on)[:1].isupper():
@@ -671,6 +701,10 @@ class Interp:
                 fr.this_obj.fields[fname] = self._guard_field(fr, fr.this_obj.fields.get(fname), val)
             else:
                 base = self.eval(obj_n, fr)
+                if nested is None and classify(val) == "tainted" and fr.cls is not None:
+                    owner = self._field_of(base, fr)
+                    if owner is not None and owner in fr.cls.field_inits:
+                        self.stash[f"{fr.cls.name}.{owner}.{fname}"] = val
                 if isinstance(base, Obj):
                     base.fields[fname] = self._guard_field(fr, base.fields.get(fname), val)
         elif target.type == "array_access":

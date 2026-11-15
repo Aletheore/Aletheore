@@ -249,6 +249,30 @@ class CsInterp:
         if cls is not None and fname in cls.fields and classify(val) == "tainted":
             self.stash[f"{cls.name}.{fname}"] = val
 
+
+    def _field_of(self, base, fr: CFrame) -> str | None:
+        """Which field of the current object holds exactly this object: a write through a local alias (`val a = first; a.value = x`)
+        or a helper's parameter lands on the shared object, so it is remembered under that field."""
+        this = fr.this_obj
+        if this is None or not isinstance(base, Obj):
+            return None
+        for fname, v in this.fields.items():
+            if v is base:
+                return fname
+        return None
+
+    def _nested_key(self, expr, name: str, fr: CFrame) -> str | None:
+        """`first.value` where `first` is a field of the class (not a local): the part of a shared object another entry point can read back."""
+        if expr is None or fr.cls is None:
+            return None
+        if expr.type == "identifier" and _t(expr) not in fr.env and _t(expr) in fr.cls.fields:
+            return f"{fr.cls.name}.{_t(expr)}.{name}"
+        if expr.type == "member_access_expression":
+            inner, nm = expr.child_by_field_name("expression"), _t(expr.child_by_field_name("name"))
+            if inner is not None and inner.type == "this_expression" and nm in fr.cls.fields:
+                return f"{fr.cls.name}.{nm}.{name}"
+        return None
+
     def _lookup(self, name: str, fr: CFrame) -> Val:
         if name in fr.env:
             return fr.env[name]
@@ -315,6 +339,9 @@ class CsInterp:
     def _member(self, n: Node, fr: CFrame) -> Val:
         expr, name_n = n.child_by_field_name("expression"), n.child_by_field_name("name")
         name = _t(name_n)
+        nested = self._nested_key(expr, name, fr)
+        if nested is not None and nested in self.stash:
+            return self.stash[nested]
         if expr is not None and expr.type == "this_expression":
             got = self._stored(fr.cls, name)
             if got is not None:
@@ -449,11 +476,18 @@ class CsInterp:
                 fr.this_obj.fields[name] = join(old, val) if (fr.branch > 0 and old is not None) else val
         elif t == "member_access_expression":
             expr, name = target.child_by_field_name("expression"), _t(target.child_by_field_name("name"))
+            nested = self._nested_key(expr, name, fr)
+            if nested is not None and classify(val) == "tainted":
+                self.stash[nested] = val
             if expr is not None and expr.type == "this_expression":
                 self._remember(fr.cls, name, val)
             elif expr is not None and expr.type == "identifier" and _t(expr) not in fr.env and _t(expr)[:1].isupper():
                 self._remember(self.index.cls(_t(expr), fr.file), name, val)
             base = self.eval(expr, fr)
+            if nested is None and classify(val) == "tainted" and fr.cls is not None:
+                owner = self._field_of(base, fr)
+                if owner is not None and owner in fr.cls.fields:
+                    self.stash[f"{fr.cls.name}.{owner}.{name}"] = val
             if self.store_hook is not None:
                 self.store_hook(target, _t(expr), Const(name), val, fr)
             if isinstance(base, Obj):
