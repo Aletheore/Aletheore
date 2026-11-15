@@ -20,6 +20,11 @@
     "docs/**/*.md"
   ],
   "words": [
+    "Micronaut",
+    "Litestar",
+    "Fastify",
+    "aiohttp",
+    "Sinatra",
     "httprouter",
     "Trendshift",
     "phuryn",

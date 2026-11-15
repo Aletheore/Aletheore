@@ -6,6 +6,17 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 ## Unreleased
 
 - Rocket routes are found, with the prefix of the mount that names each handler, including mounts in another file. warp filter chains (`warp::path("a").and(warp::get())`, `path!` segments, `.or(...)` alternatives) are read as one route each.
+- Swift route paths no longer come out with a doubled leading slash (for example Hummingbird).
+- Micronaut controllers written in Java or Kotlin are found, with class prefixes.
+- Bottle and Litestar decorator routes, Tornado application routes, Falcon resource routes and Pyramid views (with the pattern of their `add_route` name) are found.
+- Koa router prefixes and Hono basePath / route mounts (also across files) are applied to route paths.
+- Next.js app-router and pages-router API routes are found from their file paths.
+- Symfony attribute routes (with class prefixes) and Slim routes (with nested group prefixes) are found.
+- Fastify `route({ method, url, handler })` and hapi `route({ method, path, handler })` object routes (also an array of them) are found.
+- Starlette routes with nested mounts and aiohttp route helpers are found.
+- JAX-RS routes (Jersey, RESTEasy, Quarkus) are found with class and method paths and the application path.
+- Sinatra routes are found, including `route` with several verbs and nested `namespace` prefixes; Grape APIs are read with their `resource`, `namespace` and `route_param` nesting and class-level `prefix`/`version`.
+- Kotlin Spring controllers: routes are found with class-level prefixes, multiple paths and property placeholders that have defaults.
 - Go endpoints: chi, Fiber and httprouter routes are found, and Echo routes are labelled `echo` instead of `gin`; nested chi `Route` closures and Echo/Fiber `Group` prefixes are composed.
 
 ## 0.13.0 - 2026-11-14
