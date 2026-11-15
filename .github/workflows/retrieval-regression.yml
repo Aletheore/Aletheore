@@ -9,6 +9,9 @@ on:
     paths:
       - "src/aletheore/search_index.py"
       - "src/aletheore/scanner/graph.py"
+      - ".github/workflows/retrieval-regression.yml"
+  # Lets the score be measured on master itself, not only on PRs that touch the two files above.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,7 +22,9 @@ env:
 
 jobs:
   retrieval-mrr:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest, so a runner-image change cannot move the score unnoticed; baseline.json was
+    # measured on this image. (Pinning did not fix the 2026-11 drop by itself, see baseline.json's comment.)
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -78,6 +83,7 @@ jobs:
           path: benchmarks/retrieval-regression/.fixture-cache
           key: >-
             retrieval-fixture-${{ hashFiles(
+              '.github/workflows/retrieval-regression.yml',
               'benchmarks/retrieval-regression/fixture.json',
               'src/aletheore/search_index.py',
               'src/aletheore/scanner/graph.py'
