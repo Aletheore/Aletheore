@@ -23,6 +23,7 @@ from aletheore.scanner.graph import (
 )
 
 from aletheore import flask_blueprints as _fb
+from aletheore import express_mounts as _em
 from aletheore.safe_io import read_bytes_or_none
 
 _ROUTE_VERB_METHODS = {"get", "post", "put", "delete", "patch"}
@@ -1281,12 +1282,13 @@ def _koa_router_prefixes(root: Node, source: bytes) -> dict[str, str]:
 
 
 def _extract_express_family_routes(
-    root: Node, source: bytes, rel_path: str, hono_prefixes: dict[tuple[str, str], list[str]] | None = None
+    root: Node, source: bytes, rel_path: str, hono_prefixes: dict[tuple[str, str], list[str]] | None = None,
+    base_extract=None,
 ) -> list[dict]:
     """Express-style route calls, with the path prefixes of the frameworks that set one on the router object: a Koa
     router's `prefix`, and the `route('/p', sub)` mounts and `basePath` of a Hono app (mounts across files are in
     `hono_prefixes`). The receiver of each call is found by its line."""
-    entries = _extract_express_routes(root, source, rel_path)
+    entries = (base_extract or _extract_express_routes)(root, source, rel_path)
     koa = _koa_router_prefixes(root, source) if re.search(rb"""['"](?:@koa/router|koa-router|koa-tree-router|@koa/[\w-]*router)['"]""", source) else {}
     hono = {key[1]: prefixes for key, prefixes in (hono_prefixes or {}).items() if key[0] == rel_path}
     if not entries or not (koa or hono):
@@ -3565,6 +3567,33 @@ def _extract_aspnet_minimal_routes(root: Node, source: bytes, rel_path: str) -> 
     return entries
 
 
+_JS_RESOLVE_EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx")
+
+
+def _resolve_js_module_spec(repo_path: Path, from_path: Path, spec: str) -> str | None:
+    """Repo-relative file a relative `require('./x')` / `import ... from './x'` points at (x.js, x/index.js, an
+    explicit extension, or a `.js` spec whose source is `.ts`); None for packages and anything outside the repo."""
+    if not spec.startswith("."):
+        return None
+    base = (from_path.parent / spec).resolve()
+    root = repo_path.resolve()
+    candidates = [base]
+    if base.suffix in _JS_RESOLVE_EXTENSIONS:
+        candidates += [base.with_suffix(ext) for ext in _JS_RESOLVE_EXTENSIONS]
+    candidates += [Path(str(base) + ext) for ext in _JS_RESOLVE_EXTENSIONS]
+    candidates += [base / ("index" + ext) for ext in _JS_RESOLVE_EXTENSIONS]
+    for candidate in candidates:
+        try:
+            if candidate.is_file() and (candidate == root or root in candidate.parents):
+                return str(candidate.relative_to(root)).replace("\\", "/")
+        except OSError:
+            continue
+    return None
+
+
+_JS_REEXPORT = re.compile(rb"\bexport\s+(?:\*|\{[^}]*\})(?:\s+as\s+\w+)?\s+from\b")
+
+
 def map_api_endpoints(
     repo_path: Path,
     *,
@@ -3722,6 +3751,34 @@ def map_api_endpoints(
     rocket_prelude_files = set(rocket_prelude_candidates) if rocket_mounts else set()
     cross_file_mount_defining_files |= rocket_prelude_files
 
+    express_facts: list[dict] = []
+    for path in source_paths:
+        parser_key = {".js": "js", ".jsx": "js", ".ts": "ts", ".tsx": "tsx"}.get(path.suffix)
+        if parser_key is None:
+            continue
+        source = read_bytes_or_none(path)
+        if source is None or (b"express" not in source and b".use(" not in source and b"Router" not in source
+                              and not _JS_REEXPORT.search(source)):  # a barrel that re-exports routers
+            continue
+        tree = parsers[parser_key].parse(source)
+        express_facts.append(_em.collect_file_facts(
+            tree.root_node, source, _rel(repo_path, path),
+            lambda spec, _p=path: _resolve_js_module_spec(repo_path, _p, spec),
+        ))
+    express_prefixes, express_unresolved, express_resolved_sites, express_receiver_node = (
+        _em.resolve(express_facts) if express_facts else ({}, set(), set(), lambda _f, _n: None)
+    )
+    express_helpers = (_looks_like_express_path, _express_handler_label, _js_string_literal_text)
+
+    def express_extract(root_node, source_bytes, rel):
+        return _em.extract_routes(
+            root_node, source_bytes, rel, express_prefixes, express_unresolved, express_resolved_sites,
+            express_receiver_node, express_helpers,
+        )
+
+    # an Express router's paths depend on `use(...)` mounts in other files, so its file is never reused from cache
+    cross_file_mount_defining_files |= {file for file, _name in express_prefixes}
+
     for path in source_paths:
         rel_path = _rel(repo_path, path)
 
@@ -3779,7 +3836,7 @@ def map_api_endpoints(
             if source is None:
                 continue
             tree = parsers["js"].parse(source)
-            endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes))
+            endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes, express_extract))
             endpoints.extend(_extract_nextjs_routes(rel_path, source, repo_path))
             endpoints.extend(_extract_js_route_objects(tree.root_node, source, rel_path))
         elif suffix == ".ts":
@@ -3787,7 +3844,7 @@ def map_api_endpoints(
             if source is None:
                 continue
             tree = parsers["ts"].parse(source)
-            endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes))
+            endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes, express_extract))
             endpoints.extend(_extract_nextjs_routes(rel_path, source, repo_path))
             endpoints.extend(_extract_js_route_objects(tree.root_node, source, rel_path))
         elif suffix == ".tsx":
@@ -3795,7 +3852,7 @@ def map_api_endpoints(
             if source is None:
                 continue
             tree = parsers["tsx"].parse(source)
-            endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes))
+            endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes, express_extract))
             endpoints.extend(_extract_nextjs_routes(rel_path, source, repo_path))
             endpoints.extend(_extract_js_route_objects(tree.root_node, source, rel_path))
         elif suffix == ".go":
