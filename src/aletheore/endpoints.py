@@ -1906,6 +1906,205 @@ def _extract_grape_routes(root: Node, source: bytes, rel_path: str) -> list[dict
     return entries
 
 
+_ROCKET_ATTRIBUTE_ROUTE = re.compile(
+    r'#\[\s*(get|post|put|delete|patch|head|options)\s*\(\s*"([^"]*)"[^\]]*\](?:\s|//[^\n]*\n|/\*(?:[^*]|\*(?!/))*\*/|#\[[^\]]*\])*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)',
+    re.S,
+)
+_ROCKET_ROUTE_ATTRIBUTE = re.compile(
+    r'#\[\s*route\s*\(\s*([A-Z]+)\s*,\s*uri\s*=\s*"([^"]*)"[^\]]*\](?:\s|//[^\n]*\n|/\*(?:[^*]|\*(?!/))*\*/|#\[[^\]]*\])*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)',
+    re.S,
+)
+_ROCKET_MOUNT = re.compile(r'\.mount\(\s*"([^"]*)"\s*,\s*routes!\[([^\]]*)\]', re.S)
+
+
+def _rocket_collect_mounts(text: str) -> list[tuple[str, str | None, str]]:
+    """(prefix, module the handler is written under or None, handler) for every `.mount("/p", routes![m::h, h2])`."""
+    found: list[tuple[str, str | None, str]] = []
+    for prefix, handlers in _ROCKET_MOUNT.findall(text):
+        for item in (h.strip() for h in handlers.split(",")):
+            if not item:
+                continue
+            segments = item.split("::")
+            module = segments[-2] if len(segments) > 1 and segments[-2] not in ("self", "super", "crate") else None
+            found.append((prefix, module, segments[-1]))
+    return found
+
+
+def _extract_rocket_routes(
+    source: bytes, rel_path: str, repo_mounts: list[tuple[str, str | None, str]] | None = None
+) -> list[dict]:
+    """Rocket routes are attribute macros on functions (`#[get("/users/<id>")]`, `#[route(GET, uri = "/x")]`) mounted with
+    `.mount("/api", routes![a, b])`, usually in a different file from the handlers (`routes![users::login]`). A handler
+    takes the prefix of a mount that names it: one written with its module (`users::login`) matches the file or folder
+    of that name, an unqualified one matches only a mount in the same file. A handler mounted at several prefixes is
+    listed at each; one no mount names is listed with a note that its mount prefix is unknown."""
+    text = source.decode(errors="replace")
+    stem = Path(rel_path).stem
+    module = Path(rel_path).parent.name if stem in ("mod", "lib", "main") else stem
+    local = _rocket_collect_mounts(text)
+    entries: list[dict] = []
+    matches = [(m.group(1).upper(), m.group(2), m.group(3), m.start()) for m in _ROCKET_ATTRIBUTE_ROUTE.finditer(text)]
+    matches += [(m.group(1), m.group(2), m.group(3), m.start()) for m in _ROCKET_ROUTE_ATTRIBUTE.finditer(text)]
+    for method, raw_path, handler, start in sorted(matches, key=lambda item: item[3]):
+        path = raw_path.split("?", 1)[0] or "/"  # `/articles?<params..>`: the query part is not the path
+        prefixes: list[str] = []
+        for prefix, mount_module, name in [*local, *(repo_mounts or [])]:
+            if name == handler and (mount_module is None or mount_module == module) and prefix not in prefixes:
+                if mount_module is None and (prefix, None, name) not in local:
+                    continue
+                prefixes.append(prefix)
+        for prefix in prefixes or [None]:
+            joined = ((prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") or "/") if prefix is not None else path
+            entries.append(
+                {
+                    "method": method,
+                    "path": joined,
+                    "framework": "rocket",
+                    "file": rel_path,
+                    "line": text.count("\n", 0, start) + 1,
+                    "handler": handler,
+                    "unresolved": False,
+                    "note": None if prefix is not None else "no mount of this handler found",
+                }
+            )
+    return entries
+
+
+_WARP_VERB = re.compile(r"warp::(get|post|put|delete|patch|head|options)\s*\(\s*\)")
+_WARP_PATH_CALL = re.compile(r'warp::path\s*\(\s*"([^"]*)"\s*\)')
+_WARP_PATH_MACRO = re.compile(r"warp::path!\s*\(([^)]*)\)")
+_WARP_PARAM = re.compile(r"warp::path::param\b")
+_WARP_HANDLER = re.compile(r"\.(?:and_then|then)\(\s*(?:[\w:]*::)?(\w+)\s*\)")
+
+
+def _warp_skip_string(text: str, start: int) -> int:
+    """Index just past the Rust string literal that opens at `start` (a `"`)."""
+    i = start + 1
+    while i < len(text) and text[i] != '"':
+        i += 2 if text[i] == "\\" else 1
+    return i + 1
+
+
+def _warp_close(text: str, open_index: int) -> int:
+    """Index just past the bracket that closes the one at `open_index` (strings skipped)."""
+    depth = 0
+    i = open_index
+    while i < len(text):
+        if text[i] == '"':
+            i = _warp_skip_string(text, i)
+            continue
+        if text[i] in "([{":
+            depth += 1
+        elif text[i] in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return len(text)
+
+
+def _warp_split_alternatives(text: str) -> list[str]:
+    """`head.or(a).or(b).and(tail)` -> [head.and(tail), a.and(tail), b.and(tail)], alternatives split in turn (the
+    combinators after the last `.or(...)` apply to every alternative)."""
+    head_end: int | None = None
+    alternatives: list[str] = []
+    last_end = 0
+    depth = 0
+    i = 0
+    while i < len(text):
+        if text[i] == '"':
+            i = _warp_skip_string(text, i)
+            continue
+        if depth == 0 and text.startswith(".or(", i):
+            if head_end is None:
+                head_end = i
+            end = _warp_close(text, i + 3)
+            alternatives.append(text[i + 4 : end - 1])
+            last_end = end
+            i = end
+            continue
+        if text[i] in "([{":
+            depth += 1
+        elif text[i] in ")]}":
+            depth -= 1
+        i += 1
+    if head_end is None:
+        return [text]
+    tail = text[last_end:]
+    pieces: list[str] = []
+    for alternative in [text[:head_end], *alternatives]:
+        pieces.extend(_warp_split_alternatives(alternative + tail) if ".or(" in alternative else [alternative + tail])
+    return pieces
+
+
+def _warp_statements(text: str) -> list[tuple[int, str]]:
+    """(offset, initializer text) of every `let name = ...;` whose initializer mentions `warp::`; the end is the first `;`
+    outside any bracket or string, so closures with their own blocks and semicolons stay whole."""
+    found: list[tuple[int, str]] = []
+    consumed = 0
+    for match in re.finditer(r"\blet\s+(?:mut\s+)?\w+\s*(?::[^=;{}]+)?=\s*", text):
+        if match.start() < consumed:
+            continue
+        i = match.end()
+        depth = 0
+        while i < len(text):
+            if text[i] == '"':
+                i = _warp_skip_string(text, i)
+                continue
+            if text[i] in "([{":
+                depth += 1
+            elif text[i] in ")]}":
+                depth -= 1
+            elif text[i] == ";" and depth == 0:
+                break
+            i += 1
+        expression = text[match.end() : i]
+        consumed = i
+        if "warp::" in expression:
+            found.append((match.end(), expression))
+    return found
+
+
+def _extract_warp_routes(source: bytes, rel_path: str) -> list[dict]:
+    """warp filters: each `let name = warp::path("users").and(warp::get())...;` chain (and each of its `.or(...)`
+    alternatives) is one route: the `warp::path("a")` / `warp::path!("a" / "b" / u32)` segments in order (a non-literal
+    segment or `path::param` is `{param}`), the `warp::get()` ... verb (any method when none is named), and the
+    `and_then(handler)` name. A filter composed only of other named filters is not followed."""
+    text = source.decode(errors="replace")
+    entries: list[dict] = []
+    for statement_start, body in _warp_statements(text):
+        for piece in _warp_split_alternatives(body):
+            events: list[tuple[int, str]] = []
+            for m in _WARP_PATH_CALL.finditer(piece):
+                events.append((m.start(), m.group(1)))
+            for m in _WARP_PATH_MACRO.finditer(piece):
+                for part in (p.strip() for p in m.group(1).split("/")):
+                    if part:
+                        events.append((m.start(), part.strip('"') if part.startswith('"') else "{param}"))
+            for m in _WARP_PARAM.finditer(piece):
+                events.append((m.start(), "{param}"))
+            verb = _WARP_VERB.search(piece)
+            if not events and verb is None:
+                continue
+            if not events and "path::end" not in piece:
+                continue
+            segments = [seg.strip("/") for _pos, seg in sorted(events, key=lambda item: item[0]) if seg.strip("/") or seg == ""]
+            handler = _WARP_HANDLER.search(piece)
+            entries.append(
+                {
+                    "method": verb.group(1).upper() if verb else "ANY",
+                    "path": "/" + "/".join(s for s in segments if s),
+                    "framework": "warp",
+                    "file": rel_path,
+                    "line": text.count("\n", 0, statement_start) + 1,
+                    "handler": handler.group(1) if handler else "closure",
+                    "unresolved": False,
+                    "note": "read from the text of one filter chain; filters combined elsewhere are not followed",
+                }
+            )
+    return entries
+
+
 def _extract_axum_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
@@ -3446,6 +3645,26 @@ def map_api_endpoints(
     else:
         pyramid_routes = {}
 
+    # Rocket: `.mount("/api", routes![users::login])` lives apart from the handlers it prefixes, so every file that
+    # mentions rocket is read afresh each scan, never reused from the cache.
+    rocket_mounts: list[tuple[str, str | None, str]] = []
+    rocket_prelude_candidates: list[str] = []
+    for path in source_paths:
+        if path.suffix != ".rs":
+            continue
+        rocket_source = read_bytes_or_none(path)
+        if rocket_source is None:
+            continue
+        if b"rocket" not in rocket_source:
+            # a handler file that gets the route macros through a prelude re-export never says "rocket"
+            if b"actix_web" not in rocket_source and b"#[" in rocket_source and _ROCKET_ATTRIBUTE_ROUTE.search(rocket_source.decode(errors="replace")):
+                rocket_prelude_candidates.append(_rel(repo_path, path))
+            continue
+        cross_file_mount_defining_files.add(_rel(repo_path, path))
+        rocket_mounts.extend(_rocket_collect_mounts(rocket_source.decode(errors="replace")))
+    rocket_prelude_files = set(rocket_prelude_candidates) if rocket_mounts else set()
+    cross_file_mount_defining_files |= rocket_prelude_files
+
     for path in source_paths:
         rel_path = _rel(repo_path, path)
 
@@ -3529,6 +3748,10 @@ def map_api_endpoints(
                 continue
             tree = parsers["rs"].parse(source)
             endpoints.extend(_extract_axum_routes(tree.root_node, source, rel_path))
+            if b"rocket" in source or rel_path in rocket_prelude_files:
+                endpoints.extend(_extract_rocket_routes(source, rel_path, rocket_mounts))
+            if b"warp::" in source:
+                endpoints.extend(_extract_warp_routes(source, rel_path))
         elif suffix == ".java":
             source = read_bytes_or_none(path)
             if source is None:

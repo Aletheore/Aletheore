@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Rocket routes are found, with the prefix of the mount that names each handler, including mounts in another file. warp filter chains (`warp::path("a").and(warp::get())`, `path!` segments, `.or(...)` alternatives) are read as one route each.
 - Swift route paths no longer come out with a doubled leading slash (for example Hummingbird).
 - Micronaut controllers written in Java or Kotlin are found, with class prefixes.
 - Bottle and Litestar decorator routes, Tornado application routes, Falcon resource routes and Pyramid views (with the pattern of their `add_route` name) are found.
