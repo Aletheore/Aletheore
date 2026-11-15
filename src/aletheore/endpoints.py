@@ -274,8 +274,8 @@ def _extract_starlette_aiohttp_routes(root: Node, source: bytes, rel_path: str, 
         parts: list[str] = []
         ancestor = node.parent
         while ancestor is not None:
-            if ancestor.type == "call" and _py_call_name(ancestor, source)[0] == "Mount":
-                positional, _kw = _py_arguments(ancestor, source)
+            if ancestor.type == "call" and _py_call_name(ancestor, source)[0].lower() == "mount":
+                positional = _py_arguments(ancestor, source)[0]
                 literal = _py_literal(positional[0], source) if positional else None
                 if literal:
                     parts.append(literal)
@@ -293,8 +293,8 @@ def _extract_starlette_aiohttp_routes(root: Node, source: bytes, rel_path: str, 
         if framework == "starlette":
             if name in ("Route", "WebSocketRoute") or (name == "add_route" and "." in dotted) or name == "add_websocket_route":
                 path = _py_literal(positional[0] if positional else keyword.get("path"), source)
-                if path is None:
-                    continue
+                if path is None or not path.startswith("/"):
+                    continue  # aiohttp's add_route("GET", "/x", h) has the verb first
                 endpoint = positional[1] if len(positional) > 1 else keyword.get("endpoint") or keyword.get("route")
                 methods_node = keyword.get("methods")
                 methods = (
@@ -302,19 +302,24 @@ def _extract_starlette_aiohttp_routes(root: Node, source: bytes, rel_path: str, 
                     if methods_node is not None
                     else ["WEBSOCKET"] if "WebSocket" in name or "websocket" in name else ["GET"]
                 )
-                prefix = mount_prefix(call) if name in ("Route", "WebSocketRoute") else ""
+                prefix = mount_prefix(call)
                 for method in methods:
                     emit(method, path, handler_of(endpoint), call, prefix)
         else:
-            if name in _PY_ROUTE_VERBS and dotted in (f"web.{name}", name) or (name.startswith("add_") and name[4:] in _PY_ROUTE_VERBS):
+            bare_ok = dotted == name and b"from aiohttp.web import" in source  # `from aiohttp.web import get`
+            if name in _PY_ROUTE_VERBS and (dotted == f"web.{name}" or bare_ok) or (name.startswith("add_") and name[4:] in _PY_ROUTE_VERBS):
                 verb = name if name in _PY_ROUTE_VERBS else name[4:]
-                path = _py_literal(positional[0] if positional else None, source)
+                path = _py_literal(positional[0] if positional else keyword.get("path"), source)
+                handler = positional[1] if len(positional) > 1 else keyword.get("handler")
                 if path is not None:
-                    emit(verb.upper(), path, handler_of(positional[1] if len(positional) > 1 else None), call)
-            elif name in ("route", "add_route") and ("web" in dotted or "router" in dotted) and len(positional) >= 2:
-                verb, path = _py_literal(positional[0], source), _py_literal(positional[1], source)
+                    emit(verb.upper(), path, handler_of(handler), call)
+            elif name in ("route", "add_route") and ("web" in dotted or "router" in dotted) and (len(positional) >= 2 or keyword.get("path")):
+                verb_node = positional[0] if positional else keyword.get("method")
+                path_node = positional[1] if len(positional) > 1 else keyword.get("path")
+                handler = positional[2] if len(positional) > 2 else keyword.get("handler")
+                verb, path = _py_literal(verb_node, source), _py_literal(path_node, source)
                 if verb is not None and path is not None:
-                    emit(verb.upper() if verb != "*" else "ANY", path, handler_of(positional[2] if len(positional) > 2 else None), call)
+                    emit(verb.upper() if verb != "*" else "ANY", path, handler_of(handler), call)
     return entries
 
 
@@ -2076,7 +2081,7 @@ def map_api_endpoints(
                 endpoints.extend(_extract_django_routes(tree.root_node, source, rel_path))
             if b"starlette" in source:
                 endpoints.extend(_extract_starlette_aiohttp_routes(tree.root_node, source, rel_path, "starlette"))
-            elif b"aiohttp" in source:
+            if b"aiohttp" in source:
                 endpoints.extend(_extract_starlette_aiohttp_routes(tree.root_node, source, rel_path, "aiohttp"))
         elif suffix in (".js", ".jsx"):
             source = read_bytes_or_none(path)

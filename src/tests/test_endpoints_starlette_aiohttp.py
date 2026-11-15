@@ -41,3 +41,29 @@ app.router.add_route('DELETE', '/items/{id}', remove)
 def test_file_without_either_framework_is_ignored(tmp_path):
     code = "routes = [Route('/x', x)]\nweb = object()\nweb.get('/y', y)\n"
     assert _routes(tmp_path, code, "starlette") == [] and _routes(tmp_path, code, "aiohttp") == []
+
+
+def test_file_with_both_frameworks_is_read_for_both(tmp_path):
+    code = """from starlette.routing import Route
+from aiohttp import web
+routes = [Route('/s', s)]
+app = web.Application()
+app.router.add_route('GET', '/a', a)
+"""
+    assert _routes(tmp_path, code, "starlette") == [("GET", "/s")]
+    assert _routes(tmp_path, code, "aiohttp") == [("GET", "/a")]
+
+
+def test_starlette_app_mount_prefixes_its_routes(tmp_path):
+    code = "from starlette.applications import Starlette\nfrom starlette.routing import Route\napp = Starlette()\napp.mount('/api', routes=[Route('/x', x)])\n"
+    assert _routes(tmp_path, code, "starlette") == [("GET", "/api/x")]
+
+
+def test_aiohttp_keyword_arguments_and_unrelated_get_calls(tmp_path):
+    code = """from aiohttp import web
+import db
+app = web.Application()
+app.router.add_get(path='/kw', handler=h)
+rows = db.get('users', cb)
+"""
+    assert _routes(tmp_path, code, "aiohttp") == [("GET", "/kw")]
