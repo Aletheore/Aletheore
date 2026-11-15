@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -1067,6 +1068,65 @@ def _extract_spring_boot_routes(root: Node, source: bytes, rel_path: str) -> lis
     return entries
 
 
+_JAXRS_VERBS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+_JAXRS_APPLICATION_PATH = re.compile(r'@ApplicationPath\(\s*(?:value\s*=\s*)?"([^"]*)"')
+
+
+def _jaxrs_annotations(modifiers: Node | None, source: bytes) -> list[tuple[str, str | None]]:
+    """(annotation name, first string literal in its arguments) of each annotation in a Java `modifiers` node."""
+    found: list[tuple[str, str | None]] = []
+    for ann in (c for c in (modifiers.children if modifiers is not None else []) if c.type in ("annotation", "marker_annotation")):
+        name_node = ann.child_by_field_name("name")
+        if name_node is None:
+            continue
+        args = ann.child_by_field_name("arguments")
+        literal = next((c for c in (args.children if args is not None else []) if c.type == "string_literal"), None)
+        if literal is None and args is not None:  # `@Path(value = "/x")`
+            for pair in args.children:
+                literal = next((c for c in pair.children if c.type == "string_literal"), None)
+                if literal is not None:
+                    break
+        text = _java_string_literal_text(literal, source) if literal is not None else None
+        found.append((source[name_node.start_byte : name_node.end_byte].decode().split(".")[-1], text))
+    return found
+
+
+def _extract_jaxrs_routes(root: Node, source: bytes, rel_path: str, application_path: str = "") -> list[dict]:
+    """JAX-RS resources (javax.ws.rs / jakarta.ws.rs): a class `@Path` prefix, methods annotated `@GET` ... `@PATCH` with
+    an optional `@Path`. The application-wide `@ApplicationPath`, declared on another class, is prepended when the
+    repository has exactly one."""
+    entries: list[dict] = []
+    for cls in _walk_tree(root):
+        if cls.type not in ("class_declaration", "interface_declaration"):
+            continue
+        class_path = next((text for name, text in _jaxrs_annotations(next((c for c in cls.children if c.type == "modifiers"), None), source) if name == "Path"), None)
+        body = next((c for c in cls.children if c.type == "class_body" or c.type == "interface_body"), None)
+        for method in (c for c in (body.children if body is not None else []) if c.type == "method_declaration"):
+            annotations = _jaxrs_annotations(next((c for c in method.children if c.type == "modifiers"), None), source)
+            verbs = [name for name, _t in annotations if name in _JAXRS_VERBS]
+            if not verbs:
+                continue
+            method_path = next((text for name, text in annotations if name == "Path"), None)
+            name_node = method.child_by_field_name("name")
+            handler = source[name_node.start_byte : name_node.end_byte].decode() if name_node is not None else "unknown"
+            parts = [p for p in (application_path, class_path, method_path) if p and p.strip("/")]
+            path = "/" + "/".join(p.strip("/") for p in parts)
+            for verb in verbs:
+                entries.append(
+                    {
+                        "method": verb,
+                        "path": path,
+                        "framework": "jaxrs",
+                        "file": rel_path,
+                        "line": method.start_point[0] + 1,
+                        "handler": handler,
+                        "unresolved": False,
+                        "note": "prefix from @ApplicationPath found elsewhere in the repository" if application_path else None,
+                    }
+                )
+    return entries
+
+
 _KTOR_VERB_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
 
 # Ktor route-definition calls (route(...), routing { }, verb calls) are the
@@ -1949,6 +2009,19 @@ def map_api_endpoints(
     # changed - see docs/audits/Claude_Audit.md finding 20.
     cross_file_mount_defining_files = {defining_file for defining_file, _router in cross_file_router_mounts}
 
+    # JAX-RS: `@ApplicationPath("/api")` sits on an Application class, apart from the resources it prefixes, so resource
+    # files are read afresh each scan, never reused from the cache.
+    jaxrs_application_paths: set[str] = set()
+    for path in source_paths:
+        if path.suffix != ".java":
+            continue
+        jaxrs_source = read_bytes_or_none(path)
+        if jaxrs_source is None or b"ws.rs" not in jaxrs_source:
+            continue
+        cross_file_mount_defining_files.add(_rel(repo_path, path))
+        jaxrs_application_paths.update(_JAXRS_APPLICATION_PATH.findall(jaxrs_source.decode(errors="replace")))
+    jaxrs_application_path = next(iter(jaxrs_application_paths)) if len(jaxrs_application_paths) == 1 else ""
+
     for path in source_paths:
         rel_path = _rel(repo_path, path)
 
@@ -2011,6 +2084,8 @@ def map_api_endpoints(
                 continue
             tree = parsers["java"].parse(source)
             endpoints.extend(_extract_spring_boot_routes(tree.root_node, source, rel_path))
+            if b"ws.rs" in source:
+                endpoints.extend(_extract_jaxrs_routes(tree.root_node, source, rel_path, jaxrs_application_path))
         elif suffix == ".swift":
             source = read_bytes_or_none(path)
             if source is None:
