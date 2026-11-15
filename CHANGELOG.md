@@ -9,9 +9,24 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 - Fixed: `pub use other_crate::*;` in a facade crate now follows that crate's own re-exports, so `use facade::Command;` links the file that defines `Command` (clap's builder/command.rs) instead of stopping at the crate root. clap edge F1 against an independent reference rose from 0.657 to 0.792.
 - Improved: Rust paths through a facade crate now also link the module it re-exports. When `crate::de::Item` or `facade::de::Item` names a module that the crate root only re-exports (`pub use core_lib::de;`, also written inside a zero-argument macro), the file in the crate it comes from is added as a dependency. On serde, edge recall against an independent reference rose from 0.941 to 0.977 with precision unchanged at 1.000.
+- Rocket routes are found, with the prefix of the mount that names each handler, including mounts in another file. warp filter chains (`warp::path("a").and(warp::get())`, `path!` segments, `.or(...)` alternatives) are read as one route each.
+- Swift route paths no longer come out with a doubled leading slash (for example Hummingbird).
+- Micronaut controllers written in Java or Kotlin are found, with class prefixes.
+- Bottle and Litestar decorator routes, Tornado application routes, Falcon resource routes and Pyramid views (with the pattern of their `add_route` name) are found.
+- Koa router prefixes and Hono basePath / route mounts (also across files) are applied to route paths.
+- Next.js app-router and pages-router API routes are found from their file paths.
+- Symfony attribute routes (with class prefixes) and Slim routes (with nested group prefixes) are found.
+- Fastify `route({ method, url, handler })` and hapi `route({ method, path, handler })` object routes (also an array of them) are found.
+- Starlette routes with nested mounts and aiohttp route helpers are found.
+- JAX-RS routes (Jersey, RESTEasy, Quarkus) are found with class and method paths and the application path.
+- Sinatra routes are found, including `route` with several verbs and nested `namespace` prefixes; Grape APIs are read with their `resource`, `namespace` and `route_param` nesting and class-level `prefix`/`version`.
+- Kotlin Spring controllers: routes are found with class-level prefixes, multiple paths and property placeholders that have defaults.
+- Go endpoints: chi, Fiber and httprouter routes are found, and Echo routes are labelled `echo` instead of `gin`; nested chi `Route` closures and Echo/Fiber `Group` prefixes are composed.
 
 ## 0.13.0 - 2026-11-14
 
+- Fixed: the order of a Ruby file's imports no longer changes from run to run. Constant references were walked in a set's order, which depends on the hash seed, so two scans of the same commit gave the same edges in a different order.
+- Improved: Ruby constant references now resolve when a constant is reopened in several files. The edge goes to the file whose path is the autoload-derived name for the constant (`Jekyll::Utils` to `jekyll/utils.rb`), and only when exactly one file matches. On Jekyll, edge recall against an independent reference rose from 0.888 to 0.998 with precision unchanged (0.992 to 0.993).
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.
 - Fixed: `aletheore query evidence-for-dependency` (and the `aletheore_find_evidence_for_dependency` MCP tool) now resolves a package name such as `flask` or `@scope/pkg` to a file that imports it, as its help says. Before, only repo-relative paths resolved. Package names are matched by reading Python and JS/TS import lines, so the result is marked `inferred`.
 - Fixed: the read guard, evidence and Hallbook hooks, and the evidence hook's background index build, no longer
