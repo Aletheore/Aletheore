@@ -825,6 +825,7 @@ _GO_WEB_FRAMEWORK_IMPORTS = (
     (b"github.com/go-chi/chi", "chi"),
     (b"github.com/labstack/echo", "echo"),
     (b"github.com/gofiber/fiber", "fiber"),
+    (b"github.com/julienschmidt/httprouter", "httprouter"),
 )
 _GO_FRAMEWORK_VERBS = {
     "chi": {"Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH", "Head": "HEAD",
@@ -833,6 +834,8 @@ _GO_FRAMEWORK_VERBS = {
              "OPTIONS": "OPTIONS", "CONNECT": "CONNECT", "TRACE": "TRACE", "Any": "ANY"},
     "fiber": {"Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH", "Head": "HEAD",
               "Options": "OPTIONS", "Connect": "CONNECT", "Trace": "TRACE", "All": "ANY"},
+    "httprouter": {"GET": "GET", "POST": "POST", "PUT": "PUT", "DELETE": "DELETE", "PATCH": "PATCH", "HEAD": "HEAD",
+                   "OPTIONS": "OPTIONS", "Handler": "ANY", "HandlerFunc": "ANY"},
 }
 
 
@@ -873,7 +876,7 @@ def _extract_go_framework_routes(root: Node, source: bytes, rel_path: str, frame
     """Routes of chi, Echo and Fiber: verb calls with a literal path, composed with the `Group("/p")` variable they are
     called on (Echo, Fiber) or the enclosing `Route("/p", func(r chi.Router) {..})` closures (chi)."""
     verbs = _GO_FRAMEWORK_VERBS[framework]
-    group_prefixes = _gin_group_prefix_bindings(root, source) if framework != "chi" else {}
+    group_prefixes = _gin_group_prefix_bindings(root, source) if framework in ("echo", "fiber") else {}
     entries: list[dict] = []
     for n in _walk_tree(root):
         if n.type != "call_expression":
@@ -888,6 +891,11 @@ def _extract_go_framework_routes(root: Node, source: bytes, rel_path: str, frame
         name = source[field.start_byte : field.end_byte].decode()
         named = args.named_children
         method = verbs.get(name)
+        if framework == "httprouter" and name in ("Handle", "Handler", "HandlerFunc") and len(named) >= 3 and named[0].type == "interpreted_string_literal":
+            method = _go_string_literal_text(named[0], source).upper() or None
+            named = named[1:]
+        elif framework == "httprouter" and name in ("Handler", "HandlerFunc"):
+            method = None  # `Handler(method, path, h)` needs the method first
         if framework == "chi" and name == "Method" and len(named) >= 3 and named[0].type == "interpreted_string_literal":
             method = _go_string_literal_text(named[0], source).upper() or None
             named = named[1:]
@@ -896,6 +904,8 @@ def _extract_go_framework_routes(root: Node, source: bytes, rel_path: str, frame
         path = _go_string_literal_text(named[0], source)
         if framework == "chi":
             prefix = _go_chi_route_prefix(n, source)
+        elif framework == "httprouter":
+            prefix = ""
         else:
             operand = func.child_by_field_name("operand")
             receiver = source[operand.start_byte : operand.end_byte].decode() if operand is not None and operand.type == "identifier" else None

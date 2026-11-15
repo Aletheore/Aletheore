@@ -81,3 +81,18 @@ func main() {
 def test_gin_file_is_unchanged_by_the_framework_split(tmp_path):
     code = 'package main\nimport "github.com/gin-gonic/gin"\nfunc main() {\n\tr := gin.Default()\n\tr.GET("/x", h)\n}\n'
     assert _routes(tmp_path, code) == [("gin", "GET", "/x")]
+
+
+def test_httprouter_verbs_and_handle_are_labelled_httprouter(tmp_path):
+    code = """package main
+import "github.com/julienschmidt/httprouter"
+func main() {
+	r := httprouter.New()
+	r.GET("/users/:id", get)
+	r.POST("/items", add)
+	r.Handle("PUT", "/thing", put)
+}
+"""
+    assert _routes(tmp_path, code) == [
+        ("httprouter", "GET", "/users/:id"), ("httprouter", "POST", "/items"), ("httprouter", "PUT", "/thing"),
+    ]

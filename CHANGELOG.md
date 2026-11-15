@@ -5,7 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- Go endpoints: chi and Fiber routes are found, and Echo routes are labelled `echo` instead of `gin`; nested chi `Route` closures and Echo/Fiber `Group` prefixes are composed.
+- Go endpoints: chi, Fiber and httprouter routes are found, and Echo routes are labelled `echo` instead of `gin`; nested chi `Route` closures and Echo/Fiber `Group` prefixes are composed.
 
 ## 0.13.0 - 2026-11-14
 
