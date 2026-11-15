@@ -21,6 +21,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## 0.13.0 - 2026-11-14
 
+- Fixed: the order of a Ruby file's imports no longer changes from run to run. Constant references were walked in a set's order, which depends on the hash seed, so two scans of the same commit gave the same edges in a different order.
+- Improved: Ruby constant references now resolve when a constant is reopened in several files. The edge goes to the file whose path is the autoload-derived name for the constant (`Jekyll::Utils` to `jekyll/utils.rb`), and only when exactly one file matches. On Jekyll, edge recall against an independent reference rose from 0.888 to 0.998 with precision unchanged (0.992 to 0.993).
 - Fixed: `aletheore council` commands that fail (a refused or used registration code, an unreachable room server, a missing account) now exit non-zero. They printed the error but exited 0, so a script could not tell they had failed.
 - Fixed: `aletheore query evidence-for-dependency` (and the `aletheore_find_evidence_for_dependency` MCP tool) now resolves a package name such as `flask` or `@scope/pkg` to a file that imports it, as its help says. Before, only repo-relative paths resolved. Package names are matched by reading Python and JS/TS import lines, so the result is marked `inferred`.
 - Fixed: the read guard, evidence and Hallbook hooks, and the evidence hook's background index build, no longer

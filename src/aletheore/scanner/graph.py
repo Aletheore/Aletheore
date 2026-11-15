@@ -5281,12 +5281,37 @@ def _ruby_constant_facts(source: bytes, parser: Parser) -> tuple[set[str], set[t
     return defs, refs, autoloads
 
 
+_RUBY_ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_RUBY_CAMEL_BOUNDARY = re.compile(r"([a-z\d])([A-Z])")
+
+
+def _ruby_zeitwerk_path(constant: str) -> str:
+    """Zeitwerk's file name for a constant: `Jekyll::LiquidRenderer` -> `jekyll/liquid_renderer`."""
+    parts = []
+    for part in constant.split("::"):
+        part = _RUBY_ACRONYM_BOUNDARY.sub(r"\1_\2", part)
+        parts.append(_RUBY_CAMEL_BOUNDARY.sub(r"\1_\2", part).lower())
+    return "/".join(parts)
+
+
+def _ruby_zeitwerk_owner(constant: str, owners: set[str]) -> str | None:
+    """The one file among several that define/reopen `constant` whose path is the Zeitwerk name for it.
+
+    Only an exact single match counts (the path ends with `<zeitwerk name>.rb` on a directory boundary);
+    anything else stays unresolved rather than guessed."""
+    suffix = _ruby_zeitwerk_path(constant) + ".rb"
+    matches = [p for p in owners if p == suffix or p.endswith("/" + suffix)]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
     """Edges for constants referenced in one file and defined in exactly one other file.
 
     A reference resolves through Ruby's lexical scope chain (innermost enclosing class/module
     first, then the top level), stopping at the first level where the name is defined anywhere.
-    No edge when: that name is defined in more than one file (a reopened `module Jekyll`), is
+    When a name is defined in several files (a reopened `module Jekyll`), the edge goes to the one
+    file whose path is the Zeitwerk name for it (`Jekyll::Utils` -> `jekyll/utils.rb`), and only
+    when exactly one matches. No edge when: no single file matches, the name is
     defined in the referencing file itself, is a Ruby/stdlib constant, or is defined nowhere in
     the repo. `autoload :X, "path"` counts as a definition of X in the file it points at.
     Ancestor (inheritance) lookup is not modelled, so a constant only reachable through a
@@ -5323,7 +5348,7 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
             continue
         own, refs = entry
         present = set(module.get("imports", []))
-        for ref, nest in refs:
+        for ref, nest in sorted(refs):  # a set: iterate in a fixed order so the import list is the same on every run
             if ref.startswith("::"):
                 candidates = [ref[2:]]
             else:
@@ -5333,8 +5358,8 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
                     break
                 owners = definers.get(candidate)
                 if owners:
-                    if len(owners) == 1:
-                        target = next(iter(owners))
+                    target = next(iter(owners)) if len(owners) == 1 else _ruby_zeitwerk_owner(candidate, owners)
+                    if target is not None:
                         if target != module["path"] and target not in present:
                             present.add(target)
                             module.setdefault("imports", []).append(target)
