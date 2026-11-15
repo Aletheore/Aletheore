@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Bottle and Litestar decorator routes, Tornado application routes, Falcon resource routes and Pyramid views (with the pattern of their `add_route` name) are found.
 - Koa router prefixes and Hono basePath / route mounts (also across files) are applied to route paths.
 - Next.js app-router and pages-router API routes are found from their file paths.
 - Symfony attribute routes (with class prefixes) and Slim routes (with nested group prefixes) are found.

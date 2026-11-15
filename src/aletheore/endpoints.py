@@ -323,6 +323,267 @@ def _extract_starlette_aiohttp_routes(root: Node, source: bytes, rel_path: str, 
     return entries
 
 
+_PYMISC_VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
+_PYMISC_HANDLER_METHODS = ("get", "post", "put", "delete", "patch", "head", "options")
+
+
+def _pymisc_text(node: Node | None, source: bytes) -> str:
+    return source[node.start_byte : node.end_byte].decode() if node is not None else ""
+
+
+def _pymisc_string(node: Node | None, source: bytes) -> str | None:
+    if node is None or node.type != "string" or any(c.type == "interpolation" for c in node.children):
+        return None
+    return "".join(_pymisc_text(c, source) for c in node.children if c.type == "string_content")
+
+
+def _pymisc_call_args(call: Node, source: bytes) -> tuple[list[Node], dict[str, Node]]:
+    args = call.child_by_field_name("arguments")
+    positional: list[Node] = []
+    keyword: dict[str, Node] = {}
+    for child in (args.named_children if args is not None else []):
+        if child.type == "keyword_argument":
+            key, value = child.child_by_field_name("name"), child.child_by_field_name("value")
+            if key is not None and value is not None:
+                keyword[_pymisc_text(key, source)] = value
+        else:
+            positional.append(child)
+    return positional, keyword
+
+
+def _pymisc_strings(node: Node | None, source: bytes) -> list[str]:
+    """Every string literal in a string or a list of strings."""
+    if node is None:
+        return []
+    if node.type == "string":
+        text = _pymisc_string(node, source)
+        return [text] if text is not None else []
+    return [t for c in node.named_children for t in _pymisc_strings(c, source)]
+
+
+def _pymisc_entry(framework: str, method: str, path: str, rel_path: str, node: Node, handler: str, note: str | None = None) -> dict:
+    return {
+        "method": method,
+        "path": path or "/",
+        "framework": framework,
+        "file": rel_path,
+        "line": node.start_point[0] + 1,
+        "handler": handler,
+        "unresolved": False,
+        "note": note,
+    }
+
+
+def _pymisc_class_methods(root: Node, source: bytes, class_name: str) -> list[str] | None:
+    for cls in _walk_tree(root):
+        if cls.type == "class_definition" and _pymisc_text(cls.child_by_field_name("name"), source) == class_name:
+            body = cls.child_by_field_name("body")
+            names = []
+            for child in (body.named_children if body is not None else []):
+                fn = child.child_by_field_name("definition") if child.type == "decorated_definition" else child
+                if fn is not None and fn.type == "function_definition":
+                    names.append(_pymisc_text(fn.child_by_field_name("name"), source))
+            return names
+    return None
+
+
+def _extract_python_decorator_routes(root: Node, source: bytes, rel_path: str, framework: str) -> list[dict]:
+    """Bottle and Litestar: the bare decorators `@get('/x')`, `@post`, `@route('/x', method='POST')` (Bottle; GET when no
+    method is given) and `@route('/x', http_method=[...])` (Litestar), where a Litestar `Controller`'s `path = '/p'` prefixes
+    its handlers. A decorator on a receiver (`@app.get`) is the Flask/FastAPI matcher's."""
+    entries: list[dict] = []
+    for decorated in _walk_tree(root):
+        if decorated.type != "decorated_definition":
+            continue
+        fn = decorated.child_by_field_name("definition")
+        if fn is None or fn.type != "function_definition":
+            continue
+        handler = _pymisc_text(fn.child_by_field_name("name"), source)
+        prefix = ""
+        block = decorated.parent
+        enclosing = block.parent if block is not None and block.type == "block" else None
+        if enclosing is not None and enclosing.type != "class_definition":
+            enclosing = None  # a handler nested in another function does not belong to the enclosing class
+        if enclosing is not None and framework == "litestar":
+            body = enclosing.child_by_field_name("body")
+            for stmt in (body.named_children if body is not None else []):
+                assign = stmt.named_children[0] if stmt.type == "expression_statement" and stmt.named_children else None
+                if assign is not None and assign.type == "assignment" and _pymisc_text(assign.child_by_field_name("left"), source) == "path":
+                    prefix = _pymisc_string(assign.child_by_field_name("right"), source) or ""
+        for decorator in (c for c in decorated.children if c.type == "decorator"):
+            call = next((c for c in decorator.named_children if c.type == "call"), None)
+            if call is None:
+                continue
+            func = call.child_by_field_name("function")
+            if func is None or func.type != "identifier":
+                continue
+            name = _pymisc_text(func, source)
+            positional, keyword = _pymisc_call_args(call, source)
+            if name in _PYMISC_VERBS:
+                methods = [name.upper()]
+            elif name == "route":
+                key = keyword.get("method") or keyword.get("http_method")
+                methods = [m.upper() for m in _pymisc_strings(key, source)] or ["GET"]
+            else:
+                continue
+            paths = _pymisc_strings(positional[0] if positional else keyword.get("path"), source) or ([""] if framework == "litestar" else [])
+            for path in paths:
+                joined = (prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") if prefix else path
+                for method in methods:
+                    entries.append(_pymisc_entry(framework, method, joined, rel_path, decorator, handler))
+    return entries
+
+
+def _tornado_pattern_to_path(pattern: str) -> str:
+    """A Tornado route is a regular expression: `/items/(\\d+)$` -> `/items/{param}`, `(?P<id>[^/]+)` -> `{id}`."""
+    path = pattern.lstrip("^").rstrip("$")
+    path = re.sub(r"\(\?P<(\w+)>(?:[^()]|\([^()]*\))*\)", r"{\1}", path)
+    return re.sub(r"\((?:[^()]|\([^()]*\))*\)", "{param}", path)
+
+
+def _extract_tornado_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Tornado: `Application([(r"/users", UserHandler), url(r"/x/(\\d+)", H)])`. The verbs are the handler class's
+    `get` / `post` / ... methods when the class is in the same file, otherwise any method."""
+    entries: list[dict] = []
+    for call in _walk_tree(root):
+        if call.type != "call" or _pymisc_text(call.child_by_field_name("function"), source) not in (
+            "tornado.web.Application", "web.Application", "Application"
+        ):
+            continue  # not MyApplication / WsgiApplication / aiohttp's web.Application
+        positional, keyword = _pymisc_call_args(call, source)
+        routes = positional[0] if positional else keyword.get("handlers")
+        for item in (routes.named_children if routes is not None and routes.type == "list" else []):
+            parts = item.named_children
+            if item.type == "call":  # url(r"/x", H)
+                args, _kw = _pymisc_call_args(item, source)
+                parts = args
+            if len(parts) < 2:
+                continue
+            pattern = _pymisc_string(parts[0], source)
+            if pattern is None:
+                continue
+            path = _tornado_pattern_to_path(pattern)
+            handler = _pymisc_text(parts[1], source).split(".")[-1]
+            methods = _pymisc_class_methods(root, source, handler)
+            verbs = [m.upper() for m in (methods or []) if m in _PYMISC_HANDLER_METHODS]
+            for verb in verbs or ["ANY"]:
+                missing = "handler class not found in this file" if methods is None else "handler class defines no get/post/... method"
+                entries.append(_pymisc_entry("tornado", verb, path, rel_path, item, handler, None if verbs else missing))
+    return entries
+
+
+def _extract_falcon_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Falcon: `app.add_route('/x', Resource())`; the verbs are the resource class's `on_get` / `on_post` / ... methods
+    (any method when the class is not in this file)."""
+    entries: list[dict] = []
+    for call in _walk_tree(root):
+        if call.type != "call":
+            continue
+        func = call.child_by_field_name("function")
+        if func is None or func.type != "attribute" or _pymisc_text(func.child_by_field_name("attribute"), source) != "add_route":
+            continue
+        positional, _kw = _pymisc_call_args(call, source)
+        path = _pymisc_string(positional[0], source) if positional else None
+        if path is None or len(positional) < 2:
+            continue
+        target = positional[1]
+        class_name = _pymisc_text(target.child_by_field_name("function") if target.type == "call" else target, source).split(".")[-1]
+        methods = _pymisc_class_methods(root, source, class_name)
+        verbs = [m[3:].upper() for m in (methods or []) if m.startswith("on_") and m[3:] in _PYMISC_HANDLER_METHODS]
+        for verb in verbs or ["ANY"]:
+            missing = "resource class not found in this file" if methods is None else "resource class has no on_get/on_post/... method"
+            entries.append(_pymisc_entry("falcon", verb, path, rel_path, call, class_name, None if verbs else missing))
+    return entries
+
+
+def _pyramid_collect_routes(root: Node, source: bytes) -> dict[str, str]:
+    """`config.add_route('home', '/home')` -> {'home': '/home'} (literal name and pattern only)."""
+    routes: dict[str, str] = {}
+    for call in _walk_tree(root):
+        if call.type != "call":
+            continue
+        func = call.child_by_field_name("function")
+        if func is None or func.type != "attribute" or _pymisc_text(func.child_by_field_name("attribute"), source) != "add_route":
+            continue
+        positional, keyword = _pymisc_call_args(call, source)
+        name = _pymisc_string(positional[0] if positional else keyword.get("name"), source)
+        pattern = _pymisc_string(positional[1] if len(positional) > 1 else keyword.get("pattern"), source)
+        if name is not None and pattern is not None:
+            routes.setdefault(name, pattern)
+    return routes
+
+
+def _pyramid_pattern_for(name: str, view_file: str, routes: dict[str, dict[str, str]]) -> str | None:
+    """The pattern for a route name: the definition in the view's own file, else the one in the nearest directory
+    (a repository can hold many unrelated apps that each call their route `home`)."""
+    defined = routes.get(name)
+    if not defined:
+        return None
+    if view_file in defined:
+        return defined[view_file]
+    view_parts = view_file.split("/")[:-1]
+
+    def shared(other: str) -> int:
+        count = 0
+        for a, b in zip(view_parts, other.split("/")[:-1]):
+            if a != b:
+                break
+            count += 1
+        return count
+
+    best = max(sorted(defined), key=shared)
+    return defined[best]
+
+
+def _extract_pyramid_routes(root: Node, source: bytes, rel_path: str, routes: dict[str, dict[str, str]]) -> list[dict]:
+    """Pyramid views: `@view_config(route_name='home', request_method='GET')` on functions and methods,
+    `@view_defaults(route_name=...)` on a class, and `config.add_view(fn, route_name=..., request_method=...)`. The path is
+    the pattern `config.add_route('home', '/home')` registered for that name anywhere in the repository; the method is
+    ANY when no `request_method` is given."""
+    entries: list[dict] = []
+
+    def emit(route_name: str | None, methods_node: Node | None, node: Node, handler: str) -> None:
+        if route_name is None:
+            return
+        pattern = _pyramid_pattern_for(route_name, rel_path, routes)
+        methods = [m.upper() for m in _pymisc_strings(methods_node, source)] or ["ANY"]
+        for method in methods:
+            entries.append(
+                _pymisc_entry(
+                    "pyramid", method, pattern or "/", rel_path, node, handler,
+                    None if pattern is not None else f"route '{route_name}' has no add_route in the repository",
+                )
+            )
+
+    for node in _walk_tree(root):
+        if node.type == "decorated_definition":
+            fn = node.child_by_field_name("definition")
+            if fn is None or fn.type != "function_definition":
+                continue
+            default_route: str | None = None
+            klass = node.parent
+            while klass is not None and klass.type != "class_definition":
+                klass = klass.parent
+            if klass is not None and klass.parent is not None and klass.parent.type == "decorated_definition":
+                for decorator in (c for c in klass.parent.children if c.type == "decorator"):
+                    call = next((c for c in decorator.named_children if c.type == "call"), None)
+                    if call is not None and _pymisc_text(call.child_by_field_name("function"), source).endswith("view_defaults"):
+                        default_route = _pymisc_string(_pymisc_call_args(call, source)[1].get("route_name"), source)
+            handler = _pymisc_text(fn.child_by_field_name("name"), source)
+            for decorator in (c for c in node.children if c.type == "decorator"):
+                call = next((c for c in decorator.named_children if c.type == "call"), None)
+                if call is None or not _pymisc_text(call.child_by_field_name("function"), source).endswith("view_config"):
+                    continue
+                _pos, keyword = _pymisc_call_args(call, source)
+                emit(_pymisc_string(keyword.get("route_name"), source) or default_route, keyword.get("request_method"), decorator, handler)
+        elif node.type == "call":
+            func = node.child_by_field_name("function")
+            if func is not None and func.type == "attribute" and _pymisc_text(func.child_by_field_name("attribute"), source) == "add_view":
+                positional, keyword = _pymisc_call_args(node, source)
+                emit(_pymisc_string(keyword.get("route_name"), source), keyword.get("request_method"), node, _pymisc_text(positional[0], source)[:60] if positional else "unknown")
+    return entries
+
+
 def _extract_flask_fastapi_routes(
     root: Node,
     source: bytes,
@@ -3047,6 +3308,30 @@ def map_api_endpoints(
         )
     hono_prefixes = _hono_resolve_prefixes(hono_facts) if hono_facts else {}
 
+    # Pyramid: a view's path is the pattern `config.add_route('name', '/p')` gave its route name, usually in another
+    # file (an `includeme(config)` that never imports pyramid), so every file that mentions pyramid or calls add_route is
+    # read afresh each scan, never reused from the cache. The table is only used when some file mentions pyramid.
+    pyramid_routes: dict[str, dict[str, str]] = {}
+    pyramid_files: list[str] = []
+    repo_uses_pyramid = False
+    for path in source_paths:
+        if path.suffix != ".py":
+            continue
+        pyramid_source = read_bytes_or_none(path)
+        if pyramid_source is None:
+            continue
+        mentions = b"pyramid" in pyramid_source
+        repo_uses_pyramid = repo_uses_pyramid or mentions
+        if not mentions and b"add_route(" not in pyramid_source:
+            continue
+        pyramid_files.append(_rel(repo_path, path))
+        for route_name, pattern in _pyramid_collect_routes(parsers["py"].parse(pyramid_source).root_node, pyramid_source).items():
+            pyramid_routes.setdefault(route_name, {})[_rel(repo_path, path)] = pattern
+    if repo_uses_pyramid:
+        cross_file_mount_defining_files.update(pyramid_files)  # not for a repo whose add_route calls belong to another framework
+    else:
+        pyramid_routes = {}
+
     for path in source_paths:
         rel_path = _rel(repo_path, path)
 
@@ -3076,6 +3361,16 @@ def map_api_endpoints(
                 endpoints.extend(_extract_starlette_aiohttp_routes(tree.root_node, source, rel_path, "starlette"))
             if b"aiohttp" in source:
                 endpoints.extend(_extract_starlette_aiohttp_routes(tree.root_node, source, rel_path, "aiohttp"))
+            if b"bottle" in source:
+                endpoints.extend(_extract_python_decorator_routes(tree.root_node, source, rel_path, "bottle"))
+            if b"litestar" in source:
+                endpoints.extend(_extract_python_decorator_routes(tree.root_node, source, rel_path, "litestar"))
+            if b"tornado" in source:
+                endpoints.extend(_extract_tornado_routes(tree.root_node, source, rel_path))
+            if b"falcon" in source:
+                endpoints.extend(_extract_falcon_routes(tree.root_node, source, rel_path))
+            if b"pyramid" in source:
+                endpoints.extend(_extract_pyramid_routes(tree.root_node, source, rel_path, pyramid_routes))
         elif suffix in (".js", ".jsx"):
             source = read_bytes_or_none(path)
             if source is None:
