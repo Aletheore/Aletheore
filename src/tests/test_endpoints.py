@@ -1828,3 +1828,10 @@ def test_map_api_endpoints_extracts_kotlin_ktor_routes(tmp_path):
 
     paths = {e["path"] for e in result["endpoints"]}
     assert "/kt" in paths
+
+
+def test_swift_route_segments_that_start_with_a_slash_do_not_double_it(tmp_path):
+    # Hummingbird-style `router.get("/users")` goes through the Vapor matcher: no `//users`
+    (tmp_path / "a.swift").write_text('import Hummingbird\nlet router = Router()\nrouter.get("/users") { _, _ in "x" }\nrouter.post("items", "{id}") { _, _ in "y" }\n')
+    got = sorted((e["method"], e["path"]) for e in map_api_endpoints(tmp_path)["endpoints"])
+    assert got == [("GET", "/users"), ("POST", "/items/{id}")]
