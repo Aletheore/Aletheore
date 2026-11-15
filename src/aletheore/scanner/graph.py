@@ -3489,6 +3489,20 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
     members: dict[str, dict[str, str]] = {}
     bases: dict[str, set[str]] = {}
     partial: dict[str, dict] = {}  # top-level `partial` type name -> {ns, nested, members}
+    nested_partial: set[str] = set()  # "namespace|Outer.Inner" of every nested `partial` type declared in this file
+
+    def collect_nested_partial(type_node: Node, ns: str, path: str) -> None:
+        body = type_node.child_by_field_name("body")
+        for member in (body.children if body is not None else []):
+            if member.type not in _CSHARP_TYPE_BODY_DECLS:
+                continue
+            name_node = member.child_by_field_name("name")
+            if name_node is None:
+                continue
+            inner = f"{path}.{text(name_node)}"
+            if any(m.type == "modifier" and text(m) == "partial" for m in member.children):
+                nested_partial.add(f"{ns}|{inner}")
+            collect_nested_partial(member, ns, inner)
 
     def walk(children, ns: str) -> str:
         for c in children:
@@ -3523,6 +3537,7 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
                             merged["members"] = sorted(set(merged["members"]) | set(facts["members"]))
                         else:
                             partial[type_name] = {"ns": ns, **facts}
+                    collect_nested_partial(c, ns, type_name)
                     types.setdefault(type_name, ns)
                     members.setdefault(type_name, {}).update(_csharp_value_members(c, source))
                     bases.setdefault(type_name, set()).update(_csharp_base_names(c, source))
@@ -3559,6 +3574,7 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
         "members": members,
         "bases": {name: sorted(parents) for name, parents in bases.items()},
         "partial": partial,
+        "nested_partial": sorted(nested_partial),
     }
 
 
@@ -3685,6 +3701,10 @@ def _build_csharp_index(repo_path: Path, summaries: dict[Path, dict]) -> dict:
         name for name, owners in ext_generic_owners.items()
         if len(name) < _CSHARP_MIN_TYPE_NAME and len(ext_owners.get(name, ())) == 1
     }
+    nested_partial_owners: dict[str, set[Path]] = {}
+    for path, summary in summaries.items():
+        for key in summary.get("nested_partial", ()):
+            nested_partial_owners.setdefault(key, set()).add(path)
     partial_owners: dict[tuple[str, str], set[Path]] = {}
     for path, summary in summaries.items():
         for type_name, facts in summary.get("partial", {}).items():
@@ -3693,6 +3713,7 @@ def _build_csharp_index(repo_path: Path, summaries: dict[Path, dict]) -> dict:
         "files": summaries, "project_of": project_of, "visible": visible,
         "global_usings": global_usings, "ext_owners": ext_owners, "ext_short_generic": ext_short_generic,
         "partial_owners": partial_owners,
+        "nested_partial_owners": nested_partial_owners,
     }
 
 
@@ -3912,6 +3933,14 @@ def _csharp_type_reference_targets(
         # a type nested in it (exact) or calls/reads a member it declares (a name-only guess, so inferred).
         used = set(_csharp_code_identifiers(tree_root, source))
         own_facts = index["files"].get(importer) or {}
+        for key in own_facts.get("nested_partial", ()):
+            # a nested `partial` type declared in several files is one type: this part depends on the others when it
+            # names the type beyond its own declaration
+            inner_name = key.rsplit(".", 1)[-1]
+            if len(re.findall(rf"\b{re.escape(inner_name)}\b", text)) >= 2:
+                for other in sorted(index["nested_partial_owners"].get(key, ())):
+                    if other != importer and _csharp_project_sees(index, importer, other):
+                        referenced.append((other, False))
         for type_name, facts in own_facts.get("partial", {}).items():
             peers = [
                 other for other in sorted(index["partial_owners"].get((facts["ns"], type_name), ()))
@@ -4998,9 +5027,40 @@ def _extract_module(
     return module
 
 
+_CSHARP_TYPE_HEADER = re.compile(rb"\b(?:class|struct|interface|record)\s+\w+")
+
+
+def _csharp_blank_header_directives(source: bytes) -> bytes:
+    """Preprocessor lines inside a type header (`partial class Reader` / `#if ASYNC` / `: IAsyncDisposable` /
+    `#endif` / `{`) make tree-sitter read the symbol after `#if` as the type's name, so the type is lost. Blank
+    those lines (same length, so offsets and line numbers hold); every branch of the header is then kept."""
+    if b"#" not in source:
+        return source
+    out = None
+    for match in _CSHARP_TYPE_HEADER.finditer(source):
+        window_end = min(len(source), match.end() + 600)
+        brace = source.find(b"{", match.end(), window_end)
+        semicolon = source.find(b";", match.end(), window_end)
+        if brace < 0 or (0 <= semicolon < brace):
+            continue
+        header = source[match.end():brace]
+        if b"#" not in header:
+            continue
+        if out is None:
+            out = bytearray(source)
+        offset = match.end()
+        for line in header.split(b"\n"):
+            if line.lstrip().startswith(b"#"):
+                out[offset:offset + len(line)] = b" " * len(line)
+            offset += len(line) + 1
+    return bytes(out) if out is not None else source
+
+
 def _read_and_parse(path: Path, parser: Parser, ts_language: Language) -> tuple[bytes, Tree]:
     parser.language = ts_language
     source = path.read_bytes()
+    if path.suffix == ".cs":
+        source = _csharp_blank_header_directives(source)
     return source, parser.parse(source)
 
 
@@ -6020,7 +6080,7 @@ def build_module_graph(
                 oversized_paths.add(path)
                 unparseable.append({"path": _rel(repo_path, path), "reason": "file exceeds size limit"})
                 continue
-            pre_source = path.read_bytes()
+            pre_source = _csharp_blank_header_directives(path.read_bytes())
         except OSError as exc:
             # Same reasoning as the Java pre-pass above. Not added to
             # csharp_source_paths below - _load_csharp_implicit_usings only
@@ -6123,6 +6183,8 @@ def build_module_graph(
                 # four languages' imports with.
                 parser.language = ts_language
                 source = path.read_bytes()
+                if path.suffix == ".cs":
+                    source = _csharp_blank_header_directives(source)
                 tree = parser.parse(source)
             else:
                 paths_needing_parse.append(path)
