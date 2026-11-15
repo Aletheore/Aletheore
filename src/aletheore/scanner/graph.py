@@ -1312,15 +1312,24 @@ def _rust_use_paths(node: Node, source: bytes) -> list[str]:
         prefix = text(prefix_node)
         names: list[str] = []
         for c in list_node.children:
-            if c.type in ("identifier", "self"):
+            if c.type in ("identifier", "self", "scoped_identifier"):
                 names.append(text(c))
             elif c.type in ("scoped_use_list", "use_as_clause", "use_wildcard"):
                 names.extend(_rust_use_paths(c, source))
         return [f"{prefix}::{name}" for name in names]
 
     if node.type == "use_list":
-        # "use {a, b};" - rare, no prefix at all.
-        return [text(c) for c in node.children if c.type in ("identifier", "self")]
+        # "use {a, b};" - no prefix at all. Entries can themselves be groups
+        # ("use { grep_matcher::{A, B}, std::io };"), aliased or wildcard, the
+        # layout rustfmt produces under `imports_layout`; recurse for those so
+        # they are not silently dropped.
+        out: list[str] = []
+        for c in node.children:
+            if c.type in ("identifier", "self", "scoped_identifier"):
+                out.append(text(c))
+            elif c.type in ("scoped_use_list", "use_as_clause", "use_wildcard"):
+                out.extend(_rust_use_paths(c, source))
+        return out
 
     # scoped_identifier, identifier, crate, self, or super used directly.
     return [text(node)]
@@ -1522,13 +1531,73 @@ def _rust_crate_src_dir(repo_path: Path, from_file: Path) -> Path:
         root = repo_path.resolve()
     except OSError:
         return repo_path / "src"
+    from_dir = current
+    from aletheore.scanner import rust_resolve
+
     while True:
-        if (current / "Cargo.toml").exists() and (current / "src").is_dir():
-            return current / "src"
+        if (current / "Cargo.toml").exists():
+            # A crate root declared in the manifest outside src/ (`[[bin]] path = "crates/core/main.rs"`): the
+            # deepest such directory that holds this file is the crate's source directory.
+            holders = [
+                Path(d) for d in rust_resolve.manifest_root_dirs(str(current))
+                if Path(d) == from_dir or Path(d) in from_dir.parents
+            ]
+            if holders:
+                return max(holders, key=lambda d: len(d.parts))
+            if (current / "src").is_dir():
+                return current / "src"
         if current == root or current.parent == current:
             break
         current = current.parent
     return repo_path / "src"
+
+
+def _rust_test_target_dir(from_file: Path, rest: list[str]) -> Path | None:
+    """The directory a `crate::` path resolves against for a module of a Cargo test, example or bench target.
+
+    Files directly in `<crate>/tests/`, `examples/` or `benches/` are each their own crate root; a multi-file
+    target is one root (`tests/tests.rs`) that declares its siblings with `mod util;`, and those siblings then
+    write `use crate::util::..`. That root is the sibling that declares the path's first segment, so it is only
+    returned when such a declaration exists (no guessing from names alone).
+    """
+    import re
+    from aletheore.scanner import rust_resolve
+
+    directory = from_file.parent
+    if not rest:
+        return None
+    harness = ("tests", "examples", "benches")
+    # tests/foo.rs (siblings in tests/) or tests/foo/main.rs (siblings in tests/foo/)
+    if directory.name in harness and (directory.parent / "Cargo.toml").is_file():
+        pass
+    elif directory.parent.name in harness and (directory.parent.parent / "Cargo.toml").is_file():
+        pass
+    else:
+        return None
+    wanted = re.compile(rf"\bmod\s+{re.escape(rest[0])}\s*;")
+    as_module = re.compile(rf"\bmod\s+{re.escape(from_file.stem)}\s*;")
+    try:
+        own = rust_resolve.clean_source(from_file.read_text(encoding="utf-8", errors="ignore"))
+    except OSError:
+        own = ""
+    if wanted.search(own):
+        return directory  # the file is its own crate root and declares the module itself
+    try:
+        siblings = sorted(directory.glob("*.rs"))
+    except OSError:
+        return None
+    for sibling in siblings:
+        if sibling == from_file:
+            continue
+        try:
+            text = rust_resolve.clean_source(sibling.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+        # in a directory of independent test crates, only the root that declares both the module being named and
+        # this file as one of its own modules is this file's crate root
+        if wanted.search(text) and as_module.search(text):
+            return directory
+    return None
 
 
 def _rust_has_any_crate_root(repo_path: Path) -> bool:
@@ -1541,6 +1610,13 @@ def _rust_has_any_crate_root(repo_path: Path) -> bool:
     for cargo in repo_path.glob("*/*/Cargo.toml"):
         if (cargo.parent / "src").is_dir():
             return True
+    from aletheore.scanner import rust_resolve
+
+    # A package whose crate root the manifest puts outside src/ (`[[bin]] path = "crates/core/main.rs"`).
+    for pattern in ("Cargo.toml", "*/Cargo.toml", "*/*/Cargo.toml"):
+        for cargo in repo_path.glob(pattern):
+            if rust_resolve.manifest_root_dirs(str(cargo.parent)):
+                return True
     return False
 
 
@@ -1644,13 +1720,51 @@ def _rust_reexport_targets(
             continue
         if is_glob:
             glob_declared, _ = rust_resolve.module_items(str(Path(repo_path) / resolved))
-            if item not in glob_declared:
+            if item in glob_declared:
+                found.append(resolved)
+            else:
+                # `pub use clap_builder::*;` where that crate's root itself re-exports `Command` from builder/command.rs
+                nested = _rust_reexport_targets(repo_path, target_file, f"{base}::{item}", resolved, depth + 1)
+                if not nested:
+                    continue
+                found.extend(nested)  # the files that define the item, not the re-exporting crate root on the way
                 continue
-            found.append(resolved)
         else:
-            found.append(resolved)
-            found.extend(_rust_reexport_targets(repo_path, target_file, base, resolved, depth + 1))
+            deeper = _rust_reexport_targets(repo_path, target_file, base, resolved, depth + 1)
+            found.extend(deeper or [resolved])  # a module that only re-exports is not a dependency of its own
     return found
+
+
+def _rust_module_reexport_targets(repo_path: Path, from_file: Path, use_path: str) -> list[str]:
+    """`crate::de::Item` / `facade::de::Item` where `de` is no file module of that crate but the crate root
+    re-exports it (`pub use core_lib::de;`, also inside a zero-argument macro): the module file the name really
+    comes from. It is an extra dependency next to the root file the path resolves to (the facade is imported
+    through too). Only the module itself, not the submodules below it. Empty when nothing is re-exported."""
+    from aletheore.scanner import rust_resolve
+
+    segments = use_path.split("::")
+    if len(segments) < 2 or use_path.startswith("@"):
+        return []
+    head, rest = segments[0], segments[1:]
+    if head == "crate":
+        root_file = rust_resolve.crate_root_file(_rust_crate_src_dir(repo_path, from_file))
+    elif head in ("self", "super"):
+        return []
+    else:
+        root_file = rust_resolve.crate_aliases(repo_path, from_file).get(head)
+    if root_file is None or _resolve_rust_module_dir(root_file.parent, rest[0]) is not None:
+        return []  # not a crate, or `rest[0]` is a real module of that crate
+    for reexport in rust_resolve.root_reexports(repo_path, root_file):
+        if reexport.endswith("::*") or "::" not in reexport or reexport.split("::")[-1] != rest[0]:
+            continue
+        resolved = _resolve_rust_path(repo_path, root_file, reexport)
+        if resolved is None or Path(repo_path, resolved) == root_file:
+            continue
+        module_file = Path(resolved)
+        module_name = module_file.parent.name if module_file.name in ("mod.rs", "lib.rs", "main.rs") else module_file.stem
+        if module_name == rest[0]:  # a re-exported module, not a re-exported item that lives in a root file
+            return [resolved]
+    return []
 
 
 def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | None:
@@ -1688,9 +1802,17 @@ def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | Non
 
     if head == "crate":
         src_dir = _rust_crate_src_dir(repo_path, from_file)
+        harness_dir = _rust_test_target_dir(from_file, rest)
+        if harness_dir is not None:
+            # A file of a multi-file integration test (`tests/tests.rs` declaring `mod util;`): `crate::` is that
+            # test crate, never the library under src/.
+            target = _walk_rust_segments(harness_dir, rest)
+            if target is not None:
+                return _rel(repo_path, target)
         target = _walk_rust_segments(src_dir, rest)
-        if target is None and rest:
-            # `use crate::Item;` where Item is defined in the crate root file itself.
+        if target is None:
+            # `use crate::Item;` where Item is defined in the crate root file itself (and a bare `crate`, the
+            # prefix of that path, is the root file too).
             target = rust_resolve.crate_root_file(src_dir)
     elif head == "self":
         target = _walk_rust_segments(_rust_module_search_dir(repo_path, from_file), rest)
@@ -4817,8 +4939,10 @@ def _extract_module(
                 resolved_imports.append(target)
         # Files only built under some tags/platforms are alternatives (all variants are linked): mark them.
         if go_resolve.ENABLED:
+            # An edge out of a conditional file exists only when that file is built, so it is inferred too.
+            importer_conditional = go_resolve.is_build_constrained(repo_path, rel_path)
             for target in resolved_imports:
-                if go_resolve.is_build_constrained(repo_path, target):
+                if importer_conditional or go_resolve.is_build_constrained(repo_path, target):
                     import_confidence[target] = "inferred"
     elif language_name == "rust":
         raw_imports, functions, classes = _extract_rust(tree.root_node, source)
@@ -4835,6 +4959,9 @@ def _extract_module(
                     for defining in _rust_reexport_targets(repo_path, path, use_path, target):
                         if defining != rel_path:
                             resolved_imports.append(defining)
+                for module_file in _rust_module_reexport_targets(repo_path, path, use_path):
+                    if module_file != rel_path:
+                        resolved_imports.append(module_file)
     elif language_name == "java":
         raw_imports, functions, classes = _extract_java(tree.root_node, source)
         java_refs = _java_type_references(tree.root_node, source) if java_package_types else None
@@ -5592,12 +5719,37 @@ def _ruby_constant_facts(source: bytes, parser: Parser) -> tuple[set[str], set[t
     return defs, refs, autoloads
 
 
+_RUBY_ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_RUBY_CAMEL_BOUNDARY = re.compile(r"([a-z\d])([A-Z])")
+
+
+def _ruby_zeitwerk_path(constant: str) -> str:
+    """Zeitwerk's file name for a constant: `Jekyll::LiquidRenderer` -> `jekyll/liquid_renderer`."""
+    parts = []
+    for part in constant.split("::"):
+        part = _RUBY_ACRONYM_BOUNDARY.sub(r"\1_\2", part)
+        parts.append(_RUBY_CAMEL_BOUNDARY.sub(r"\1_\2", part).lower())
+    return "/".join(parts)
+
+
+def _ruby_zeitwerk_owner(constant: str, owners: set[str]) -> str | None:
+    """The one file among several that define/reopen `constant` whose path is the Zeitwerk name for it.
+
+    Only an exact single match counts (the path ends with `<zeitwerk name>.rb` on a directory boundary);
+    anything else stays unresolved rather than guessed."""
+    suffix = _ruby_zeitwerk_path(constant) + ".rb"
+    matches = [p for p in owners if p == suffix or p.endswith("/" + suffix)]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
     """Edges for constants referenced in one file and defined in exactly one other file.
 
     A reference resolves through Ruby's lexical scope chain (innermost enclosing class/module
     first, then the top level), stopping at the first level where the name is defined anywhere.
-    No edge when: that name is defined in more than one file (a reopened `module Jekyll`), is
+    When a name is defined in several files (a reopened `module Jekyll`), the edge goes to the one
+    file whose path is the Zeitwerk name for it (`Jekyll::Utils` -> `jekyll/utils.rb`), and only
+    when exactly one matches. No edge when: no single file matches, the name is
     defined in the referencing file itself, is a Ruby/stdlib constant, or is defined nowhere in
     the repo. `autoload :X, "path"` counts as a definition of X in the file it points at.
     Ancestor (inheritance) lookup is not modelled, so a constant only reachable through a
@@ -5634,7 +5786,7 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
             continue
         own, refs = entry
         present = set(module.get("imports", []))
-        for ref, nest in refs:
+        for ref, nest in sorted(refs):  # a set: iterate in a fixed order so the import list is the same on every run
             if ref.startswith("::"):
                 candidates = [ref[2:]]
             else:
@@ -5644,8 +5796,8 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
                     break
                 owners = definers.get(candidate)
                 if owners:
-                    if len(owners) == 1:
-                        target = next(iter(owners))
+                    target = next(iter(owners)) if len(owners) == 1 else _ruby_zeitwerk_owner(candidate, owners)
+                    if target is not None:
                         if target != module["path"] and target not in present:
                             present.add(target)
                             module.setdefault("imports", []).append(target)
