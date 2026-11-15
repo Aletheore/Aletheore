@@ -1720,13 +1720,51 @@ def _rust_reexport_targets(
             continue
         if is_glob:
             glob_declared, _ = rust_resolve.module_items(str(Path(repo_path) / resolved))
-            if item not in glob_declared:
+            if item in glob_declared:
+                found.append(resolved)
+            else:
+                # `pub use clap_builder::*;` where that crate's root itself re-exports `Command` from builder/command.rs
+                nested = _rust_reexport_targets(repo_path, target_file, f"{base}::{item}", resolved, depth + 1)
+                if not nested:
+                    continue
+                found.extend(nested)  # the files that define the item, not the re-exporting crate root on the way
                 continue
-            found.append(resolved)
         else:
-            found.append(resolved)
-            found.extend(_rust_reexport_targets(repo_path, target_file, base, resolved, depth + 1))
+            deeper = _rust_reexport_targets(repo_path, target_file, base, resolved, depth + 1)
+            found.extend(deeper or [resolved])  # a module that only re-exports is not a dependency of its own
     return found
+
+
+def _rust_module_reexport_targets(repo_path: Path, from_file: Path, use_path: str) -> list[str]:
+    """`crate::de::Item` / `facade::de::Item` where `de` is no file module of that crate but the crate root
+    re-exports it (`pub use core_lib::de;`, also inside a zero-argument macro): the module file the name really
+    comes from. It is an extra dependency next to the root file the path resolves to (the facade is imported
+    through too). Only the module itself, not the submodules below it. Empty when nothing is re-exported."""
+    from aletheore.scanner import rust_resolve
+
+    segments = use_path.split("::")
+    if len(segments) < 2 or use_path.startswith("@"):
+        return []
+    head, rest = segments[0], segments[1:]
+    if head == "crate":
+        root_file = rust_resolve.crate_root_file(_rust_crate_src_dir(repo_path, from_file))
+    elif head in ("self", "super"):
+        return []
+    else:
+        root_file = rust_resolve.crate_aliases(repo_path, from_file).get(head)
+    if root_file is None or _resolve_rust_module_dir(root_file.parent, rest[0]) is not None:
+        return []  # not a crate, or `rest[0]` is a real module of that crate
+    for reexport in rust_resolve.root_reexports(repo_path, root_file):
+        if reexport.endswith("::*") or "::" not in reexport or reexport.split("::")[-1] != rest[0]:
+            continue
+        resolved = _resolve_rust_path(repo_path, root_file, reexport)
+        if resolved is None or Path(repo_path, resolved) == root_file:
+            continue
+        module_file = Path(resolved)
+        module_name = module_file.parent.name if module_file.name in ("mod.rs", "lib.rs", "main.rs") else module_file.stem
+        if module_name == rest[0]:  # a re-exported module, not a re-exported item that lives in a root file
+            return [resolved]
+    return []
 
 
 def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | None:
@@ -4645,6 +4683,9 @@ def _extract_module(
                     for defining in _rust_reexport_targets(repo_path, path, use_path, target):
                         if defining != rel_path:
                             resolved_imports.append(defining)
+                for module_file in _rust_module_reexport_targets(repo_path, path, use_path):
+                    if module_file != rel_path:
+                        resolved_imports.append(module_file)
     elif language_name == "java":
         raw_imports, functions, classes = _extract_java(tree.root_node, source)
         java_refs = _java_type_references(tree.root_node, source) if java_package_types else None
@@ -5365,12 +5406,37 @@ def _ruby_constant_facts(source: bytes, parser: Parser) -> tuple[set[str], set[t
     return defs, refs, autoloads
 
 
+_RUBY_ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_RUBY_CAMEL_BOUNDARY = re.compile(r"([a-z\d])([A-Z])")
+
+
+def _ruby_zeitwerk_path(constant: str) -> str:
+    """Zeitwerk's file name for a constant: `Jekyll::LiquidRenderer` -> `jekyll/liquid_renderer`."""
+    parts = []
+    for part in constant.split("::"):
+        part = _RUBY_ACRONYM_BOUNDARY.sub(r"\1_\2", part)
+        parts.append(_RUBY_CAMEL_BOUNDARY.sub(r"\1_\2", part).lower())
+    return "/".join(parts)
+
+
+def _ruby_zeitwerk_owner(constant: str, owners: set[str]) -> str | None:
+    """The one file among several that define/reopen `constant` whose path is the Zeitwerk name for it.
+
+    Only an exact single match counts (the path ends with `<zeitwerk name>.rb` on a directory boundary);
+    anything else stays unresolved rather than guessed."""
+    suffix = _ruby_zeitwerk_path(constant) + ".rb"
+    matches = [p for p in owners if p == suffix or p.endswith("/" + suffix)]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
     """Edges for constants referenced in one file and defined in exactly one other file.
 
     A reference resolves through Ruby's lexical scope chain (innermost enclosing class/module
     first, then the top level), stopping at the first level where the name is defined anywhere.
-    No edge when: that name is defined in more than one file (a reopened `module Jekyll`), is
+    When a name is defined in several files (a reopened `module Jekyll`), the edge goes to the one
+    file whose path is the Zeitwerk name for it (`Jekyll::Utils` -> `jekyll/utils.rb`), and only
+    when exactly one matches. No edge when: no single file matches, the name is
     defined in the referencing file itself, is a Ruby/stdlib constant, or is defined nowhere in
     the repo. `autoload :X, "path"` counts as a definition of X in the file it points at.
     Ancestor (inheritance) lookup is not modelled, so a constant only reachable through a
@@ -5407,7 +5473,7 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
             continue
         own, refs = entry
         present = set(module.get("imports", []))
-        for ref, nest in refs:
+        for ref, nest in sorted(refs):  # a set: iterate in a fixed order so the import list is the same on every run
             if ref.startswith("::"):
                 candidates = [ref[2:]]
             else:
@@ -5417,8 +5483,8 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
                     break
                 owners = definers.get(candidate)
                 if owners:
-                    if len(owners) == 1:
-                        target = next(iter(owners))
+                    target = next(iter(owners)) if len(owners) == 1 else _ruby_zeitwerk_owner(candidate, owners)
+                    if target is not None:
                         if target != module["path"] and target not in present:
                             present.add(target)
                             module.setdefault("imports", []).append(target)
