@@ -1980,7 +1980,8 @@ def map_api_endpoints(
         if parser_key is None:
             continue
         source = read_bytes_or_none(path)
-        if source is None or (b"express" not in source and b".use(" not in source and b"Router" not in source):
+        if source is None or (b"express" not in source and b".use(" not in source and b"Router" not in source
+                              and not (b"export" in source and b" from " in source)):  # a barrel that re-exports routers
             continue
         tree = parsers[parser_key].parse(source)
         express_facts.append(_em.collect_file_facts(

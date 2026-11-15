@@ -127,6 +127,8 @@ def collect_file_facts(root: Node, source: bytes, rel_path: str, resolve_module:
     functions: dict[str, str] = {}
     exports: dict[str, tuple[str, str]] = {}
     imports: dict[str, tuple[str, str]] = {}
+    reexports: dict[str, tuple[str, str]] = {}  # exported name -> (file, name there) for `export { a as b } from './x'`
+    star_reexports: list[str] = []  # files named by `export * from './x'`
     mounts: list[dict] = []
 
     for n in _walk(root):
@@ -149,6 +151,16 @@ def collect_file_facts(root: Node, source: bytes, rel_path: str, resolve_module:
                 var = _returned_router(source, value, set(routers))
                 if var:
                     functions[_text(source, name)] = var
+
+    for n in _walk(root):
+        # const users = makeRouter(): a variable holding what a local factory function returns is that router
+        if n.type == "variable_declarator":
+            name, value = n.child_by_field_name("name"), n.child_by_field_name("value")
+            if name is not None and name.type == "identifier" and value is not None and value.type == "call_expression":
+                callee = value.child_by_field_name("function")
+                if callee is not None and callee.type == "identifier" and _text(source, callee) in functions \
+                        and _text(source, name) not in routers:
+                    routers[_text(source, name)] = routers.get(functions[_text(source, callee)], "router")
 
     def local_target(node: Node | None) -> tuple[str, str] | None:
         if node is None:
@@ -199,6 +211,19 @@ def collect_file_facts(root: Node, source: bytes, rel_path: str, resolve_module:
                 t = local_target(right)
                 if t:
                     exports[left_text.rsplit(".", 1)[1]] = t
+        elif n.type == "export_statement" and n.child_by_field_name("source") is not None:
+            spec = _string(source, n.child_by_field_name("source"))
+            file = resolve_module(spec) if spec else None
+            if file:
+                clause = next((c for c in n.children if c.type == "export_clause"), None)
+                if clause is None:
+                    star_reexports.append(file)
+                else:
+                    for part in clause.named_children:
+                        if part.type == "export_specifier":
+                            nm, alias = part.child_by_field_name("name"), part.child_by_field_name("alias")
+                            if nm is not None:
+                                reexports[_text(source, alias or nm)] = (file, _text(source, nm))
         elif n.type == "export_statement":
             default = any(c.type == "default" for c in n.children)
             declaration = n.child_by_field_name("declaration")
@@ -338,6 +363,7 @@ def collect_file_facts(root: Node, source: bytes, rel_path: str, resolve_module:
         mounts.append({"recv": receiver_name, "target": target, "prefix": prefix, "site": (rel_path, n.start_byte)})
     return {
         "file": rel_path, "routers": routers, "functions": functions, "exports": exports, "imports": imports, "mounts": mounts,
+        "reexports": reexports, "star_reexports": star_reexports,
     }
 
 
@@ -354,9 +380,23 @@ def resolve(all_facts: list[dict]):
         if kind == "factory":
             var = facts["functions"].get(target[1]) if facts else None
             return (file, var) if var else None
-        other = by_file.get(target[1])
+        other_file, export_name = target[1], target[2]
+        other = by_file.get(other_file)
+        for _hop in range(8):  # follow `export { x } from` / `export * from` barrels to where the router is defined
+            if other is None or export_name in other["exports"]:
+                break
+            if export_name in other.get("reexports", {}):
+                other_file, export_name = other["reexports"][export_name]
+            else:
+                star = next((f for f in other.get("star_reexports", [])
+                             if by_file.get(f) and export_name in by_file[f]["exports"]), None)
+                if star is None:
+                    break
+                other_file = star
+            other = by_file.get(other_file)
         if other is None:
             return None
+        target = (target[0], other_file, export_name)
         exported = other["exports"].get(target[2])
         if kind == "import" and exported and exported[0] == "router":
             return (target[1], exported[1])

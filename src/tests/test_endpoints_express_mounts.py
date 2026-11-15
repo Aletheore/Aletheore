@@ -174,3 +174,30 @@ def test_a_chain_of_verb_calls_on_a_router_emits_every_route(tmp_path):
         "src/main.js": "const express = require('express');\nconst app = express();\napp.use('/api', require('./app'));\n",
     })
     assert {("GET", "/api/a"), ("POST", "/api/b"), ("DELETE", "/api/c")} <= got
+
+
+def test_router_re_exported_through_a_barrel_file_keeps_its_mount_prefix(tmp_path):
+    got = _routes(tmp_path, {
+        "app.js": "import express from 'express';\nimport { users } from './routes/index.js';\nconst app = express();\napp.use('/users', users);\n",
+        "routes/index.js": "export { default as users } from './users.js';\n",
+        "routes/users.js": "import { Router } from 'express';\nconst router = Router();\nrouter.get('/me', h);\nexport default router;\n",
+    })
+    assert ("GET", "/users/me") in got
+    assert ("GET", "/me") not in got
+
+
+def test_router_re_exported_with_export_star_keeps_its_mount_prefix(tmp_path):
+    got = _routes(tmp_path, {
+        "app.js": "import express from 'express';\nimport { adminRouter } from './routes';\nconst app = express();\napp.use('/admin', adminRouter);\n",
+        "routes/index.js": "export * from './admin.js';\n",
+        "routes/admin.js": "import { Router } from 'express';\nexport const adminRouter = Router();\nadminRouter.get('/stats', h);\n",
+    })
+    assert ("GET", "/admin/stats") in got
+
+
+def test_router_variable_built_by_a_local_factory_keeps_its_mount_prefix(tmp_path):
+    got = _routes(tmp_path, {
+        "app.js": "import express from 'express';\nimport { users } from './users.js';\nconst app = express();\napp.use('/users', users);\n",
+        "users.js": "import { Router } from 'express';\nfunction makeRouter() { const r = Router(); return r; }\nexport const users = makeRouter();\nusers.get('/me', h);\n",
+    })
+    assert ("GET", "/users/me") in got
