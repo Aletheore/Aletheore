@@ -219,6 +219,110 @@ def _walk_tree(root: Node):
         stack.extend(reversed(node.children))
 
 
+_PY_ROUTE_VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
+
+
+def _py_call_name(call: Node, source: bytes) -> tuple[str, str]:
+    """(last name, full dotted text) of a call's callee: `web.get` -> (`get`, `web.get`)."""
+    func = call.child_by_field_name("function")
+    text = source[func.start_byte : func.end_byte].decode() if func is not None else ""
+    return text.split(".")[-1], text
+
+
+def _py_arguments(call: Node, source: bytes) -> tuple[list[Node], dict[str, Node]]:
+    args = call.child_by_field_name("arguments")
+    positional: list[Node] = []
+    keyword: dict[str, Node] = {}
+    for child in (args.named_children if args is not None else []):
+        if child.type == "keyword_argument":
+            key, value = child.child_by_field_name("name"), child.child_by_field_name("value")
+            if key is not None and value is not None:
+                keyword[source[key.start_byte : key.end_byte].decode()] = value
+        else:
+            positional.append(child)
+    return positional, keyword
+
+
+def _py_literal(node: Node | None, source: bytes) -> str | None:
+    if node is None or node.type != "string" or any(c.type == "interpolation" for c in node.children):
+        return None
+    return _string_literal_text(node, source)
+
+
+def _extract_starlette_aiohttp_routes(root: Node, source: bytes, rel_path: str, framework: str) -> list[dict]:
+    """Starlette: `Route("/x", endpoint, methods=[..])` and `WebSocketRoute`, with `Mount("/p", routes=[..])` prefixes,
+    plus `app.add_route("/x", h, methods=[..])`. aiohttp: `web.get("/x", h)` (and post, put, ...), `web.route("GET", "/x", h)`,
+    `app.router.add_get("/x", h)` and `add_route("GET", "/x", h)`."""
+    entries: list[dict] = []
+
+    def emit(method: str, path: str, handler: str, node: Node, prefix: str = "") -> None:
+        full = (prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") if prefix else path
+        entries.append(
+            {
+                "method": method,
+                "path": full or "/",
+                "framework": framework,
+                "file": rel_path,
+                "line": node.start_point[0] + 1,
+                "handler": handler,
+                "unresolved": False,
+                "note": None,
+            }
+        )
+
+    def mount_prefix(node: Node) -> str:
+        parts: list[str] = []
+        ancestor = node.parent
+        while ancestor is not None:
+            if ancestor.type == "call" and _py_call_name(ancestor, source)[0].lower() == "mount":
+                positional = _py_arguments(ancestor, source)[0]
+                literal = _py_literal(positional[0], source) if positional else None
+                if literal:
+                    parts.append(literal)
+            ancestor = ancestor.parent
+        return "".join("/" + p.strip("/") for p in reversed(parts) if p.strip("/"))
+
+    def handler_of(node: Node | None) -> str:
+        return source[node.start_byte : node.end_byte].decode()[:60] if node is not None else "unknown"
+
+    for call in _walk_tree(root):
+        if call.type != "call":
+            continue
+        name, dotted = _py_call_name(call, source)
+        positional, keyword = _py_arguments(call, source)
+        if framework == "starlette":
+            if name in ("Route", "WebSocketRoute") or (name == "add_route" and "." in dotted) or name == "add_websocket_route":
+                path = _py_literal(positional[0] if positional else keyword.get("path"), source)
+                if path is None or not path.startswith("/"):
+                    continue  # aiohttp's add_route("GET", "/x", h) has the verb first
+                endpoint = positional[1] if len(positional) > 1 else keyword.get("endpoint") or keyword.get("route")
+                methods_node = keyword.get("methods")
+                methods = (
+                    [m.upper() for m in re.findall(r"""["']([A-Za-z]+)["']""", source[methods_node.start_byte : methods_node.end_byte].decode())]
+                    if methods_node is not None
+                    else ["WEBSOCKET"] if "WebSocket" in name or "websocket" in name else ["GET"]
+                )
+                prefix = mount_prefix(call)
+                for method in methods:
+                    emit(method, path, handler_of(endpoint), call, prefix)
+        else:
+            bare_ok = dotted == name and b"from aiohttp.web import" in source  # `from aiohttp.web import get`
+            if name in _PY_ROUTE_VERBS and (dotted == f"web.{name}" or bare_ok) or (name.startswith("add_") and name[4:] in _PY_ROUTE_VERBS):
+                verb = name if name in _PY_ROUTE_VERBS else name[4:]
+                path = _py_literal(positional[0] if positional else keyword.get("path"), source)
+                handler = positional[1] if len(positional) > 1 else keyword.get("handler")
+                if path is not None:
+                    emit(verb.upper(), path, handler_of(handler), call)
+            elif name in ("route", "add_route") and ("web" in dotted or "router" in dotted) and (len(positional) >= 2 or keyword.get("path")):
+                verb_node = positional[0] if positional else keyword.get("method")
+                path_node = positional[1] if len(positional) > 1 else keyword.get("path")
+                handler = positional[2] if len(positional) > 2 else keyword.get("handler")
+                verb, path = _py_literal(verb_node, source), _py_literal(path_node, source)
+                if verb is not None and path is not None:
+                    emit(verb.upper() if verb != "*" else "ANY", path, handler_of(handler), call)
+    return entries
+
+
 def _extract_flask_fastapi_routes(
     root: Node,
     source: bytes,
@@ -1095,6 +1199,142 @@ def _collect_axum_combinators(node: Node, source: bytes) -> list[tuple[str, str]
     return results
 
 
+_SINATRA_VERBS = {"get", "post", "put", "delete", "patch", "head", "options", "link", "unlink"}
+
+
+def _sinatra_string(node: Node | None, source: bytes) -> tuple[str | None, bool]:
+    """(text, dynamic) of a Ruby string argument; (None, False) when the argument is not a string at all."""
+    if node is None or node.type != "string":
+        return None, False
+    if any(c.type == "interpolation" for c in node.children):
+        return None, True
+    return "".join(source[c.start_byte : c.end_byte].decode(errors="replace") for c in node.children if c.type == "string_content"), False
+
+
+def _extract_sinatra_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Sinatra routes: `get '/users/:id' do ... end`, `post("/x") { }` and `route :get, :post, '/x' do`, with the
+    `namespace '/api' do ... end` blocks (sinatra-contrib) around them composed into the path."""
+    entries: list[dict] = []
+    for node in _walk_tree(root):
+        if node.type != "call":
+            continue
+        name_node = node.child_by_field_name("method") or next((c for c in node.children if c.type == "identifier"), None)
+        if name_node is None or node.child_by_field_name("receiver") is not None:
+            continue
+        name = source[name_node.start_byte : name_node.end_byte].decode(errors="replace")
+        args_node = node.child_by_field_name("arguments") or next((c for c in node.children if c.type == "argument_list"), None)
+        if args_node is None or not any(c.type in ("do_block", "block") for c in node.children):
+            continue
+        args = args_node.named_children
+        methods: list[str]
+        if name in _SINATRA_VERBS:
+            methods = [name.upper()]
+        elif name == "route":
+            methods = [source[a.start_byte + 1 : a.end_byte].decode(errors="replace").upper() for a in args if a.type == "simple_symbol"]
+            if not methods:
+                continue
+        else:
+            continue
+        path_node = next((a for a in args if a.type == "string"), None)
+        path, dynamic = _sinatra_string(path_node, source)
+        if path is None and not dynamic:
+            continue  # a regular expression or a constant: not a literal route
+        prefix = ""
+        ancestor = node.parent
+        while ancestor is not None:
+            if ancestor.type == "call":
+                anc_name = ancestor.child_by_field_name("method") or next((c for c in ancestor.children if c.type == "identifier"), None)
+                if anc_name is not None and source[anc_name.start_byte : anc_name.end_byte].decode(errors="replace") == "namespace":
+                    anc_args = ancestor.child_by_field_name("arguments") or next((c for c in ancestor.children if c.type == "argument_list"), None)
+                    anc_path, _ = _sinatra_string(next((a for a in (anc_args.named_children if anc_args else []) if a.type == "string"), None), source)
+                    prefix = "/" + (anc_path or "").strip("/") + prefix if anc_path else prefix
+            ancestor = ancestor.parent
+        for method in methods:
+            full = (prefix + "/" + (path or "").lstrip("/")).rstrip("/") if prefix else (path or "")
+            entries.append(
+                {
+                    "method": method,
+                    "path": full or "/",
+                    "framework": "sinatra",
+                    "file": rel_path,
+                    "line": node.start_point[0] + 1,
+                    "handler": "block",
+                    "unresolved": dynamic,
+                    "note": "path is built at run time" if dynamic else None,
+                }
+            )
+    return entries
+
+
+_GRAPE_NESTERS = {"namespace", "resource", "resources", "group", "segment", "route_param"}
+
+
+def _grape_name(call: Node, source: bytes) -> str:
+    name = call.child_by_field_name("method") or next((c for c in call.children if c.type == "identifier"), None)
+    return source[name.start_byte : name.end_byte].decode(errors="replace") if name is not None else ""
+
+
+def _grape_first_argument(call: Node, source: bytes) -> str | None:
+    """First argument of a Grape DSL call as a path segment: `:users` / `'users'` / `"/users"` -> `users`."""
+    args = call.child_by_field_name("arguments") or next((c for c in call.children if c.type == "argument_list"), None)
+    first = args.named_children[0] if args is not None and args.named_children else None
+    if first is None:
+        return None
+    if first.type == "simple_symbol":
+        return source[first.start_byte + 1 : first.end_byte].decode(errors="replace")
+    text, _dynamic = _sinatra_string(first, source)
+    return text.strip("/") if text is not None else None
+
+
+def _extract_grape_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Grape APIs: `get ':id' do ... end` (and post, put, delete, patch, head, options), inside the `resource :users`,
+    `namespace :x`, `group`, `segment` and `route_param :id` blocks around them, with a class-level `prefix :api` and
+    `version 'v1', using: :path` in front. Mounting one API class in another is not followed."""
+    entries: list[dict] = []
+    class_prefix: dict[int, list[str]] = {}
+    for call in _walk_tree(root):
+        if call.type == "call" and call.child_by_field_name("receiver") is None and _grape_name(call, source) in ("prefix", "version"):
+            segment = _grape_first_argument(call, source)
+            using_path = "using: :path" in source[call.start_byte : call.end_byte].decode(errors="replace") or _grape_name(call, source) == "prefix"
+            klass = call.parent
+            while klass is not None and klass.type != "class":
+                klass = klass.parent
+            if segment and using_path and klass is not None:
+                class_prefix.setdefault(klass.id, []).append(segment)
+    for call in _walk_tree(root):
+        if call.type != "call" or call.child_by_field_name("receiver") is not None:
+            continue
+        name = _grape_name(call, source)
+        if name not in _SINATRA_VERBS or not any(c.type in ("do_block", "block") for c in call.children):
+            continue
+        segments: list[str] = []
+        ancestor = call.parent
+        klass_id = None
+        while ancestor is not None:
+            if ancestor.type == "call" and _grape_name(ancestor, source) in _GRAPE_NESTERS:
+                part = _grape_first_argument(ancestor, source)
+                if part:
+                    segments.insert(0, (":" + part) if _grape_name(ancestor, source) == "route_param" else part)
+            if ancestor.type == "class" and klass_id is None:
+                klass_id = ancestor.id
+            ancestor = ancestor.parent
+        leaf = _grape_first_argument(call, source)
+        parts = [*class_prefix.get(klass_id, []), *segments, *([leaf] if leaf else [])]
+        entries.append(
+            {
+                "method": name.upper(),
+                "path": "/" + "/".join(p.strip("/") for p in parts if p.strip("/")),
+                "framework": "grape",
+                "file": rel_path,
+                "line": call.start_point[0] + 1,
+                "handler": "block",
+                "unresolved": False,
+                "note": None,
+            }
+        )
+    return entries
+
+
 def _extract_axum_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
@@ -1244,6 +1484,199 @@ def _extract_spring_boot_routes(root: Node, source: bytes, rel_path: str) -> lis
                                     "note": _spring_class_prefix_note(n, source),
                                 }
                             )
+    return entries
+
+
+_JAXRS_VERBS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+_JAXRS_APPLICATION_PATH = re.compile(r'@ApplicationPath\(\s*(?:value\s*=\s*)?"([^"]*)"')
+
+
+def _jaxrs_annotations(modifiers: Node | None, source: bytes) -> list[tuple[str, str | None]]:
+    """(annotation name, first string literal in its arguments) of each annotation in a Java `modifiers` node."""
+    found: list[tuple[str, str | None]] = []
+    for ann in (c for c in (modifiers.children if modifiers is not None else []) if c.type in ("annotation", "marker_annotation")):
+        name_node = ann.child_by_field_name("name")
+        if name_node is None:
+            continue
+        args = ann.child_by_field_name("arguments")
+        literal = next((c for c in (args.children if args is not None else []) if c.type == "string_literal"), None)
+        if literal is None and args is not None:  # `@Path(value = "/x")`
+            for pair in args.children:
+                literal = next((c for c in pair.children if c.type == "string_literal"), None)
+                if literal is not None:
+                    break
+        text = _java_string_literal_text(literal, source) if literal is not None else None
+        found.append((source[name_node.start_byte : name_node.end_byte].decode().split(".")[-1], text))
+    return found
+
+
+def _extract_jaxrs_routes(
+    root: Node, source: bytes, rel_path: str, application_path: str = "", ambiguous_application_path: bool = False
+) -> list[dict]:
+    """JAX-RS resources (javax.ws.rs / jakarta.ws.rs): a class `@Path` prefix, methods annotated `@GET` ... `@PATCH` with
+    an optional `@Path`. The application-wide `@ApplicationPath`, declared on another class, is prepended when the
+    repository has exactly one."""
+    entries: list[dict] = []
+    for cls in _walk_tree(root):
+        if cls.type not in ("class_declaration", "interface_declaration"):
+            continue
+        class_path = next((text for name, text in _jaxrs_annotations(next((c for c in cls.children if c.type == "modifiers"), None), source) if name == "Path"), None)
+        body = next((c for c in cls.children if c.type == "class_body" or c.type == "interface_body"), None)
+        for method in (c for c in (body.children if body is not None else []) if c.type == "method_declaration"):
+            annotations = _jaxrs_annotations(next((c for c in method.children if c.type == "modifiers"), None), source)
+            verbs = [name for name, _t in annotations if name in _JAXRS_VERBS]
+            if not verbs:
+                continue
+            method_path = next((text for name, text in annotations if name == "Path"), None)
+            name_node = method.child_by_field_name("name")
+            handler = source[name_node.start_byte : name_node.end_byte].decode() if name_node is not None else "unknown"
+            parts = [p for p in (application_path, class_path, method_path) if p and p.strip("/")]
+            path = "/" + "/".join(p.strip("/") for p in parts)
+            for verb in verbs:
+                entries.append(
+                    {
+                        "method": verb,
+                        "path": path,
+                        "framework": "jaxrs",
+                        "file": rel_path,
+                        "line": method.start_point[0] + 1,
+                        "handler": handler,
+                        "unresolved": False,
+                        "note": (
+                            "prefix from @ApplicationPath found elsewhere in the repository" if application_path
+                            else "the repository declares several different @ApplicationPath values: none is applied"
+                            if ambiguous_application_path else None
+                        ),
+                    }
+                )
+    return entries
+
+
+_KOTLIN_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
+_KOTLIN_SPRING_CONTROLLERS = {"RestController", "Controller"}
+
+
+_SPRING_PLACEHOLDER = re.compile(r"\$\{[^}:]*:([^}]*)\}")
+
+
+def _spring_placeholder_defaults(path: str) -> tuple[str, bool]:
+    """`${api.base-path:/api}/users` -> (`/api/users`, True): a Spring property placeholder with a default stands for that
+    default unless configuration overrides it."""
+    replaced = _SPRING_PLACEHOLDER.sub(lambda m: m.group(1), path)
+    return re.sub(r"/{2,}", "/", replaced), replaced != path
+
+
+def _kotlin_annotations(modifiers: Node | None, source: bytes) -> list[tuple[str, str, Node]]:
+    """(annotation name, argument text, node) for every annotation in a Kotlin `modifiers` node."""
+    found: list[tuple[str, str, Node]] = []
+    for ann in (c for c in (modifiers.children if modifiers is not None else []) if c.type == "annotation"):
+        invocation = next((c for c in ann.children if c.type == "constructor_invocation"), None)
+        head = invocation if invocation is not None else next((c for c in ann.children if c.type == "user_type"), None)
+        if head is None:
+            continue
+        name_node = head if head.type == "user_type" else next((c for c in head.children if c.type in ("user_type", "identifier")), head)
+        name = source[name_node.start_byte : name_node.end_byte].decode(errors="replace").split(".")[-1].split("<")[0].strip()
+        args = next((c for c in head.children if c.type == "value_arguments"), None)
+        found.append((name, source[args.start_byte : args.end_byte].decode() if args is not None else "", ann))
+    return found
+
+
+def _kotlin_split_arguments(body: str) -> list[str]:
+    """Top-level comma-separated arguments of an annotation (brackets, parentheses and strings kept whole)."""
+    parts: list[str] = []
+    depth = 0
+    quote = ""
+    start = 0
+    for i, char in enumerate(body):
+        if quote:
+            if char == quote and body[i - 1] != "\\":
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(body[start:i])
+            start = i + 1
+    parts.append(body[start:])
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _kotlin_spring_paths(args_text: str) -> list[str] | None:
+    """The literal paths of a mapping annotation: the first positional argument, or `value =` / `path =` (a string or a list
+    of them). [""] when no path is given; None when one is given but is not a string literal (a constant). Other string
+    attributes (`name = "x"`, `params = "a,b"`) are not paths."""
+    body = args_text.strip()[1:-1] if args_text else ""
+    chosen: str | None = None
+    for index, argument in enumerate(_kotlin_split_arguments(body)):
+        named = re.match(r"(\w+)\s*=\s*(.*)$", argument, re.S)
+        if named and named.group(1) in ("value", "path"):
+            chosen = named.group(2)
+        elif not named and index == 0:
+            chosen = argument
+    if chosen is None:
+        return [""]
+    literals = [text.replace("\\$", "$") for text in _KOTLIN_STRING.findall(chosen)]
+    return literals or None
+
+
+def _extract_kotlin_spring_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Spring MVC controllers written in Kotlin: `@RestController` / `@Controller` classes with a class-level
+    `@RequestMapping` prefix and `@GetMapping` ... `@PatchMapping` / `@RequestMapping(method = [..])` functions."""
+    entries: list[dict] = []
+    for cls in _walk_tree(root):
+        if cls.type != "class_declaration":
+            continue
+        class_annotations = _kotlin_annotations(next((c for c in cls.children if c.type == "modifiers"), None), source)
+        if not any(name in _KOTLIN_SPRING_CONTROLLERS for name, _a, _n in class_annotations):
+            continue
+        prefixes = [""]
+        prefix_is_constant = False
+        for name, args, _node in class_annotations:
+            if name == "RequestMapping":
+                found = _kotlin_spring_paths(args)
+                prefix_is_constant = found is None
+                prefixes = found or [""]
+        body = next((c for c in cls.children if c.type == "class_body"), None)
+        for fn in (c for c in (body.children if body is not None else []) if c.type == "function_declaration"):
+            ident = next((c for c in fn.children if c.type == "identifier"), None)
+            handler = source[ident.start_byte : ident.end_byte].decode() if ident is not None else "unknown"
+            for name, args, node in _kotlin_annotations(next((c for c in fn.children if c.type == "modifiers"), None), source):
+                if name in _SPRING_VERB_ANNOTATIONS:
+                    method = _SPRING_VERB_ANNOTATIONS[name]
+                elif name == "RequestMapping":
+                    found = re.search(r"RequestMethod\.([A-Z]+)", args)
+                    method = found.group(1) if found else "ANY"
+                else:
+                    continue
+                paths = _kotlin_spring_paths(args)
+                for prefix in prefixes:
+                    for path in paths if paths is not None else [None]:
+                        joined = (prefix.rstrip("/") + "/" + (path or "").lstrip("/")).rstrip("/") if (prefix or path) else ""
+                        joined, defaulted = _spring_placeholder_defaults(joined)
+                        note = None
+                        if path is None:
+                            note = "path is a constant, not a string literal"
+                        elif prefix_is_constant:
+                            note = "the controller's @RequestMapping path is a constant, not a string literal"
+                        elif "${" in joined:
+                            note = "path holds a property placeholder with no default"
+                        elif defaulted:
+                            note = "a property placeholder was replaced by its default value"
+                        entries.append(
+                            {
+                                "method": method,
+                                "path": joined or "/",
+                                "framework": "spring_boot",
+                                "file": rel_path,
+                                "line": node.start_point[0] + 1,
+                                "handler": handler,
+                                "unresolved": path is None or prefix_is_constant or "${" in joined,
+                                "note": note,
+                            }
+                        )
     return entries
 
 
@@ -2129,6 +2562,21 @@ def map_api_endpoints(
     # changed - see docs/audits/Claude_Audit.md finding 20.
     cross_file_mount_defining_files = {defining_file for defining_file, _router in cross_file_router_mounts}
 
+    # JAX-RS: `@ApplicationPath("/api")` sits on an Application class, apart from the resources it prefixes, so resource
+    # files are read afresh each scan, never reused from the cache.
+    jaxrs_application_paths: set[str] = set()
+    for path in source_paths:
+        if path.suffix != ".java":
+            continue
+        jaxrs_source = read_bytes_or_none(path)
+        if jaxrs_source is None or b"ws.rs" not in jaxrs_source:
+            continue
+        cross_file_mount_defining_files.add(_rel(repo_path, path))
+        uncommented = re.sub(r"/\*.*?\*/|//[^\n]*", " ", jaxrs_source.decode(errors="replace"), flags=re.S)
+        jaxrs_application_paths.update(_JAXRS_APPLICATION_PATH.findall(uncommented))
+    jaxrs_application_path = next(iter(jaxrs_application_paths)) if len(jaxrs_application_paths) == 1 else ""
+    jaxrs_ambiguous_application_path = len(jaxrs_application_paths) > 1
+
     for path in source_paths:
         rel_path = _rel(repo_path, path)
 
@@ -2154,6 +2602,10 @@ def map_api_endpoints(
             )
             if path.name == "urls.py":
                 endpoints.extend(_extract_django_routes(tree.root_node, source, rel_path))
+            if b"starlette" in source:
+                endpoints.extend(_extract_starlette_aiohttp_routes(tree.root_node, source, rel_path, "starlette"))
+            if b"aiohttp" in source:
+                endpoints.extend(_extract_starlette_aiohttp_routes(tree.root_node, source, rel_path, "aiohttp"))
         elif suffix in (".js", ".jsx"):
             source = read_bytes_or_none(path)
             if source is None:
@@ -2201,6 +2653,10 @@ def map_api_endpoints(
                 continue
             tree = parsers["java"].parse(source)
             endpoints.extend(_extract_spring_boot_routes(tree.root_node, source, rel_path))
+            if b"ws.rs" in source:
+                endpoints.extend(
+                    _extract_jaxrs_routes(tree.root_node, source, rel_path, jaxrs_application_path, jaxrs_ambiguous_application_path)
+                )
         elif suffix == ".swift":
             source = read_bytes_or_none(path)
             if source is None:
@@ -2213,6 +2669,15 @@ def map_api_endpoints(
                 continue
             tree = parsers["rb"].parse(source)
             endpoints.extend(_extract_rails_routes(tree.root_node, source, rel_path))
+        elif suffix == ".rb":
+            source = read_bytes_or_none(path)
+            if source is None or (b"sinatra" not in source.lower() and b"Grape" not in source):
+                continue
+            tree = parsers["rb"].parse(source)
+            if b"Grape" in source:
+                endpoints.extend(_extract_grape_routes(tree.root_node, source, rel_path))
+            if b"sinatra" in source.lower():
+                endpoints.extend(_extract_sinatra_routes(tree.root_node, source, rel_path))
         elif suffix == ".php" and "routes" in Path(rel_path).parts:
             source = read_bytes_or_none(path)
             if source is None:
@@ -2232,5 +2697,6 @@ def map_api_endpoints(
                 continue
             tree = parsers["kt"].parse(source)
             endpoints.extend(_extract_ktor_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_kotlin_spring_routes(tree.root_node, source, rel_path))
 
     return {"checked": True, "endpoints": endpoints}
