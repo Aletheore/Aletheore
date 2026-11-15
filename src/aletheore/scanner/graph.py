@@ -4835,12 +4835,48 @@ def _resolve_js_import(
         swaps = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
         candidates.extend(base.with_suffix(ext) for ext in swaps.get(base.suffix, ()))
         candidates.append(base)
+        # `import './x.js'` also names x.d.ts (and .d.mts / .d.cts) when only a declaration file exists
+        declaration = {".js": ".d.ts", ".mjs": ".d.mts", ".cjs": ".d.cts"}.get(base.suffix)
+        if declaration:
+            candidates.append(Path(f"{base.with_suffix('')}{declaration}"))
     candidates.extend(Path(f"{base}{ext}") for ext in JS_FAMILY_EXTENSIONS)
+    candidates.append(Path(f"{base}.d.ts"))  # TypeScript tries the declaration file after the source extensions
+    if base.is_dir():
+        # Node: a directory import (`require('..')`, `from './lib'`) is the package.json "main" of that directory,
+        # tried before an index file
+        entry = _package_json_main(base)
+        if entry is not None:
+            swaps = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
+            candidates.extend(entry.with_suffix(ext) for ext in swaps.get(entry.suffix, ()))  # "main": "lib/index.js" -> index.ts
+            candidates.append(entry)
+            candidates.extend(Path(f"{entry}{ext}") for ext in JS_FAMILY_EXTENSIONS)
+            candidates.extend(entry / f"index{ext}" for ext in JS_FAMILY_EXTENSIONS)  # "main": "./lib" names a directory
     candidates.extend(base / f"index{ext}" for ext in JS_FAMILY_EXTENSIONS)
+    candidates.append(base / "index.d.ts")
     for candidate in candidates:
         if candidate.is_file():
             return _rel(repo_path, candidate)
     return None
+
+
+def _package_json_main(directory: Path) -> Path | None:
+    """The file named by `main` in `directory/package.json`, or None (missing, unreadable, huge, not a string)."""
+    manifest = directory / "package.json"
+    try:
+        if not manifest.is_file() or manifest.stat().st_size > 1_000_000:
+            return None
+        data = json.loads(manifest.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, ValueError):
+        return None
+    main = data.get("main") if isinstance(data, dict) else None
+    if not isinstance(main, str) or not main.strip():
+        return None
+    entry = (directory / main).resolve()
+    try:
+        entry.relative_to(directory.resolve())  # a `main` such as "../../x" must not leave the package directory
+    except ValueError:
+        return None
+    return entry
 
 
 def _extract_module(
