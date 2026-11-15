@@ -96,3 +96,34 @@ func main() {
     assert _routes(tmp_path, code) == [
         ("httprouter", "GET", "/users/:id"), ("httprouter", "POST", "/items"), ("httprouter", "PUT", "/thing"),
     ]
+
+
+def test_file_importing_two_frameworks_keeps_both_sets_of_routes(tmp_path):
+    code = """package main
+import (
+	"github.com/go-chi/chi/v5"
+	"github.com/labstack/echo/v4"
+)
+func main() {
+	r := chi.NewRouter()
+	r.Get("/a", a)
+	e := echo.New()
+	e.GET("/b", b)
+}
+"""
+    assert _routes(tmp_path, code) == [("chi", "GET", "/a"), ("echo", "GET", "/b")]
+
+
+def test_chi_file_that_also_registers_plain_net_http_handlers_keeps_them(tmp_path):
+    code = """package main
+import (
+	"net/http"
+	"github.com/go-chi/chi/v5"
+)
+func main() {
+	r := chi.NewRouter()
+	r.Get("/a", a)
+	http.HandleFunc("/health", h)
+}
+"""
+    assert _routes(tmp_path, code) == [("chi", "GET", "/a"), ("go_net_http", "ANY", "/health")]

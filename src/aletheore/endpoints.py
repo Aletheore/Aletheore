@@ -839,13 +839,10 @@ _GO_FRAMEWORK_VERBS = {
 }
 
 
-def _go_web_framework(source: bytes) -> str | None:
-    """chi, Echo or Fiber when the file imports it: their route calls look like Gin's or net/http's, so the import
-    decides which framework a `r.Get("/x", h)` / `e.GET("/x", h)` belongs to."""
-    for marker, name in _GO_WEB_FRAMEWORK_IMPORTS:
-        if marker in source:
-            return name
-    return None
+def _go_web_frameworks(source: bytes) -> list[str]:
+    """Every one of chi, Echo, Fiber and httprouter the file imports: their route calls look like Gin's or net/http's, so
+    the imports decide which framework a `r.Get("/x", h)` / `e.GET("/x", h)` belongs to."""
+    return [name for marker, name in _GO_WEB_FRAMEWORK_IMPORTS if marker in source]
 
 
 def _go_chi_route_prefix(node: Node, source: bytes) -> str:
@@ -889,6 +886,9 @@ def _extract_go_framework_routes(root: Node, source: bytes, rel_path: str, frame
         if field is None or args is None:
             continue
         name = source[field.start_byte : field.end_byte].decode()
+        package = func.child_by_field_name("operand")
+        if package is not None and package.type == "identifier" and source[package.start_byte : package.end_byte] == b"http":
+            continue  # `http.HandleFunc(...)` is net/http's own matcher's
         named = args.named_children
         method = verbs.get(name)
         if framework == "httprouter" and name in ("Handle", "Handler", "HandlerFunc") and len(named) >= 3 and named[0].type == "interpreted_string_literal":
@@ -2102,11 +2102,14 @@ def map_api_endpoints(
             if source is None:
                 continue
             tree = parsers["go"].parse(source)
-            go_framework = _go_web_framework(source)
-            if go_framework is not None:
+            go_frameworks = _go_web_frameworks(source)
+            for go_framework in go_frameworks:
                 endpoints.extend(_extract_go_framework_routes(tree.root_node, source, rel_path, go_framework))
-            else:
+            # net/http and Gin keep their own matchers: always when no framework above is imported, and otherwise only when
+            # the file really uses them (package-level http.Handle*, or the gin import), so a chi file is not read twice
+            if not go_frameworks or b"http.Handle" in source or b"http.NewServeMux" in source:
                 endpoints.extend(_extract_go_net_http_routes(tree.root_node, source, rel_path))
+            if not go_frameworks or b"gin-gonic/gin" in source:
                 endpoints.extend(_extract_gin_routes(tree.root_node, source, rel_path))
         elif suffix == ".rs":
             source = read_bytes_or_none(path)
