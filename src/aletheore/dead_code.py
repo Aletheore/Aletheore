@@ -1608,7 +1608,14 @@ _TOOL_CONFIG_NAMES = (
     "Taskfile.yml", "Dockerfile", ".pre-commit-config.yaml", "Gemfile", "lefthook.yml",
     "conf.py", "mkdocs.yml", "mkdocs.yaml", "book.toml", "docusaurus.config.js",
 )
-_TOOL_CONFIG_SUFFIXES = (".config.js", ".config.cjs", ".config.mjs", ".config.ts", ".config.json")
+_TOOL_CONFIG_SUFFIXES = (
+    ".config.js", ".config.cjs", ".config.mjs", ".config.ts", ".config.mts", ".config.cts", ".config.json",
+)
+# vitest.config.build.ts, jest.config.base.js: a tool config split into variants
+_TOOL_CONFIG_VARIANT = re.compile(r"^[\w-]+\.config\.[\w.-]+\.(?:js|cjs|mjs|ts|mts|cts|json)$")
+# repository helper scripts: extensionless or shell files directly under these folders
+_SCRIPT_FOLDERS = ("scripts", "script", "bin", "tools", "ci", ".ci")
+_SCRIPT_SUFFIXES = ("", ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd")
 _COMPILED_REQUIREMENTS_MARKERS = ("pip-compile", "uv pip compile", "\n    # via", "# via ")
 
 
@@ -1636,12 +1643,20 @@ def _tool_usage_text(directory: Path, repo_path: Path | None = None) -> str:
             continue
     for entry in entries:
         name = entry.name
-        if name in _TOOL_CONFIG_NAMES or name.endswith(_TOOL_CONFIG_SUFFIXES):
+        if name in _TOOL_CONFIG_NAMES or name.endswith(_TOOL_CONFIG_SUFFIXES) or _TOOL_CONFIG_VARIANT.match(name):
             candidates.append(entry)
         elif name.startswith(".") and ("rc" in name or name.endswith((".json", ".yml", ".yaml", ".js", ".cjs"))):
             candidates.append(entry)
         elif name.startswith("tsconfig") and name.endswith(".json"):
             candidates.append(entry)
+    for folder in ([directory, repo_path] if repo_path is not None and repo_path != directory else [directory]):
+        for script_folder in _SCRIPT_FOLDERS:
+            try:
+                candidates.extend(
+                    sorted(e for e in (folder / script_folder).iterdir() if e.is_file() and e.suffix in _SCRIPT_SUFFIXES)[:40]
+                )
+            except OSError:
+                continue
     for folder in ([directory, repo_path] if repo_path is not None and repo_path != directory else [directory]):
         workflows = folder / ".github" / "workflows"
         if workflows.is_dir():

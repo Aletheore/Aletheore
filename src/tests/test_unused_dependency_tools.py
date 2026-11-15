@@ -36,3 +36,22 @@ def test_pip_compile_output_only_judges_project_declared_names(tmp_path):
     modules = [{"path": "app.py", "imports": []}]
     out = {e["package"] for e in find_dead_code(tmp_path, modules, None)["unused_dependencies"]}
     assert "amqp" not in out
+
+
+def test_tool_named_in_a_config_variant_or_mts_config_is_not_unused(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({
+        "devDependencies": {"jsdom": "1.0.0", "vite": "1.0.0", "left-pad": "1.0.0"},
+    }))
+    (tmp_path / "vitest.config.mts").write_text("export default { test: { environment: 'jsdom' } }\n")
+    (tmp_path / "vitest.config.build.ts").write_text("import { defineConfig } from 'vite'\n")
+    (tmp_path / "index.js").write_text("x\n")
+    assert _unused(tmp_path) == {("left-pad", None)}
+
+
+def test_tool_called_from_an_extensionless_or_shell_script_is_not_unused(tmp_path):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "lint").write_text("#!/bin/sh\nruff check .\n")
+    (tmp_path / "scripts" / "docs.sh").write_text("mkdocs build\n")
+    (tmp_path / "requirements.txt").write_text("ruff\nmkdocs\nleft-pad\n")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    assert _unused(tmp_path) == {("left-pad", None)}
