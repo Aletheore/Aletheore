@@ -45,3 +45,11 @@ def test_nested_partial_parts_of_different_outer_types_are_not_linked(tmp_path):
         "B.cs": "namespace App;\npublic partial class B\n{\n    partial class Row { }\n}\n",
     })
     assert "B.cs" not in got["A.cs"]
+
+
+def test_header_directive_whose_endif_is_past_the_brace_is_left_alone(tmp_path):
+    # `#if` in the header, `#endif` after the opening brace: blanking only the `#if` would unbalance the file
+    from aletheore.scanner.graph import _csharp_blank_header_directives
+
+    source = b"namespace A { public partial class R\n#if X\n  : IFoo\n{\n  int a;\n#endif\n}\n}\n"
+    assert _csharp_blank_header_directives(source) == source

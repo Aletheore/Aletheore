@@ -5046,6 +5046,10 @@ def _csharp_blank_header_directives(source: bytes) -> bytes:
         header = source[match.end():brace]
         if b"#" not in header:
             continue
+        opens = len(re.findall(rb"(?m)^\s*#\s*if", header))
+        closes = len(re.findall(rb"(?m)^\s*#\s*endif", header))
+        if opens != closes:
+            continue  # the `#endif` is past the `{`: blanking only the `#if` would leave an unmatched `#endif`
         if out is None:
             out = bytearray(source)
         offset = match.end()
