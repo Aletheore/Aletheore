@@ -86,3 +86,42 @@ def test_warp_or_alternatives_are_separate_routes(tmp_path):
 
 def test_warp_without_the_crate_is_ignored(tmp_path):
     assert _warp(tmp_path, 'fn f() { let x = path("a"); }\n') == []
+
+
+def test_comment_between_the_attribute_and_the_fn_does_not_hide_a_route(tmp_path):
+    code = '#[get("/a")] // deprecated\n/* old */\nfn a() {}\n#[post("/b")]\n// note\nasync fn b() {}\nfn m() { rocket::build().mount("/api", routes![a, b]); }\n'
+    assert _entries(tmp_path, code) == [("GET", "/api/a", False), ("POST", "/api/b", False)]
+
+
+def test_self_and_super_qualified_mounts_are_treated_as_unqualified(tmp_path):
+    code = '#[get("/a")]\nfn a() {}\nfn m() { rocket::build().mount("/api", routes![self::a]); }\n'
+    assert _entries(tmp_path, code) == [("GET", "/api/a", False)]
+
+
+def test_prelude_handler_file_that_never_says_rocket_is_read_when_a_mount_names_it(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "lib.rs").write_text('use rocket;\nfn m() { rocket::build().mount("/api", routes![h::login]); }\n')
+    (tmp_path / "src" / "h.rs").write_text('use crate::prelude::*;\n#[post("/login")]\nfn login() {}\n')
+    got = sorted((e["path"], bool(e["note"])) for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "rocket")
+    assert got == [("/api/login", False)]
+
+
+def test_warp_trailing_filters_apply_to_every_or_alternative(tmp_path):
+    code = 'use warp::Filter;\nfn f() {\n    let r = warp::path("a").or(warp::path("b")).and(warp::get());\n}\n'
+    assert _warp(tmp_path, code) == [("GET", "/a", "closure"), ("GET", "/b", "closure")]
+
+
+def test_warp_nested_or_and_parens_inside_strings(tmp_path):
+    code = 'use warp::Filter;\nfn f() {\n    let r = warp::path("a").or(warp::path("b").or(warp::path("api(v1)")));\n}\n'
+    assert _warp(tmp_path, code) == [("ANY", "/a", "closure"), ("ANY", "/api(v1)", "closure"), ("ANY", "/b", "closure")]
+
+
+def test_warp_closure_with_blocks_and_semicolons_keeps_the_route(tmp_path):
+    code = '''use warp::Filter;
+fn f() {
+    let r = warp::path("users").and(warp::get()).and_then(|id| async move {
+        if id > 1 { let x = 1; Ok(x) } else { Err(warp::reject()) }
+    });
+}
+'''
+    assert _warp(tmp_path, code) == [("GET", "/users", "closure")]
