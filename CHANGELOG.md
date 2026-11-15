@@ -5,7 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- Sinatra routes are found, including `route` with several verbs and nested `namespace` prefixes.
+- Sinatra routes are found, including `route` with several verbs and nested `namespace` prefixes; Grape APIs are read with their `resource`, `namespace` and `route_param` nesting and class-level `prefix`/`version`.
 
 ## 0.13.0 - 2026-11-14
 

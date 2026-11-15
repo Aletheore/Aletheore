@@ -48,3 +48,34 @@ def test_interpolated_path_is_unresolved(tmp_path):
 
 def test_ruby_file_that_does_not_mention_sinatra_is_ignored(tmp_path):
     assert _routes(tmp_path, "get '/x' do\nend\n") == []
+
+
+def test_grape_resources_route_params_and_class_prefix(tmp_path):
+    code = """class API < Grape::API
+  prefix :api
+  version 'v1', using: :path
+  resource :users do
+    get do
+    end
+    route_param :id do
+      get do
+      end
+      delete do
+      end
+    end
+    namespace :admin do
+      post 'ban' do
+      end
+    end
+  end
+end
+"""
+    got = sorted((e["method"], e["path"]) for e in map_api_endpoints_in(tmp_path, code) if e["framework"] == "grape")
+    assert got == [
+        ("DELETE", "/api/v1/users/:id"), ("GET", "/api/v1/users"), ("GET", "/api/v1/users/:id"), ("POST", "/api/v1/users/admin/ban"),
+    ]
+
+
+def map_api_endpoints_in(tmp_path, code):
+    (tmp_path / "api.rb").write_text(code)
+    return map_api_endpoints(tmp_path)["endpoints"]

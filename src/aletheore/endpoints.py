@@ -982,6 +982,75 @@ def _extract_sinatra_routes(root: Node, source: bytes, rel_path: str) -> list[di
     return entries
 
 
+_GRAPE_NESTERS = {"namespace", "resource", "resources", "group", "segment", "route_param"}
+
+
+def _grape_name(call: Node, source: bytes) -> str:
+    name = call.child_by_field_name("method") or next((c for c in call.children if c.type == "identifier"), None)
+    return source[name.start_byte : name.end_byte].decode() if name is not None else ""
+
+
+def _grape_first_argument(call: Node, source: bytes) -> str | None:
+    """First argument of a Grape DSL call as a path segment: `:users` / `'users'` / `"/users"` -> `users`."""
+    args = call.child_by_field_name("arguments") or next((c for c in call.children if c.type == "argument_list"), None)
+    first = args.named_children[0] if args is not None and args.named_children else None
+    if first is None:
+        return None
+    if first.type == "simple_symbol":
+        return source[first.start_byte + 1 : first.end_byte].decode()
+    text, _dynamic = _sinatra_string(first, source)
+    return text.strip("/") if text is not None else None
+
+
+def _extract_grape_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Grape APIs: `get ':id' do ... end` (and post, put, delete, patch, head, options), inside the `resource :users`,
+    `namespace :x`, `group`, `segment` and `route_param :id` blocks around them, with a class-level `prefix :api` and
+    `version 'v1', using: :path` in front. Mounting one API class in another is not followed."""
+    entries: list[dict] = []
+    class_prefix: dict[int, list[str]] = {}
+    for call in _walk_tree(root):
+        if call.type == "call" and call.child_by_field_name("receiver") is None and _grape_name(call, source) in ("prefix", "version"):
+            segment = _grape_first_argument(call, source)
+            using_path = "using: :path" in source[call.start_byte : call.end_byte].decode() or _grape_name(call, source) == "prefix"
+            klass = call.parent
+            while klass is not None and klass.type != "class":
+                klass = klass.parent
+            if segment and using_path and klass is not None:
+                class_prefix.setdefault(klass.id, []).append(segment)
+    for call in _walk_tree(root):
+        if call.type != "call" or call.child_by_field_name("receiver") is not None:
+            continue
+        name = _grape_name(call, source)
+        if name not in _SINATRA_VERBS or not any(c.type in ("do_block", "block") for c in call.children):
+            continue
+        segments: list[str] = []
+        ancestor = call.parent
+        klass_id = None
+        while ancestor is not None:
+            if ancestor.type == "call" and _grape_name(ancestor, source) in _GRAPE_NESTERS:
+                part = _grape_first_argument(ancestor, source)
+                if part:
+                    segments.insert(0, (":" + part) if _grape_name(ancestor, source) == "route_param" else part)
+            if ancestor.type == "class" and klass_id is None:
+                klass_id = ancestor.id
+            ancestor = ancestor.parent
+        leaf = _grape_first_argument(call, source)
+        parts = [*class_prefix.get(klass_id, []), *segments, *([leaf] if leaf else [])]
+        entries.append(
+            {
+                "method": name.upper(),
+                "path": "/" + "/".join(p.strip("/") for p in parts if p.strip("/")),
+                "framework": "grape",
+                "file": rel_path,
+                "line": call.start_point[0] + 1,
+                "handler": "block",
+                "unresolved": False,
+                "note": None,
+            }
+        )
+    return entries
+
+
 def _extract_axum_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
@@ -2092,10 +2161,13 @@ def map_api_endpoints(
             endpoints.extend(_extract_rails_routes(tree.root_node, source, rel_path))
         elif suffix == ".rb":
             source = read_bytes_or_none(path)
-            if source is None or b"sinatra" not in source.lower():
+            if source is None or (b"sinatra" not in source.lower() and b"Grape" not in source):
                 continue
             tree = parsers["rb"].parse(source)
-            endpoints.extend(_extract_sinatra_routes(tree.root_node, source, rel_path))
+            if b"Grape" in source:
+                endpoints.extend(_extract_grape_routes(tree.root_node, source, rel_path))
+            if b"sinatra" in source.lower():
+                endpoints.extend(_extract_sinatra_routes(tree.root_node, source, rel_path))
         elif suffix == ".php" and "routes" in Path(rel_path).parts:
             source = read_bytes_or_none(path)
             if source is None:
