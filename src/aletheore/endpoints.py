@@ -3449,52 +3449,92 @@ def _aspnet_attributes(node: Node) -> list[Node]:
     ]
 
 
-def _aspnet_class_prefix_note(method_node: Node, source: bytes) -> str | None:
+def _aspnet_enclosing_class(method_node: Node) -> Node | None:
     node = method_node.parent
     while node is not None and node.type != "class_declaration":
         node = node.parent
-    if node is None:
-        return None
-    for attr in _aspnet_attributes(node):
+    return node
+
+
+def _aspnet_class_template(class_node: Node | None, source: bytes) -> tuple[str | None, bool]:
+    """(literal template, present) of a controller's class-level [Route] / [RoutePrefix]. `present` with a None template
+    means the attribute exists but its argument is not a string literal."""
+    if class_node is None:
+        return None, False
+    for attr in _aspnet_attributes(class_node):
         name_node = attr.child_by_field_name("name")
-        if (
-            name_node is not None
-            and source[name_node.start_byte : name_node.end_byte].decode() == "Route"
-        ):
-            return "class-level [Route] template present, not composed into this path"
-    return None
+        if name_node is not None and source[name_node.start_byte : name_node.end_byte].decode() in ("Route", "RoutePrefix"):
+            return _aspnet_attribute_path(attr, source), True
+    return None, False
+
+
+def _aspnet_compose_route(class_template: str | None, method_template: str | None, controller: str, action: str) -> str:
+    """ASP.NET attribute routing: a method template starting with `/` or `~/` replaces the class template, otherwise the
+    two are joined; `[controller]` and `[action]` tokens are replaced by the class name (without `Controller`) and the
+    method name."""
+    if method_template is not None and method_template.startswith(("/", "~/")):
+        path = "/" + method_template.lstrip("~").lstrip("/")
+    else:
+        parts = [p.strip("/") for p in (class_template, method_template) if p]
+        path = "/" + "/".join(p for p in parts if p)
+    return path.replace("[controller]", controller).replace("[action]", action)
 
 
 def _extract_aspnet_attribute_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
     for n in _walk_tree(root):
-        if n.type == "method_declaration":
-            name_node = n.child_by_field_name("name")
-            handler = "unknown"
-            if name_node is not None:
-                handler = source[name_node.start_byte : name_node.end_byte].decode()
+        if n.type != "method_declaration":
+            continue
+        name_node = n.child_by_field_name("name")
+        handler = "unknown"
+        if name_node is not None:
+            handler = source[name_node.start_byte : name_node.end_byte].decode()
+        class_node = _aspnet_enclosing_class(n)
+        class_template, has_class_route = _aspnet_class_template(class_node, source)
+        controller = ""
+        if class_node is not None:
+            class_name = class_node.child_by_field_name("name")
+            if class_name is not None:
+                controller = source[class_name.start_byte : class_name.end_byte].decode().removesuffix("Controller")
 
-            for attr in _aspnet_attributes(n):
-                attr_name_node = attr.child_by_field_name("name")
-                if attr_name_node is None:
-                    continue
-                attr_name = source[attr_name_node.start_byte : attr_name_node.end_byte].decode()
-                if attr_name in _ASPNET_ATTRIBUTE_METHODS:
-                    path = _aspnet_attribute_path(attr, source)
-                    if path is not None:
-                        entries.append(
-                            {
-                                "method": _ASPNET_ATTRIBUTE_METHODS[attr_name],
-                                "path": path,
-                                "framework": "aspnet_attribute",
-                                "file": rel_path,
-                                "line": attr.start_point[0] + 1,
-                                "handler": handler,
-                                "unresolved": False,
-                                "note": _aspnet_class_prefix_note(n, source),
-                            }
-                        )
+        verb_attrs: list[tuple[str, str | None, Node]] = []
+        route_template: str | None = None
+        route_attr: Node | None = None
+        for attr in _aspnet_attributes(n):
+            attr_name_node = attr.child_by_field_name("name")
+            if attr_name_node is None:
+                continue
+            attr_name = source[attr_name_node.start_byte : attr_name_node.end_byte].decode()
+            if attr_name in _ASPNET_ATTRIBUTE_METHODS:
+                verb_attrs.append((_ASPNET_ATTRIBUTE_METHODS[attr_name], _aspnet_attribute_path(attr, source), attr))
+            elif attr_name == "Route":
+                route_template = _aspnet_attribute_path(attr, source)
+                route_attr = attr
+        if not verb_attrs and route_template is not None and route_attr is not None:
+            verb_attrs.append(("ANY", route_template, route_attr))
+        for method, template, attr in verb_attrs:
+            if template is None:
+                template = route_template  # [HttpGet] with no template of its own uses the method's [Route]
+            class_unresolved = has_class_route and class_template is None
+            if class_unresolved:
+                path, note = template or "/", "class-level [Route] template is not a string literal, not composed into this path"
+            elif class_template is not None or template is None:
+                path, note = _aspnet_compose_route(class_template, template, controller, handler), None
+            else:
+                path, note = template, None  # no class template: the path as written on the method
+            entries.append(
+                {
+                    "method": method,
+                    "path": path,
+                    "framework": "aspnet_attribute",
+                    "file": rel_path,
+                    "line": attr.start_point[0] + 1,
+                    "handler": handler,
+                    "unresolved": class_unresolved,  # the class route could not be read: the path is partial
+                    "note": note,
+                }
+            )
     return entries
 
 
