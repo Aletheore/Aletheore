@@ -1312,15 +1312,24 @@ def _rust_use_paths(node: Node, source: bytes) -> list[str]:
         prefix = text(prefix_node)
         names: list[str] = []
         for c in list_node.children:
-            if c.type in ("identifier", "self"):
+            if c.type in ("identifier", "self", "scoped_identifier"):
                 names.append(text(c))
             elif c.type in ("scoped_use_list", "use_as_clause", "use_wildcard"):
                 names.extend(_rust_use_paths(c, source))
         return [f"{prefix}::{name}" for name in names]
 
     if node.type == "use_list":
-        # "use {a, b};" - rare, no prefix at all.
-        return [text(c) for c in node.children if c.type in ("identifier", "self")]
+        # "use {a, b};" - no prefix at all. Entries can themselves be groups
+        # ("use { grep_matcher::{A, B}, std::io };"), aliased or wildcard, the
+        # layout rustfmt produces under `imports_layout`; recurse for those so
+        # they are not silently dropped.
+        out: list[str] = []
+        for c in node.children:
+            if c.type in ("identifier", "self", "scoped_identifier"):
+                out.append(text(c))
+            elif c.type in ("scoped_use_list", "use_as_clause", "use_wildcard"):
+                out.extend(_rust_use_paths(c, source))
+        return out
 
     # scoped_identifier, identifier, crate, self, or super used directly.
     return [text(node)]
@@ -1522,13 +1531,73 @@ def _rust_crate_src_dir(repo_path: Path, from_file: Path) -> Path:
         root = repo_path.resolve()
     except OSError:
         return repo_path / "src"
+    from_dir = current
+    from aletheore.scanner import rust_resolve
+
     while True:
-        if (current / "Cargo.toml").exists() and (current / "src").is_dir():
-            return current / "src"
+        if (current / "Cargo.toml").exists():
+            # A crate root declared in the manifest outside src/ (`[[bin]] path = "crates/core/main.rs"`): the
+            # deepest such directory that holds this file is the crate's source directory.
+            holders = [
+                Path(d) for d in rust_resolve.manifest_root_dirs(str(current))
+                if Path(d) == from_dir or Path(d) in from_dir.parents
+            ]
+            if holders:
+                return max(holders, key=lambda d: len(d.parts))
+            if (current / "src").is_dir():
+                return current / "src"
         if current == root or current.parent == current:
             break
         current = current.parent
     return repo_path / "src"
+
+
+def _rust_test_target_dir(from_file: Path, rest: list[str]) -> Path | None:
+    """The directory a `crate::` path resolves against for a module of a Cargo test, example or bench target.
+
+    Files directly in `<crate>/tests/`, `examples/` or `benches/` are each their own crate root; a multi-file
+    target is one root (`tests/tests.rs`) that declares its siblings with `mod util;`, and those siblings then
+    write `use crate::util::..`. That root is the sibling that declares the path's first segment, so it is only
+    returned when such a declaration exists (no guessing from names alone).
+    """
+    import re
+    from aletheore.scanner import rust_resolve
+
+    directory = from_file.parent
+    if not rest:
+        return None
+    harness = ("tests", "examples", "benches")
+    # tests/foo.rs (siblings in tests/) or tests/foo/main.rs (siblings in tests/foo/)
+    if directory.name in harness and (directory.parent / "Cargo.toml").is_file():
+        pass
+    elif directory.parent.name in harness and (directory.parent.parent / "Cargo.toml").is_file():
+        pass
+    else:
+        return None
+    wanted = re.compile(rf"\bmod\s+{re.escape(rest[0])}\s*;")
+    as_module = re.compile(rf"\bmod\s+{re.escape(from_file.stem)}\s*;")
+    try:
+        own = rust_resolve.clean_source(from_file.read_text(encoding="utf-8", errors="ignore"))
+    except OSError:
+        own = ""
+    if wanted.search(own):
+        return directory  # the file is its own crate root and declares the module itself
+    try:
+        siblings = sorted(directory.glob("*.rs"))
+    except OSError:
+        return None
+    for sibling in siblings:
+        if sibling == from_file:
+            continue
+        try:
+            text = rust_resolve.clean_source(sibling.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+        # in a directory of independent test crates, only the root that declares both the module being named and
+        # this file as one of its own modules is this file's crate root
+        if wanted.search(text) and as_module.search(text):
+            return directory
+    return None
 
 
 def _rust_has_any_crate_root(repo_path: Path) -> bool:
@@ -1541,6 +1610,13 @@ def _rust_has_any_crate_root(repo_path: Path) -> bool:
     for cargo in repo_path.glob("*/*/Cargo.toml"):
         if (cargo.parent / "src").is_dir():
             return True
+    from aletheore.scanner import rust_resolve
+
+    # A package whose crate root the manifest puts outside src/ (`[[bin]] path = "crates/core/main.rs"`).
+    for pattern in ("Cargo.toml", "*/Cargo.toml", "*/*/Cargo.toml"):
+        for cargo in repo_path.glob(pattern):
+            if rust_resolve.manifest_root_dirs(str(cargo.parent)):
+                return True
     return False
 
 
@@ -1644,13 +1720,51 @@ def _rust_reexport_targets(
             continue
         if is_glob:
             glob_declared, _ = rust_resolve.module_items(str(Path(repo_path) / resolved))
-            if item not in glob_declared:
+            if item in glob_declared:
+                found.append(resolved)
+            else:
+                # `pub use clap_builder::*;` where that crate's root itself re-exports `Command` from builder/command.rs
+                nested = _rust_reexport_targets(repo_path, target_file, f"{base}::{item}", resolved, depth + 1)
+                if not nested:
+                    continue
+                found.extend(nested)  # the files that define the item, not the re-exporting crate root on the way
                 continue
-            found.append(resolved)
         else:
-            found.append(resolved)
-            found.extend(_rust_reexport_targets(repo_path, target_file, base, resolved, depth + 1))
+            deeper = _rust_reexport_targets(repo_path, target_file, base, resolved, depth + 1)
+            found.extend(deeper or [resolved])  # a module that only re-exports is not a dependency of its own
     return found
+
+
+def _rust_module_reexport_targets(repo_path: Path, from_file: Path, use_path: str) -> list[str]:
+    """`crate::de::Item` / `facade::de::Item` where `de` is no file module of that crate but the crate root
+    re-exports it (`pub use core_lib::de;`, also inside a zero-argument macro): the module file the name really
+    comes from. It is an extra dependency next to the root file the path resolves to (the facade is imported
+    through too). Only the module itself, not the submodules below it. Empty when nothing is re-exported."""
+    from aletheore.scanner import rust_resolve
+
+    segments = use_path.split("::")
+    if len(segments) < 2 or use_path.startswith("@"):
+        return []
+    head, rest = segments[0], segments[1:]
+    if head == "crate":
+        root_file = rust_resolve.crate_root_file(_rust_crate_src_dir(repo_path, from_file))
+    elif head in ("self", "super"):
+        return []
+    else:
+        root_file = rust_resolve.crate_aliases(repo_path, from_file).get(head)
+    if root_file is None or _resolve_rust_module_dir(root_file.parent, rest[0]) is not None:
+        return []  # not a crate, or `rest[0]` is a real module of that crate
+    for reexport in rust_resolve.root_reexports(repo_path, root_file):
+        if reexport.endswith("::*") or "::" not in reexport or reexport.split("::")[-1] != rest[0]:
+            continue
+        resolved = _resolve_rust_path(repo_path, root_file, reexport)
+        if resolved is None or Path(repo_path, resolved) == root_file:
+            continue
+        module_file = Path(resolved)
+        module_name = module_file.parent.name if module_file.name in ("mod.rs", "lib.rs", "main.rs") else module_file.stem
+        if module_name == rest[0]:  # a re-exported module, not a re-exported item that lives in a root file
+            return [resolved]
+    return []
 
 
 def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | None:
@@ -1688,9 +1802,17 @@ def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | Non
 
     if head == "crate":
         src_dir = _rust_crate_src_dir(repo_path, from_file)
+        harness_dir = _rust_test_target_dir(from_file, rest)
+        if harness_dir is not None:
+            # A file of a multi-file integration test (`tests/tests.rs` declaring `mod util;`): `crate::` is that
+            # test crate, never the library under src/.
+            target = _walk_rust_segments(harness_dir, rest)
+            if target is not None:
+                return _rel(repo_path, target)
         target = _walk_rust_segments(src_dir, rest)
-        if target is None and rest:
-            # `use crate::Item;` where Item is defined in the crate root file itself.
+        if target is None:
+            # `use crate::Item;` where Item is defined in the crate root file itself (and a bare `crate`, the
+            # prefix of that path, is the root file too).
             target = rust_resolve.crate_root_file(src_dir)
     elif head == "self":
         target = _walk_rust_segments(_rust_module_search_dir(repo_path, from_file), rest)
@@ -2326,7 +2448,7 @@ _JAVA_QUALIFIED_RE = re.compile(r"^[a-z_]\w*(?:\.[a-z_]\w*)*\.[A-Z]\w*")
 def _java_inline_qualified_targets(
     root: Node, source: bytes, importer: Path, package_types: dict[str, dict[str, list[Path]]],
     coverage: dict[Path, int] | None,
-) -> list[tuple[Path, bool]]:
+) -> list[tuple[Path, bool | str]]:
     """Files named by a fully qualified type written inline (`org.apache.thrift.TException e`), which needs
     no import. The dotted text must start lower-case, as packages do, and name a top-level type that a scanned
     file declares in exactly that package."""
@@ -2361,7 +2483,7 @@ def _java_same_package_targets(
     explicit_imports: set[str],
     package_types: dict[str, dict[str, list[Path]]],
     refs: tuple[set[str], set[str], set[str]] | None = None,
-) -> list[tuple[Path, bool]]:
+) -> list[tuple[Path, bool | str]]:
     """Files this one depends on without any import: Java needs none for a type of the same package.
 
     Rule (conservative, so a wrong edge stays rarer than a missing one): the file's capitalized identifiers
@@ -3442,6 +3564,41 @@ _CSHARP_GLOBAL_USING_RE = re.compile(r"^\s*global\s+using\s+(?!static\b)(?:\w+\s
 _CSHARP_EXTENSION_RE = re.compile(r"\b([A-Za-z_]\w*)\s*(<[^>()]*>)?\s*\(\s*this\s+[A-Za-z_]")
 
 
+_CSHARP_TYPE_BODY_DECLS = ("class_declaration", "struct_declaration", "interface_declaration", "enum_declaration",
+                           "record_declaration", "record_struct_declaration", "delegate_declaration")
+_CSHARP_COMMON_MEMBER_NAMES = frozenset({"ToString", "Equals", "GetHashCode", "Dispose", "Count", "Value", "Name", "Items", "Length", "Clear", "Add", "Remove", "Contains", "Reset", "Close", "Open", "Create", "Get", "Set"})
+
+
+def _csharp_partial_facts(type_node: Node, source: bytes) -> dict:
+    """What one part of a `partial` type declares: nested type names and member names (methods, properties, fields,
+    events). A sibling part that names one of them depends on this part."""
+    body = type_node.child_by_field_name("body")
+    nested: set[str] = set()
+    members: set[str] = set()
+    if body is not None:
+        def name_of(node: Node) -> str | None:
+            n = node.child_by_field_name("name")
+            return source[n.start_byte:n.end_byte].decode(errors="ignore") if n is not None else None
+
+        for member in body.children:
+            if member.type in _CSHARP_TYPE_BODY_DECLS:
+                got = name_of(member)
+                if got:
+                    nested.add(got)
+            elif member.type in ("method_declaration", "property_declaration", "event_declaration"):
+                got = name_of(member)
+                if got:
+                    members.add(got)
+            elif member.type in ("field_declaration", "event_field_declaration"):  # an event field's name is a declarator
+                declaration = next((c for c in member.children if c.type == "variable_declaration"), None)
+                for declarator in (declaration.children if declaration is not None else []):
+                    if declarator.type == "variable_declarator":
+                        ident = declarator.child_by_field_name("name") or next((c for c in declarator.children if c.type == "identifier"), None)
+                        if ident is not None:
+                            members.add(source[ident.start_byte:ident.end_byte].decode(errors="ignore"))
+    return {"nested": sorted(nested), "members": sorted(m for m in members if len(m) >= 5 and m not in _CSHARP_COMMON_MEMBER_NAMES)}
+
+
 def _csharp_file_summary(root: Node, source: bytes) -> dict:
     """Namespaces this file declares, its TOP-LEVEL types (name -> namespace; nested types are reachable only
     through their outer type), whether it defines extension methods, and its `global using` namespaces."""
@@ -3451,10 +3608,29 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
 
     namespaces: list[str] = []
     types: dict[str, str] = {}
+    members: dict[str, dict[str, str]] = {}
+    bases: dict[str, set[str]] = {}
+    partial: dict[str, dict] = {}  # top-level `partial` type name -> {ns, nested, members}
+    nested_partial: set[str] = set()  # "namespace|Outer.Inner" of every nested `partial` type declared in this file
+
+    def collect_nested_partial(type_node: Node, ns: str, path: str) -> None:
+        body = type_node.child_by_field_name("body")
+        for member in (body.children if body is not None else []):
+            if member.type not in _CSHARP_TYPE_BODY_DECLS:
+                continue
+            name_node = member.child_by_field_name("name")
+            if name_node is None:
+                continue
+            inner = f"{path}.{text(name_node)}"
+            if any(m.type == "modifier" and text(m) == "partial" for m in member.children):
+                nested_partial.add(f"{ns}|{inner}")
+            collect_nested_partial(member, ns, inner)
 
     def walk(children, ns: str) -> str:
         for c in children:
-            if c.type.startswith("preproc_"):
+            if c.type.startswith("preproc_") or c.type == "ERROR":
+                # (an ERROR node is what tree-sitter makes of `#if`/`#else` splitting a declaration; its children are
+                # still the declarations it saw, so descend rather than lose the file's namespace and types)
                 # `#if FLAG ... #endif` wraps whole namespaces and types (AutoMapper's Polyfill.cs is entirely
                 # inside one); every branch is indexed, as a compiler configured with that flag would see it.
                 ns = walk(c.children, ns)
@@ -3473,14 +3649,41 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
             elif c.type in _CSHARP_TOP_TYPE_DECLS:
                 name_node = c.child_by_field_name("name")
                 if name_node is not None:
-                    types.setdefault(text(name_node), ns)
+                    type_name = text(name_node)
+                    if any(m.type == "modifier" and text(m) == "partial" for m in c.children):
+                        facts = _csharp_partial_facts(c, source)
+                        if type_name in partial:
+                            # the same type declared in several top-level blocks of one file (`#if` / `#else` branches)
+                            merged = partial[type_name]
+                            merged["nested"] = sorted(set(merged["nested"]) | set(facts["nested"]))
+                            merged["members"] = sorted(set(merged["members"]) | set(facts["members"]))
+                        else:
+                            partial[type_name] = {"ns": ns, **facts}
+                    collect_nested_partial(c, ns, type_name)
+                    types.setdefault(type_name, ns)
+                    members.setdefault(type_name, {}).update(_csharp_value_members(c, source))
+                    bases.setdefault(type_name, set()).update(_csharp_base_names(c, source))
             elif c.type == "declaration_list":
                 walk(c.children, ns)
         return ns
 
     walk(root.children, "")
     decoded = source.decode("utf-8", "ignore")
-    ext_found = _CSHARP_EXTENSION_RE.findall(decoded) if types and "static class" in decoded else []
+    if not namespaces and types and root.has_error:
+        # `#if` branches that split a declaration make tree-sitter drop the `namespace X` node; its text is intact.
+        # Only a single block-scoped or file-scoped namespace is recovered this way, and only when the tree lost it.
+        uncommented = re.sub(r"/\*.*?\*/|//[^\n]*", " ", decoded, flags=re.S)  # a commented-out `namespace X;` is not one
+        found_ns = re.findall(r"(?m)^[ \t]*namespace\s+([A-Za-z_][\w.]*)\s*[{;]?", uncommented)
+        if len(set(found_ns)) == 1:
+            namespaces.append(found_ns[0])
+            for type_name, type_ns in list(types.items()):
+                if type_ns == "":
+                    types[type_name] = found_ns[0]
+            for facts in partial.values():
+                if facts["ns"] == "":
+                    facts["ns"] = found_ns[0]  # keep the partial index in step with the recovered namespace
+    # `public static partial class FooExtensions` is as much a static class as `public static class` is
+    ext_found = _CSHARP_EXTENSION_RE.findall(decoded) if types and re.search(r"\bstatic\s+(?:\w+\s+)*?class\b", decoded) else []
     ext_methods = sorted({name for name, _generic in ext_found})
     ext_generic = sorted({name for name, generic in ext_found if generic})
     return {
@@ -3490,6 +3693,10 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
         "ext_generic": ext_generic,
         "ext_ns": next(iter(types.values())) if types else "",
         "global_usings": _CSHARP_GLOBAL_USING_RE.findall(decoded),
+        "members": members,
+        "bases": {name: sorted(parents) for name, parents in bases.items()},
+        "partial": partial,
+        "nested_partial": sorted(nested_partial),
     }
 
 
@@ -3507,6 +3714,18 @@ def _csharp_code_identifiers(root: Node, source: bytes) -> list[str]:
             name_node = n.child_by_field_name("name")
             stack.extend(reversed([c for c in n.children if name_node is None or c.id != name_node.id]))
             continue
+        if n.type == "attribute":
+            # `[JsonProperty]` binds to `JsonPropertyAttribute`: the attribute's own name also counts with the suffix
+            name_node = n.child_by_field_name("name") or (n.children[0] if n.children else None)
+            if name_node is not None:
+                last = name_node
+                while last.type in ("qualified_name", "alias_qualified_name") and last.children:
+                    last = last.children[-1]
+                if last.type == "identifier":
+                    attr = source[last.start_byte:last.end_byte].decode(errors="ignore") + "Attribute"
+                    if attr not in seen:
+                        seen.add(attr)
+                        out.append(attr)
         if n.type == "identifier":
             text = source[n.start_byte:n.end_byte].decode(errors="ignore")
             if text not in seen:
@@ -3604,9 +3823,19 @@ def _build_csharp_index(repo_path: Path, summaries: dict[Path, dict]) -> dict:
         name for name, owners in ext_generic_owners.items()
         if len(name) < _CSHARP_MIN_TYPE_NAME and len(ext_owners.get(name, ())) == 1
     }
+    nested_partial_owners: dict[str, set[Path]] = {}
+    for path, summary in summaries.items():
+        for key in summary.get("nested_partial", ()):
+            nested_partial_owners.setdefault(key, set()).add(path)
+    partial_owners: dict[tuple[str, str], set[Path]] = {}
+    for path, summary in summaries.items():
+        for type_name, facts in summary.get("partial", {}).items():
+            partial_owners.setdefault((facts["ns"], type_name), set()).add(path)
     return {
         "files": summaries, "project_of": project_of, "visible": visible,
         "global_usings": global_usings, "ext_owners": ext_owners, "ext_short_generic": ext_short_generic,
+        "partial_owners": partial_owners,
+        "nested_partial_owners": nested_partial_owners,
     }
 
 
@@ -3661,6 +3890,126 @@ def _csharp_visible_owners(
     return best
 
 
+def _csharp_simple_type_name(node: Node | None, source: bytes) -> str:
+    """`Foo`, `Foo<T>`, `A.B.Foo`, `Foo?` -> `Foo` (the last simple name); "" when it cannot be read."""
+    while node is not None:
+        if node.type == "identifier":
+            return source[node.start_byte:node.end_byte].decode(errors="ignore")
+        if node.type == "qualified_name":
+            node = node.child_by_field_name("name") or (node.children[-1] if node.children else None)
+        elif node.type in ("generic_name", "nullable_type", "array_type", "pointer_type"):
+            node = next((c for c in node.children if c.type in ("identifier", "qualified_name", "generic_name")), None)
+        else:
+            return ""
+    return ""
+
+
+def _csharp_value_members(type_node: Node, source: bytes) -> dict[str, str]:
+    """Properties and fields declared directly in a type body: name -> simple name of its declared type ("" unknown).
+    Methods are left out: a call never makes a name stand for a type."""
+    body = type_node.child_by_field_name("body")
+    out: dict[str, str] = {}
+    if body is None:
+        return out
+    for member in body.children:
+        if member.type == "property_declaration":
+            name = member.child_by_field_name("name")
+            if name is not None:
+                out[source[name.start_byte:name.end_byte].decode(errors="ignore")] = _csharp_simple_type_name(
+                    member.child_by_field_name("type"), source
+                )
+        elif member.type == "field_declaration":
+            declaration = next((c for c in member.children if c.type == "variable_declaration"), None)
+            if declaration is None:
+                continue
+            declared = _csharp_simple_type_name(declaration.child_by_field_name("type"), source)
+            for declarator in declaration.children:
+                if declarator.type != "variable_declarator":
+                    continue
+                name = declarator.child_by_field_name("name") or next(
+                    (c for c in declarator.children if c.type == "identifier"), None
+                )
+                if name is not None:
+                    out[source[name.start_byte:name.end_byte].decode(errors="ignore")] = declared
+    return out
+
+
+def _csharp_base_names(type_node: Node, source: bytes) -> set[str]:
+    base_list = next((c for c in type_node.children if c.type == "base_list"), None)
+    if base_list is None:
+        return set()
+    names = {_csharp_simple_type_name(c, source) for c in base_list.children if c.type not in (":", ",")}
+    return {n for n in names if n}
+
+
+_CSHARP_TYPE_CONTEXT_PARENTS = frozenset({
+    "object_creation_expression", "variable_declaration", "parameter", "type_argument_list", "base_list", "attribute",
+    "cast_expression", "typeof_expression", "nullable_type", "array_type", "generic_name", "qualified_name",
+    "type_parameter_constraint", "type_constraint", "as_expression", "is_expression", "declaration_pattern",
+    "default_expression", "property_declaration", "method_declaration", "local_function_statement",
+    "delegate_declaration", "event_field_declaration", "conversion_operator_declaration", "operator_declaration",
+    "catch_declaration", "foreach_statement", "implicit_object_creation_expression", "constructor_constraint",
+    "tuple_element", "pointer_type", "ref_type", "type_pattern", "recursive_pattern", "indexer_declaration",
+})
+
+
+def _csharp_type_context_names(root: Node, source: bytes) -> set[str]:
+    """Identifiers that appear where only a type can stand (`new X()`, `X field`, `List<X>`, `: X`, `(X)e`): there a
+    member of the same name is not in play, so the name is a type reference."""
+    out: set[str] = set()
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        if n.type == "identifier" and n.parent is not None and n.parent.type in _CSHARP_TYPE_CONTEXT_PARENTS:
+            parent = n.parent
+            # the declared NAME of a property/method/parameter is not a type use; its `type` child is
+            name_node = parent.child_by_field_name("name")
+            if name_node is None or name_node.id != n.id:
+                out.add(source[n.start_byte:n.end_byte].decode(errors="ignore"))
+        stack.extend(n.children)
+    return out
+
+
+def _csharp_shadowing_members(importer: Path, index: dict) -> set[str]:
+    """Names of properties/fields visible in the importer's own types and their base types (followed by simple
+    name, to a fixed depth). A simple name in an expression binds to such a member before any type. A member whose
+    declared type has the same name (`Foo Foo`) is not listed: the name may then mean the type too."""
+    summaries = index["files"]
+    info = summaries.get(importer) or {}
+    members_of = index.setdefault("members_of", {})
+    bases_of = index.setdefault("bases_of", {})
+    if not members_of and not bases_of:
+        for summary in summaries.values():
+            for type_name, found in (summary.get("members") or {}).items():
+                members_of.setdefault(type_name, []).append(found)  # one map per declaring file
+            for type_name, parents in (summary.get("bases") or {}).items():
+                bases_of.setdefault(type_name, set()).update(parents)
+        members_of.setdefault("", [])  # marks the maps as built even when empty
+    shadow: set[str] = set()
+    pending = list((info.get("types") or {}).keys())
+    visited_is_own = {name: True for name in pending}
+    visited: set[str] = set()
+    for _ in range(8):
+        next_round: list[str] = []
+        for type_name in pending:
+            if type_name in visited:
+                continue
+            visited.add(type_name)
+            declarations = members_of.get(type_name, [])
+            own = (info.get("members") or {}).get(type_name)
+            if own is not None and visited_is_own.get(type_name):
+                declarations = [own]  # the importer's own type: its own declaration, not a same-named type elsewhere
+            for member, declared_type in (declarations[0] if declarations else {}).items():
+                # a type name declared in several files (namespaces): count a member only if every declaration has it
+                if declared_type != member and all(member in other and other[member] != member for other in declarations):
+                    shadow.add(member)
+            next_round.extend(bases_of.get(type_name, ()))
+        pending = next_round
+        if not pending:
+            break
+    return shadow
+
+
 def _csharp_type_reference_targets(
     source: bytes,
     own_types: set[str],
@@ -3669,7 +4018,7 @@ def _csharp_type_reference_targets(
     index: dict | None = None,
     usings: list[str] | None = None,
     tree_root: Node | None = None,
-) -> list[tuple[Path, bool]]:
+) -> list[tuple[Path, bool | str]]:
     """Files this one depends on by *naming their types*, not by importing them.
 
     With `index` (see _build_csharp_index) the owners of a name are filtered by what the importing file can
@@ -3701,9 +4050,56 @@ def _csharp_type_reference_targets(
         names = _csharp_code_identifiers(tree_root, source)
     else:
         names = (m.group(0) for m in _IDENTIFIER_RE.finditer(text))
+    if scope is not None and tree_root is not None:
+        # The parts of one `partial` type are one type to the compiler. A part depends on a sibling part when it names
+        # a type nested in it (exact) or calls/reads a member it declares (a name-only guess, so inferred).
+        used = set(_csharp_code_identifiers(tree_root, source))
+        own_facts = index["files"].get(importer) or {}
+        for key in own_facts.get("nested_partial", ()):
+            # a nested `partial` type declared in several files is one type: this part depends on the others when it
+            # names the type beyond its own declaration
+            inner_name = key.rsplit(".", 1)[-1]
+            if len(re.findall(rf"\b{re.escape(inner_name)}\b", text)) >= 2:
+                for other in sorted(index["nested_partial_owners"].get(key, ())):
+                    if other != importer and _csharp_project_sees(index, importer, other):
+                        referenced.append((other, False))
+        for type_name, facts in own_facts.get("partial", {}).items():
+            peers = [
+                other for other in sorted(index["partial_owners"].get((facts["ns"], type_name), ()))
+                if other != importer and _csharp_project_sees(index, importer, other)
+            ]
+            if not peers:
+                continue
+            own_members = set(facts["members"]) | set(facts["nested"])
+            sibling_members: set[str] = set()
+            sibling_nested: set[str] = set()
+            for other in peers:
+                sibling_members |= set(index["files"][other]["partial"][type_name]["members"])
+                sibling_nested |= set(index["files"][other]["partial"][type_name]["nested"])
+            # Using any member of the type (declared here or in a sibling part) is a use of the whole type, which the
+            # compiler resolves to every part. A member declared in this very file counts only when it appears beyond
+            # its declaration. Names alone cannot prove a binding, so member-based links are inferred.
+            names_type = len(re.findall(rf"\b{re.escape(type_name)}\b", text)) >= 2
+            nested_used = bool(used & (sibling_nested - own_members))
+            member_used = bool(used & (sibling_members - own_members)) or any(
+                len(re.findall(rf"\b{re.escape(name)}\b", text)) >= 2 for name in facts["members"]
+            )
+            for other in peers:
+                if names_type or nested_used:
+                    referenced.append((other, False))
+                elif member_used:
+                    referenced.append((other, "inferred"))
+    shadowing: set[str] = set()
+    type_context: set[str] = set()
+    if scope is not None and tree_root is not None:
+        shadowing = _csharp_shadowing_members(importer, index)
+        if shadowing:
+            type_context = _csharp_type_context_names(tree_root, source)
     for name in names:
         if name in seen or name in own_types:
             continue
+        if name in shadowing and name not in type_context:
+            continue  # binds to an inherited or own member, not to the type of that name
         if len(name) < _CSHARP_MIN_TYPE_NAME:
             # only a unique generic extension called with explicit type arguments (see _build_csharp_index)
             if (
@@ -4543,8 +4939,10 @@ def _extract_module(
                 resolved_imports.append(target)
         # Files only built under some tags/platforms are alternatives (all variants are linked): mark them.
         if go_resolve.ENABLED:
+            # An edge out of a conditional file exists only when that file is built, so it is inferred too.
+            importer_conditional = go_resolve.is_build_constrained(repo_path, rel_path)
             for target in resolved_imports:
-                if go_resolve.is_build_constrained(repo_path, target):
+                if importer_conditional or go_resolve.is_build_constrained(repo_path, target):
                     import_confidence[target] = "inferred"
     elif language_name == "rust":
         raw_imports, functions, classes = _extract_rust(tree.root_node, source)
@@ -4561,6 +4959,9 @@ def _extract_module(
                     for defining in _rust_reexport_targets(repo_path, path, use_path, target):
                         if defining != rel_path:
                             resolved_imports.append(defining)
+                for module_file in _rust_module_reexport_targets(repo_path, path, use_path):
+                    if module_file != rel_path:
+                        resolved_imports.append(module_file)
     elif language_name == "java":
         raw_imports, functions, classes = _extract_java(tree.root_node, source)
         java_refs = _java_type_references(tree.root_node, source) if java_package_types else None
@@ -4712,7 +5113,9 @@ def _extract_module(
             if target is not None and target != rel_path and target not in already:
                 already.add(target)
                 resolved_imports.append(target)
-                if type_ref_ambiguous:
+                if type_ref_ambiguous == "inferred":
+                    import_confidence[target] = "inferred"
+                elif type_ref_ambiguous:
                     import_confidence[target] = "ambiguous"
     elif language_name == "swift":
         raw_imports, functions, classes = _extract_swift(tree.root_node, source)
@@ -4751,9 +5154,44 @@ def _extract_module(
     return module
 
 
+_CSHARP_TYPE_HEADER = re.compile(rb"\b(?:class|struct|interface|record)\s+\w+")
+
+
+def _csharp_blank_header_directives(source: bytes) -> bytes:
+    """Preprocessor lines inside a type header (`partial class Reader` / `#if ASYNC` / `: IAsyncDisposable` /
+    `#endif` / `{`) make tree-sitter read the symbol after `#if` as the type's name, so the type is lost. Blank
+    those lines (same length, so offsets and line numbers hold); every branch of the header is then kept."""
+    if b"#" not in source:
+        return source
+    out = None
+    for match in _CSHARP_TYPE_HEADER.finditer(source):
+        window_end = min(len(source), match.end() + 600)
+        brace = source.find(b"{", match.end(), window_end)
+        semicolon = source.find(b";", match.end(), window_end)
+        if brace < 0 or (0 <= semicolon < brace):
+            continue
+        header = source[match.end():brace]
+        if b"#" not in header:
+            continue
+        opens = len(re.findall(rb"(?m)^\s*#\s*if", header))
+        closes = len(re.findall(rb"(?m)^\s*#\s*endif", header))
+        if opens != closes:
+            continue  # the `#endif` is past the `{`: blanking only the `#if` would leave an unmatched `#endif`
+        if out is None:
+            out = bytearray(source)
+        offset = match.end()
+        for line in header.split(b"\n"):
+            if line.lstrip().startswith(b"#"):
+                out[offset:offset + len(line)] = b" " * len(line)
+            offset += len(line) + 1
+    return bytes(out) if out is not None else source
+
+
 def _read_and_parse(path: Path, parser: Parser, ts_language: Language) -> tuple[bytes, Tree]:
     parser.language = ts_language
     source = path.read_bytes()
+    if path.suffix == ".cs":
+        source = _csharp_blank_header_directives(source)
     return source, parser.parse(source)
 
 
@@ -5281,12 +5719,37 @@ def _ruby_constant_facts(source: bytes, parser: Parser) -> tuple[set[str], set[t
     return defs, refs, autoloads
 
 
+_RUBY_ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_RUBY_CAMEL_BOUNDARY = re.compile(r"([a-z\d])([A-Z])")
+
+
+def _ruby_zeitwerk_path(constant: str) -> str:
+    """Zeitwerk's file name for a constant: `Jekyll::LiquidRenderer` -> `jekyll/liquid_renderer`."""
+    parts = []
+    for part in constant.split("::"):
+        part = _RUBY_ACRONYM_BOUNDARY.sub(r"\1_\2", part)
+        parts.append(_RUBY_CAMEL_BOUNDARY.sub(r"\1_\2", part).lower())
+    return "/".join(parts)
+
+
+def _ruby_zeitwerk_owner(constant: str, owners: set[str]) -> str | None:
+    """The one file among several that define/reopen `constant` whose path is the Zeitwerk name for it.
+
+    Only an exact single match counts (the path ends with `<zeitwerk name>.rb` on a directory boundary);
+    anything else stays unresolved rather than guessed."""
+    suffix = _ruby_zeitwerk_path(constant) + ".rb"
+    matches = [p for p in owners if p == suffix or p.endswith("/" + suffix)]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
     """Edges for constants referenced in one file and defined in exactly one other file.
 
     A reference resolves through Ruby's lexical scope chain (innermost enclosing class/module
     first, then the top level), stopping at the first level where the name is defined anywhere.
-    No edge when: that name is defined in more than one file (a reopened `module Jekyll`), is
+    When a name is defined in several files (a reopened `module Jekyll`), the edge goes to the one
+    file whose path is the Zeitwerk name for it (`Jekyll::Utils` -> `jekyll/utils.rb`), and only
+    when exactly one matches. No edge when: no single file matches, the name is
     defined in the referencing file itself, is a Ruby/stdlib constant, or is defined nowhere in
     the repo. `autoload :X, "path"` counts as a definition of X in the file it points at.
     Ancestor (inheritance) lookup is not modelled, so a constant only reachable through a
@@ -5323,7 +5786,7 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
             continue
         own, refs = entry
         present = set(module.get("imports", []))
-        for ref, nest in refs:
+        for ref, nest in sorted(refs):  # a set: iterate in a fixed order so the import list is the same on every run
             if ref.startswith("::"):
                 candidates = [ref[2:]]
             else:
@@ -5333,8 +5796,8 @@ def _add_ruby_constant_edges(repo_path: Path, modules: list[dict]) -> None:
                     break
                 owners = definers.get(candidate)
                 if owners:
-                    if len(owners) == 1:
-                        target = next(iter(owners))
+                    target = next(iter(owners)) if len(owners) == 1 else _ruby_zeitwerk_owner(candidate, owners)
+                    if target is not None:
                         if target != module["path"] and target not in present:
                             present.add(target)
                             module.setdefault("imports", []).append(target)
@@ -5988,7 +6451,7 @@ def build_module_graph(
                 oversized_paths.add(path)
                 unparseable.append({"path": _rel(repo_path, path), "reason": "file exceeds size limit"})
                 continue
-            pre_source = path.read_bytes()
+            pre_source = _csharp_blank_header_directives(path.read_bytes())
         except OSError as exc:
             # Same reasoning as the Java pre-pass above. Not added to
             # csharp_source_paths below - _load_csharp_implicit_usings only
@@ -6091,6 +6554,8 @@ def build_module_graph(
                 # four languages' imports with.
                 parser.language = ts_language
                 source = path.read_bytes()
+                if path.suffix == ".cs":
+                    source = _csharp_blank_header_directives(source)
                 tree = parser.parse(source)
             else:
                 paths_needing_parse.append(path)
