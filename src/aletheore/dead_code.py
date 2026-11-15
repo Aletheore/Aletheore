@@ -1892,15 +1892,9 @@ def find_dead_code(
         if not declared:
             continue
         tool_text = _tool_usage_text(directory, repo_path)
-        # A folder holding only pip pin files (requirements/base.txt) is a dependency list for the whole
-        # repository, not a package with its own sources.
-        pins_only_folder = rel_dir != "." and (
-            directory.name.lower() in {"requirements", "reqs", "deps"}
-            or not any(
-                (directory / marker).exists()
-                for marker in ("package.json", "pyproject.toml", "setup.py", "setup.cfg", "Cargo.toml", "go.mod")
-            )
-        )
+        # A folder named requirements/ (or reqs, deps) is a dependency list for the whole repository, not a
+        # package with its own sources.
+        pins_only_folder = rel_dir != "." and directory.name.lower() in {"requirements", "reqs", "deps"}
         scoped = (
             modules
             if rel_dir == "." or pins_only_folder
