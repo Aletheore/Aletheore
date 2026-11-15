@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -216,6 +217,105 @@ def _walk_tree(root: Node):
         node = stack.pop()
         yield node
         stack.extend(reversed(node.children))
+
+
+_PY_ROUTE_VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
+
+
+def _py_call_name(call: Node, source: bytes) -> tuple[str, str]:
+    """(last name, full dotted text) of a call's callee: `web.get` -> (`get`, `web.get`)."""
+    func = call.child_by_field_name("function")
+    text = source[func.start_byte : func.end_byte].decode() if func is not None else ""
+    return text.split(".")[-1], text
+
+
+def _py_arguments(call: Node, source: bytes) -> tuple[list[Node], dict[str, Node]]:
+    args = call.child_by_field_name("arguments")
+    positional: list[Node] = []
+    keyword: dict[str, Node] = {}
+    for child in (args.named_children if args is not None else []):
+        if child.type == "keyword_argument":
+            key, value = child.child_by_field_name("name"), child.child_by_field_name("value")
+            if key is not None and value is not None:
+                keyword[source[key.start_byte : key.end_byte].decode()] = value
+        else:
+            positional.append(child)
+    return positional, keyword
+
+
+def _py_literal(node: Node | None, source: bytes) -> str | None:
+    if node is None or node.type != "string" or any(c.type == "interpolation" for c in node.children):
+        return None
+    return _string_literal_text(node, source)
+
+
+def _extract_starlette_aiohttp_routes(root: Node, source: bytes, rel_path: str, framework: str) -> list[dict]:
+    """Starlette: `Route("/x", endpoint, methods=[..])` and `WebSocketRoute`, with `Mount("/p", routes=[..])` prefixes,
+    plus `app.add_route("/x", h, methods=[..])`. aiohttp: `web.get("/x", h)` (and post, put, ...), `web.route("GET", "/x", h)`,
+    `app.router.add_get("/x", h)` and `add_route("GET", "/x", h)`."""
+    entries: list[dict] = []
+
+    def emit(method: str, path: str, handler: str, node: Node, prefix: str = "") -> None:
+        full = (prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") if prefix else path
+        entries.append(
+            {
+                "method": method,
+                "path": full or "/",
+                "framework": framework,
+                "file": rel_path,
+                "line": node.start_point[0] + 1,
+                "handler": handler,
+                "unresolved": False,
+                "note": None,
+            }
+        )
+
+    def mount_prefix(node: Node) -> str:
+        parts: list[str] = []
+        ancestor = node.parent
+        while ancestor is not None:
+            if ancestor.type == "call" and _py_call_name(ancestor, source)[0] == "Mount":
+                positional, _kw = _py_arguments(ancestor, source)
+                literal = _py_literal(positional[0], source) if positional else None
+                if literal:
+                    parts.append(literal)
+            ancestor = ancestor.parent
+        return "".join("/" + p.strip("/") for p in reversed(parts) if p.strip("/"))
+
+    def handler_of(node: Node | None) -> str:
+        return source[node.start_byte : node.end_byte].decode()[:60] if node is not None else "unknown"
+
+    for call in _walk_tree(root):
+        if call.type != "call":
+            continue
+        name, dotted = _py_call_name(call, source)
+        positional, keyword = _py_arguments(call, source)
+        if framework == "starlette":
+            if name in ("Route", "WebSocketRoute") or (name == "add_route" and "." in dotted) or name == "add_websocket_route":
+                path = _py_literal(positional[0] if positional else keyword.get("path"), source)
+                if path is None:
+                    continue
+                endpoint = positional[1] if len(positional) > 1 else keyword.get("endpoint") or keyword.get("route")
+                methods_node = keyword.get("methods")
+                methods = (
+                    [m.upper() for m in re.findall(r"""["']([A-Za-z]+)["']""", source[methods_node.start_byte : methods_node.end_byte].decode())]
+                    if methods_node is not None
+                    else ["WEBSOCKET"] if "WebSocket" in name or "websocket" in name else ["GET"]
+                )
+                prefix = mount_prefix(call) if name in ("Route", "WebSocketRoute") else ""
+                for method in methods:
+                    emit(method, path, handler_of(endpoint), call, prefix)
+        else:
+            if name in _PY_ROUTE_VERBS and dotted in (f"web.{name}", name) or (name.startswith("add_") and name[4:] in _PY_ROUTE_VERBS):
+                verb = name if name in _PY_ROUTE_VERBS else name[4:]
+                path = _py_literal(positional[0] if positional else None, source)
+                if path is not None:
+                    emit(verb.upper(), path, handler_of(positional[1] if len(positional) > 1 else None), call)
+            elif name in ("route", "add_route") and ("web" in dotted or "router" in dotted) and len(positional) >= 2:
+                verb, path = _py_literal(positional[0], source), _py_literal(positional[1], source)
+                if verb is not None and path is not None:
+                    emit(verb.upper() if verb != "*" else "ANY", path, handler_of(positional[2] if len(positional) > 2 else None), call)
+    return entries
 
 
 def _extract_flask_fastapi_routes(
@@ -1974,6 +2074,10 @@ def map_api_endpoints(
             )
             if path.name == "urls.py":
                 endpoints.extend(_extract_django_routes(tree.root_node, source, rel_path))
+            if b"starlette" in source:
+                endpoints.extend(_extract_starlette_aiohttp_routes(tree.root_node, source, rel_path, "starlette"))
+            elif b"aiohttp" in source:
+                endpoints.extend(_extract_starlette_aiohttp_routes(tree.root_node, source, rel_path, "aiohttp"))
         elif suffix in (".js", ".jsx"):
             source = read_bytes_or_none(path)
             if source is None:
