@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -913,6 +914,67 @@ def _collect_axum_combinators(node: Node, source: bytes) -> list[tuple[str, str]
 
     walk(node)
     return results
+
+
+_ROCKET_ATTRIBUTE_ROUTE = re.compile(
+    r'#\[\s*(get|post|put|delete|patch|head|options)\s*\(\s*"([^"]*)"[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)'
+)
+_ROCKET_ROUTE_ATTRIBUTE = re.compile(
+    r'#\[\s*route\s*\(\s*([A-Z]+)\s*,\s*uri\s*=\s*"([^"]*)"[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)'
+)
+_ROCKET_MOUNT = re.compile(r'\.mount\(\s*"([^"]*)"\s*,\s*routes!\[([^\]]*)\]', re.S)
+
+
+def _rocket_collect_mounts(text: str) -> list[tuple[str, str | None, str]]:
+    """(prefix, module the handler is written under or None, handler) for every `.mount("/p", routes![m::h, h2])`."""
+    found: list[tuple[str, str | None, str]] = []
+    for prefix, handlers in _ROCKET_MOUNT.findall(text):
+        for item in (h.strip() for h in handlers.split(",")):
+            if not item:
+                continue
+            segments = item.split("::")
+            found.append((prefix, segments[-2] if len(segments) > 1 else None, segments[-1]))
+    return found
+
+
+def _extract_rocket_routes(
+    source: bytes, rel_path: str, repo_mounts: list[tuple[str, str | None, str]] | None = None
+) -> list[dict]:
+    """Rocket routes are attribute macros on functions (`#[get("/users/<id>")]`, `#[route(GET, uri = "/x")]`) mounted with
+    `.mount("/api", routes![a, b])`, usually in a different file from the handlers (`routes![users::login]`). A handler
+    takes the prefix of a mount that names it: one written with its module (`users::login`) matches the file or folder
+    of that name, an unqualified one matches only a mount in the same file. A handler mounted at several prefixes is
+    listed at each; one no mount names is listed with a note that its mount prefix is unknown."""
+    text = source.decode(errors="replace")
+    stem = Path(rel_path).stem
+    module = Path(rel_path).parent.name if stem in ("mod", "lib", "main") else stem
+    local = _rocket_collect_mounts(text)
+    entries: list[dict] = []
+    matches = [(m.group(1).upper(), m.group(2), m.group(3), m.start()) for m in _ROCKET_ATTRIBUTE_ROUTE.finditer(text)]
+    matches += [(m.group(1), m.group(2), m.group(3), m.start()) for m in _ROCKET_ROUTE_ATTRIBUTE.finditer(text)]
+    for method, raw_path, handler, start in sorted(matches, key=lambda item: item[3]):
+        path = raw_path.split("?", 1)[0] or "/"  # `/articles?<params..>`: the query part is not the path
+        prefixes: list[str] = []
+        for prefix, mount_module, name in [*local, *(repo_mounts or [])]:
+            if name == handler and (mount_module is None or mount_module == module) and prefix not in prefixes:
+                if mount_module is None and (prefix, None, name) not in local:
+                    continue
+                prefixes.append(prefix)
+        for prefix in prefixes or [None]:
+            joined = ((prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") or "/") if prefix is not None else path
+            entries.append(
+                {
+                    "method": method,
+                    "path": joined,
+                    "framework": "rocket",
+                    "file": rel_path,
+                    "line": text.count("\n", 0, start) + 1,
+                    "handler": handler,
+                    "unresolved": False,
+                    "note": None if prefix is not None else "no mount of this handler found",
+                }
+            )
+    return entries
 
 
 def _extract_axum_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
@@ -1949,6 +2011,18 @@ def map_api_endpoints(
     # changed - see docs/audits/Claude_Audit.md finding 20.
     cross_file_mount_defining_files = {defining_file for defining_file, _router in cross_file_router_mounts}
 
+    # Rocket: `.mount("/api", routes![users::login])` lives apart from the handlers it prefixes, so every file that
+    # mentions rocket is read afresh each scan, never reused from the cache.
+    rocket_mounts: list[tuple[str, str | None, str]] = []
+    for path in source_paths:
+        if path.suffix != ".rs":
+            continue
+        rocket_source = read_bytes_or_none(path)
+        if rocket_source is None or b"rocket" not in rocket_source:
+            continue
+        cross_file_mount_defining_files.add(_rel(repo_path, path))
+        rocket_mounts.extend(_rocket_collect_mounts(rocket_source.decode(errors="replace")))
+
     for path in source_paths:
         rel_path = _rel(repo_path, path)
 
@@ -2005,6 +2079,8 @@ def map_api_endpoints(
                 continue
             tree = parsers["rs"].parse(source)
             endpoints.extend(_extract_axum_routes(tree.root_node, source, rel_path))
+            if b"rocket" in source:
+                endpoints.extend(_extract_rocket_routes(source, rel_path, rocket_mounts))
         elif suffix == ".java":
             source = read_bytes_or_none(path)
             if source is None:
