@@ -204,7 +204,7 @@ class GoInterp:
             if name in fr.env:
                 return fr.env[name]
             v = self._package_value(name, fr)
-            if v is UNKNOWN and ("pkg", name) in self.stash:
+            if v is UNKNOWN and any(k[:2] == ("pkg", name) for k in self.stash if isinstance(k, tuple)):
                 return Tainted("stored package variable")
             if v is UNKNOWN:
                 hit = self.index.function(name, fr.file)
@@ -287,8 +287,16 @@ class GoInterp:
         return UNKNOWN
 
     def _index(self, n: Node, fr: GFrame) -> Val:
-        base = self.eval(n.child_by_field_name("operand"), fr)
+        op = n.child_by_field_name("operand")
         idx = self.eval(n.child_by_field_name("index"), fr)
+        if op is not None and op.type == "identifier" and _t(op) not in fr.env and self.stash:
+            name = _t(op)
+            keys = [k[2] for k in self.stash if isinstance(k, tuple) and k[:2] == ("pkg", name) and len(k) == 3]
+            if keys:
+                if "*" in keys or not isinstance(idx, Const) or idx.value in keys:
+                    return Tainted("stored package variable")
+                return UNKNOWN  # a key no request ever wrote
+        base = self.eval(op, fr)
         if isinstance(base, MapV):
             if isinstance(idx, Const) and not base.dirty and not base.opaque and idx.value in base.entries:
                 return base.entries[idx.value]
@@ -710,7 +718,7 @@ class GoInterp:
             if self.store_hook is not None:
                 self.store_hook(target, _t(base_n), idx, val, fr)
             if base_n.type == "identifier" and _t(base_n) not in fr.env and (classify(val) == "tainted" or classify(idx) == "tainted") and self.index.package_var(_t(base_n), fr.file):
-                self.stash.add(("pkg", _t(base_n)))
+                self.stash.add(("pkg", _t(base_n), idx.value if isinstance(idx, Const) and classify(val) == "tainted" else "*"))  # one key, or any
             if isinstance(base, MapV):
                 self._mutating(fr, base)
                 if isinstance(idx, Const):

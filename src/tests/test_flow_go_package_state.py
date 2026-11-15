@@ -18,3 +18,16 @@ def test_request_value_reaches_the_sink(tmp_path, tpl):
 def test_constant_value_stays_quiet(tmp_path, tpl):
     (tmp_path / "main.go").write_text(tpl.format(v='"x"'))
     assert discover_repo(tmp_path) == []
+
+
+MAPKEYS = HEAD + 'var saved = map[string]string{{"safe": "date"}}\nfunc Write(w http.ResponseWriter, r *http.Request){{ saved["attacker"] = r.FormValue("cmd") }}\nfunc Run(w http.ResponseWriter, r *http.Request){{ exec.Command("sh","-c",saved["{k}"]).Run() }}\n'
+
+
+def test_other_literal_key_stays_quiet(tmp_path):
+    (tmp_path / "main.go").write_text(MAPKEYS.format(k="safe"))
+    assert discover_repo(tmp_path) == []
+
+
+def test_same_literal_key_reports(tmp_path):
+    (tmp_path / "main.go").write_text(MAPKEYS.format(k="attacker"))
+    assert len(discover_repo(tmp_path)) == 1
