@@ -248,6 +248,62 @@ def test_ruby_def_nested_only_in_a_lambda_literal_is_not_public(tmp_path):
     assert func["is_public"] is False
 
 
+def _ruby_edges(tmp_path, files):
+    from aletheore.scanner.graph import build_module_graph
+
+    repo = tmp_path / "rbp"
+    for rel, body in files.items():
+        f = repo / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body)
+    modules, _, _ = build_module_graph(repo)
+    return {m["path"]: set(m["imports"]) for m in modules}
+
+
+def test_require_of_a_path_built_from_a_local_variable_and_file_join(tmp_path):
+    imp = _ruby_edges(tmp_path, {
+        "lib/httparty.rb": "module HTTParty; end\n",
+        "examples/basic.rb": (
+            "dir = File.expand_path(File.join(File.dirname(__FILE__), '..', 'lib'))\n"
+            "require File.join(dir, 'httparty')\n"),
+    })
+    assert imp["examples/basic.rb"] == {"lib/httparty.rb"}
+
+
+def test_require_file_expand_path_with_file_as_the_base(tmp_path):
+    imp = _ruby_edges(tmp_path, {
+        "config/environment.rb": "ENV['A'] = '1'\n",
+        "app/boot.rb": "require File.expand_path('../../config/environment', __FILE__)\n",
+    })
+    assert imp["app/boot.rb"] == {"config/environment.rb"}
+
+
+def test_require_file_join_with_dunder_dir(tmp_path):
+    imp = _ruby_edges(tmp_path, {
+        "lib/tool/core.rb": "module Core; end\n",
+        "lib/tool.rb": "require File.join(__dir__, 'tool', 'core')\n",
+    })
+    assert imp["lib/tool.rb"] == {"lib/tool/core.rb"}
+
+
+def test_a_require_of_an_unknown_expression_adds_nothing(tmp_path):
+    imp = _ruby_edges(tmp_path, {
+        "lib/a.rb": "module A; end\n",
+        "run.rb": "name = ENV['X']\nrequire File.join(name, 'a')\n",
+    })
+    assert imp["run.rb"] == set()
+
+
+def test_require_path_variable_must_be_a_top_level_assignment_before_the_require(tmp_path):
+    imp = _ruby_edges(tmp_path, {
+        "lib/a.rb": "module A; end\n",
+        "lib/b.rb": "module B; end\n",
+        # assigned inside a method (a different variable) and only after the require: neither may be used
+        "run.rb": "require File.join(dir, 'a')\ndef helper\n  dir = File.expand_path('lib', __dir__)\nend\ndir = File.expand_path('lib', __dir__)\nrequire File.join(dir, 'b')\n",
+    })
+    assert imp["run.rb"] == {"lib/b.rb"}
+
+
 def _zeitwerk_repo(tmp_path: Path, extra: dict[str, str]) -> Path:
     repo = tmp_path / "zw"
     files = {

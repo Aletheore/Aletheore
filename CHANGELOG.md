@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Added: Ruby `require`/`require_relative` of a path built from `__dir__`, `__FILE__`, `File.dirname`, `File.join`, `File.expand_path` and file-level local variables (`require File.join(dir, "client")`, `require File.expand_path("../../config/environment", __FILE__)`) now resolves like a relative require. An expression that cannot be evaluated statically adds nothing. One HTTP client library's edge F1 against an independent reference rose from 0.901 to 0.988.
 - Fixed: `<?hh` (Hack) files are no longer read as PHP for implicit class references. FastRoute's Hack test fixtures produced seven false edges; edge F1 against an independent reference rose from 0.877 to 1.000.
 
 - Fixed: composer PSR-4 maps keep every directory a prefix maps to. `autoload-dev` mapping the same prefix to a test directory overwrote the real source directory, so explicit `use` statements of classes in `lib/` stopped resolving; a prefix listing several directories is also read now. php-parser edge F1 against an independent reference rose from 0.951 to 1.000.
