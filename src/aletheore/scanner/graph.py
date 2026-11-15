@@ -6122,12 +6122,25 @@ _C_HEADER_EXTS = (".h", ".hh", ".hpp", ".hxx", ".inc")
 _C_SEARCH_DIRS = ("include", "src", "")
 
 
+# C standard, POSIX and common platform headers: a bare angle include of one of these is never the project's own file.
+_SYSTEM_HEADERS = frozenset(
+    "assert.h complex.h ctype.h errno.h fenv.h float.h inttypes.h iso646.h limits.h locale.h math.h setjmp.h signal.h "
+    "stdalign.h stdarg.h stdatomic.h stdbool.h stddef.h stdint.h stdio.h stdlib.h stdnoreturn.h string.h tgmath.h "
+    "threads.h time.h uchar.h wchar.h wctype.h unistd.h pthread.h dirent.h fcntl.h netdb.h poll.h regex.h sched.h "
+    "semaphore.h strings.h termios.h dlfcn.h glob.h grp.h pwd.h utime.h wordexp.h libgen.h fnmatch.h ftw.h iconv.h "
+    "langinfo.h monetary.h nl_types.h spawn.h syslog.h ucontext.h ulimit.h utmpx.h windows.h winsock2.h ws2tcpip.h "
+    "io.h direct.h process.h malloc.h alloca.h endian.h byteswap.h features.h execinfo.h ifaddrs.h ioctl.h "
+    "getopt.h libintl.h memory.h stdbit.h stdckdint.h sys/types.h".split()
+)
+
+
 def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
     """Resolve #include lines the per-file resolver (includer's directory only) cannot.
 
     Search order: the includer's directory (quoted form only), then include/, src/, the repo
     root, then any scanned header whose path ends with the spec (only when exactly one does, or
-    one shares the longest directory prefix with the includer). Angle includes skip the
+    one shares the longest directory prefix with the includer). A bare angle include (`<jansson.h>`) of a name that
+    is not a standard/POSIX header binds to the single in-repo header of that name, marked inferred. Angle includes skip the
     includer's directory and src/ (include/ and the root only), and only use the suffix fallback
     when the spec has a directory part (`<fmt/base.h>`), so `<stdio.h>`-style system headers
     never bind to a same-named file under src/. Unresolved includes are dropped.
@@ -6136,10 +6149,12 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
     c_modules = [m for m in modules if m.get("language") in ("c", "cpp")]
     if not c_modules:
         return
+    c_paths = {m["path"] for m in c_modules}
     known = {m["path"] for m in modules}
     by_base: dict[str, list[str]] = {}
     for path in known:
-        if path.endswith(_C_HEADER_EXTS):
+        # headers, and the C/C++ sources themselves: a unity build `#include "src/gmock-matchers.cc"` names a source file
+        if path.endswith(_C_HEADER_EXTS) or path in c_paths:
             by_base.setdefault(path.rsplit("/", 1)[-1], []).append(path)
 
     for module in c_modules:
@@ -6179,9 +6194,19 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
                     top = [p for p in matches if shared(p) == best]
                     if len(top) == 1:
                         target = top[0]
+            guessed = False
+            if target is None and not quoted and "/" not in spec and spec not in _SYSTEM_HEADERS:
+                # `#include <jansson.h>` where jansson.h is the project's own public header under src/: a bare angle
+                # include that is not a standard/POSIX header binds to the single in-repo header of that name. It
+                # depends on the build's -I flags, so the edge is marked inferred.
+                own = [h for h in by_base.get(spec, []) if h.endswith(_C_HEADER_EXTS)]  # a header, never a unity-build source
+                if len(own) == 1:
+                    target, guessed = own[0], True
             if target and target != includer and target not in present:
                 present.add(target)
                 module.setdefault("imports", []).append(target)
+                if guessed:
+                    module.setdefault("import_confidence", {})[target] = "inferred"
 
 
 # Config files that change how a language's imports resolve although they are not source files.
