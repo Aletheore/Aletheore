@@ -379,6 +379,94 @@ def _extract_falcon_routes(root: Node, source: bytes, rel_path: str) -> list[dic
     return entries
 
 
+def _pyramid_collect_routes(root: Node, source: bytes) -> dict[str, str]:
+    """`config.add_route('home', '/home')` -> {'home': '/home'} (literal name and pattern only)."""
+    routes: dict[str, str] = {}
+    for call in _walk_tree(root):
+        if call.type != "call":
+            continue
+        func = call.child_by_field_name("function")
+        if func is None or func.type != "attribute" or _pymisc_text(func.child_by_field_name("attribute"), source) != "add_route":
+            continue
+        positional, keyword = _pymisc_call_args(call, source)
+        name = _pymisc_string(positional[0] if positional else keyword.get("name"), source)
+        pattern = _pymisc_string(positional[1] if len(positional) > 1 else keyword.get("pattern"), source)
+        if name is not None and pattern is not None:
+            routes.setdefault(name, pattern)
+    return routes
+
+
+def _pyramid_pattern_for(name: str, view_file: str, routes: dict[str, dict[str, str]]) -> str | None:
+    """The pattern for a route name: the definition in the view's own file, else the one in the nearest directory
+    (a repository can hold many unrelated apps that each call their route `home`)."""
+    defined = routes.get(name)
+    if not defined:
+        return None
+    if view_file in defined:
+        return defined[view_file]
+    view_parts = view_file.split("/")[:-1]
+
+    def shared(other: str) -> int:
+        count = 0
+        for a, b in zip(view_parts, other.split("/")[:-1]):
+            if a != b:
+                break
+            count += 1
+        return count
+
+    best = max(sorted(defined), key=shared)
+    return defined[best]
+
+
+def _extract_pyramid_routes(root: Node, source: bytes, rel_path: str, routes: dict[str, dict[str, str]]) -> list[dict]:
+    """Pyramid views: `@view_config(route_name='home', request_method='GET')` on functions and methods,
+    `@view_defaults(route_name=...)` on a class, and `config.add_view(fn, route_name=..., request_method=...)`. The path is
+    the pattern `config.add_route('home', '/home')` registered for that name anywhere in the repository; the method is
+    ANY when no `request_method` is given."""
+    entries: list[dict] = []
+
+    def emit(route_name: str | None, methods_node: Node | None, node: Node, handler: str) -> None:
+        if route_name is None:
+            return
+        pattern = _pyramid_pattern_for(route_name, rel_path, routes)
+        methods = [m.upper() for m in _pymisc_strings(methods_node, source)] or ["ANY"]
+        for method in methods:
+            entries.append(
+                _pymisc_entry(
+                    "pyramid", method, pattern or "/", rel_path, node, handler,
+                    None if pattern is not None else f"route '{route_name}' has no add_route in the repository",
+                )
+            )
+
+    for node in _walk_tree(root):
+        if node.type == "decorated_definition":
+            fn = node.child_by_field_name("definition")
+            if fn is None or fn.type != "function_definition":
+                continue
+            default_route: str | None = None
+            klass = node.parent
+            while klass is not None and klass.type != "class_definition":
+                klass = klass.parent
+            if klass is not None and klass.parent is not None and klass.parent.type == "decorated_definition":
+                for decorator in (c for c in klass.parent.children if c.type == "decorator"):
+                    call = next((c for c in decorator.named_children if c.type == "call"), None)
+                    if call is not None and _pymisc_text(call.child_by_field_name("function"), source).endswith("view_defaults"):
+                        default_route = _pymisc_string(_pymisc_call_args(call, source)[1].get("route_name"), source)
+            handler = _pymisc_text(fn.child_by_field_name("name"), source)
+            for decorator in (c for c in node.children if c.type == "decorator"):
+                call = next((c for c in decorator.named_children if c.type == "call"), None)
+                if call is None or not _pymisc_text(call.child_by_field_name("function"), source).endswith("view_config"):
+                    continue
+                _pos, keyword = _pymisc_call_args(call, source)
+                emit(_pymisc_string(keyword.get("route_name"), source) or default_route, keyword.get("request_method"), decorator, handler)
+        elif node.type == "call":
+            func = node.child_by_field_name("function")
+            if func is not None and func.type == "attribute" and _pymisc_text(func.child_by_field_name("attribute"), source) == "add_view":
+                positional, keyword = _pymisc_call_args(node, source)
+                emit(_pymisc_string(keyword.get("route_name"), source), keyword.get("request_method"), node, _pymisc_text(positional[0], source)[:60] if positional else "unknown")
+    return entries
+
+
 def _extract_flask_fastapi_routes(
     root: Node,
     source: bytes,
@@ -2110,6 +2198,27 @@ def map_api_endpoints(
     # changed - see docs/audits/Claude_Audit.md finding 20.
     cross_file_mount_defining_files = {defining_file for defining_file, _router in cross_file_router_mounts}
 
+    # Pyramid: a view's path is the pattern `config.add_route('name', '/p')` gave its route name, usually in another
+    # file (an `includeme(config)` that never imports pyramid), so every file that mentions pyramid or calls add_route is
+    # read afresh each scan, never reused from the cache. The table is only used when some file mentions pyramid.
+    pyramid_routes: dict[str, dict[str, str]] = {}
+    repo_uses_pyramid = False
+    for path in source_paths:
+        if path.suffix != ".py":
+            continue
+        pyramid_source = read_bytes_or_none(path)
+        if pyramid_source is None:
+            continue
+        mentions = b"pyramid" in pyramid_source
+        repo_uses_pyramid = repo_uses_pyramid or mentions
+        if not mentions and b"add_route(" not in pyramid_source:
+            continue
+        cross_file_mount_defining_files.add(_rel(repo_path, path))
+        for route_name, pattern in _pyramid_collect_routes(parsers["py"].parse(pyramid_source).root_node, pyramid_source).items():
+            pyramid_routes.setdefault(route_name, {})[_rel(repo_path, path)] = pattern
+    if not repo_uses_pyramid:
+        pyramid_routes = {}
+
     for path in source_paths:
         rel_path = _rel(repo_path, path)
 
@@ -2143,6 +2252,8 @@ def map_api_endpoints(
                 endpoints.extend(_extract_tornado_routes(tree.root_node, source, rel_path))
             if b"falcon" in source:
                 endpoints.extend(_extract_falcon_routes(tree.root_node, source, rel_path))
+            if b"pyramid" in source:
+                endpoints.extend(_extract_pyramid_routes(tree.root_node, source, rel_path, pyramid_routes))
         elif suffix in (".js", ".jsx"):
             source = read_bytes_or_none(path)
             if source is None:

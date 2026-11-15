@@ -62,3 +62,34 @@ def test_files_that_do_not_mention_a_framework_are_ignored(tmp_path):
     code = "@get('/x')\ndef x(): pass\nroutes = [('/y', Y)]\n"
     for framework in ("bottle", "litestar", "tornado", "falcon"):
         assert _routes(tmp_path, code, framework) == []
+
+
+def test_pyramid_views_take_the_pattern_of_their_route_name(tmp_path):
+    (tmp_path / "routes.py").write_text("def includeme(config):\n    config.add_route('home', '/home')\n    config.add_route('item', '/items/{id}')\n")
+    (tmp_path / "views.py").write_text("""from pyramid.view import view_config, view_defaults
+@view_config(route_name='home', request_method='GET')
+def home(request): pass
+@view_config(route_name='item', request_method=('PUT', 'DELETE'))
+def item(request): pass
+@view_defaults(route_name='item')
+class Items:
+    @view_config(request_method='POST')
+    def create(self): pass
+""")
+    got = sorted((e["method"], e["path"]) for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "pyramid")
+    assert got == [("DELETE", "/items/{id}"), ("GET", "/home"), ("POST", "/items/{id}"), ("PUT", "/items/{id}")]
+
+
+def test_pyramid_add_view_and_an_unknown_route_name(tmp_path):
+    (tmp_path / "app.py").write_text("from pyramid.config import Configurator\nconfig = Configurator()\nconfig.add_route('ping', '/ping')\nconfig.add_view(ping_view, route_name='ping')\nconfig.add_view(other, route_name='nowhere', request_method='GET')\n")
+    got = sorted((e["method"], e["path"], bool(e["note"])) for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "pyramid")
+    assert got == [("ANY", "/ping", False), ("GET", "/", True)]
+
+
+def test_pyramid_route_name_defined_in_two_apps_resolves_to_the_nearest_one(tmp_path):
+    for app, pattern in (("a", "/alpha"), ("b", "/beta")):
+        (tmp_path / app).mkdir()
+        (tmp_path / app / "routes.py").write_text(f"def includeme(config):\n    config.add_route('home', '{pattern}')\n")
+        (tmp_path / app / "views.py").write_text("from pyramid.view import view_config\n@view_config(route_name='home')\ndef home(request): pass\n")
+    got = sorted((e["file"], e["path"]) for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "pyramid")
+    assert got == [("a/views.py", "/alpha"), ("b/views.py", "/beta")]

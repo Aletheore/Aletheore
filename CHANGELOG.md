@@ -5,7 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- Bottle and Litestar decorator routes, Tornado application routes and Falcon resource routes are found.
+- Bottle and Litestar decorator routes, Tornado application routes, Falcon resource routes and Pyramid views (with the pattern of their `add_route` name) are found.
 
 ## 0.13.0 - 2026-11-14
 
