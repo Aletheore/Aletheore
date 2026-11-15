@@ -91,6 +91,33 @@ def _workspace(repo_str: str) -> tuple[dict[str, Path], dict[str, dict]]:
     return by_name, manifests
 
 
+@lru_cache(maxsize=256)
+def manifest_root_dirs(manifest_dir: str) -> tuple[str, ...]:
+    """Directories of the crate roots a Cargo.toml declares outside the default `src/`: `[lib] path` and each
+    `[[bin]] path` whose file is a `lib.rs`/`main.rs` (the names `crate_root_file` understands), for a package whose
+    sources are not under `src/` (ripgrep's `crates/core/main.rs`). A path that leaves the package directory is ignored."""
+    manifest = _load_toml(Path(manifest_dir) / "Cargo.toml")
+    declared: list[object] = []
+    lib = manifest.get("lib")
+    if isinstance(lib, dict):
+        declared.append(lib.get("path"))
+    bins = manifest.get("bin")
+    if isinstance(bins, list):
+        declared.extend(b.get("path") for b in bins if isinstance(b, dict))
+    base = os.path.realpath(manifest_dir)
+    default_src = os.path.join(base, "src")
+    out: list[str] = []
+    for value in declared:
+        if not isinstance(value, str) or os.path.basename(value) not in ("lib.rs", "main.rs"):
+            continue
+        directory = os.path.realpath(os.path.join(base, os.path.dirname(value)))
+        # `[[bin]] path = "main.rs"` / `[lib] path = "lib.rs"` at the package root puts the crate root in the package
+        # directory itself, which is as valid as a subdirectory
+        if directory != default_src and (directory == base or directory.startswith(base + os.sep)) and directory not in out:
+            out.append(directory)
+    return tuple(out)
+
+
 def nearest_manifest_dir(repo_path: Path, from_file: Path) -> Path | None:
     current = from_file.parent
     root = str(repo_path)
@@ -174,7 +201,7 @@ def clean_source(text: str, keep_literals: bool = False) -> str:
 def clear_cache() -> None:
     """Forget directory listings, Cargo manifests, macro registries and module summaries (called once per scan,
     so edits between scans in one process are seen). Also clears the Go package cache."""
-    for cached in (dir_names, _workspace, _macro_registry, _arg_macro_registry, module_items):
+    for cached in (dir_names, _workspace, _macro_registry, _arg_macro_registry, module_items, manifest_root_dirs):
         cached.cache_clear()
     from aletheore.scanner import go_resolve
 
@@ -260,10 +287,10 @@ def flatten_use(tree: str, keep_glob: bool = False) -> list[str]:
 
 
 @lru_cache(maxsize=1024)
-def _macro_registry(crate_dir: str) -> dict[str, tuple[list[str], list[str]]]:
-    """macro name -> (module names declared at the top of its expansion, flattened `use` paths), for zero-argument
+def _macro_registry(crate_dir: str) -> dict[str, tuple[list[str], list[str], list[str]]]:
+    """macro name -> (module names declared at the top of its expansion, flattened `use` paths, the `pub use` subset), for zero-argument
     macros (`() => { ... }` as the only arm) defined anywhere in the crate directory."""
-    registry: dict[str, tuple[list[str], list[str]]] = {}
+    registry: dict[str, tuple[list[str], list[str], list[str]]] = {}
     for dirpath, dirnames, filenames in os.walk(crate_dir):
         dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
         for name in filenames:
@@ -292,7 +319,10 @@ def _macro_registry(crate_dir: str) -> dict[str, tuple[list[str], list[str]]]:
                 uses: list[str] = []
                 for u in re.findall(r"(?:^|[;\s\]])use\s+([^;]+);", flat):
                     uses.extend(flatten_use(u))
-                registry[m.group(1)] = (mods, uses)
+                pub_uses: list[str] = []
+                for u in _PUB_USE.findall(flat):
+                    pub_uses.extend(flatten_use(u))
+                registry[m.group(1)] = (mods, uses, pub_uses)
     return registry
 
 
@@ -314,6 +344,24 @@ def module_items(file_path: str) -> tuple[frozenset[str], tuple[str, ...]]:
     for m in _PUB_USE.finditer(text):
         uses.extend(flatten_use(m.group(1), keep_glob=True))
     return declared, tuple(uses)
+
+
+def root_reexports(repo_path: Path, root_file: Path) -> tuple[str, ...]:
+    """Flattened `pub use` paths of a crate root file, including those written inside a zero-argument item
+    macro the file invokes (`crate_root!();` expanding to `pub use other_crate::{de, ser};`)."""
+    _declared, uses = module_items(str(root_file))
+    out = list(uses)
+    try:
+        text = clean_source(Path(root_file).read_text(encoding="utf-8", errors="ignore"))
+    except OSError:
+        return tuple(out)
+    if "!" in text:
+        crate_dir = nearest_manifest_dir(repo_path, root_file) or repo_path
+        registry = _macro_registry(str(crate_dir))
+        for name in _INVOKE.findall(_strip_macro_defs(text)):
+            if name in registry:
+                out.extend(registry[name][2])
+    return tuple(out)
 
 
 _INVOKE = re.compile(r"(?m)^[ \t]*([A-Za-z_]\w*)!\s*(?:\(\s*\)|\{\s*\})")
@@ -415,7 +463,7 @@ def extra_imports(repo_path: Path, from_file: Path, source: str) -> list[str]:
     if registry:
         for name in _INVOKE.findall(cleaned):
             if name in registry:
-                mods, uses = registry[name]
+                mods, uses, _pub = registry[name]
                 out.extend(f"self::{m}" for m in mods)
                 out.extend(uses)
     if "!" in cleaned:
@@ -436,6 +484,10 @@ def extra_imports(repo_path: Path, from_file: Path, source: str) -> list[str]:
         pattern = re.compile(r"(?<![\w$:.])(" + "|".join(re.escape(a) for a in aliases) + r")((?:::[A-Za-z_]\w*)+)")
         for m in pattern.finditer(body):
             out.append(m.group(1) + m.group(2))
+            segments = m.group(2).split("::")[1:]
+            if len(segments) > 1:
+                # `tracing::Level::TRACE`: the item the crate re-exports is the first segment after the crate name
+                out.append(f"{m.group(1)}::{segments[0]}")
     seen: set[str] = set()
     unique = []
     for p in out:

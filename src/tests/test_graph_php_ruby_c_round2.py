@@ -54,9 +54,11 @@ def test_ruby_expression_scope_name_is_not_a_lexical_reference(tmp_path):
     assert "lib/shop/cart.rb" not in imp["lib/shop/pay.rb"]  # o.class::LIMIT
 
 
-def test_ruby_constant_defined_in_two_files_is_skipped(tmp_path):
+def test_ruby_constant_defined_in_two_files_resolves_to_the_zeitwerk_named_one(tmp_path):
+    # Shop::Util is defined in util.rb and util2.rb; Zeitwerk's file for it is shop/util.rb.
+    # (A constant with no single path match stays unresolved: see test_graph_ruby.py.)
     imp = imports_of(ruby_repo(tmp_path))
-    assert imp["lib/shop/user_of_util.rb"] == set()
+    assert imp["lib/shop/user_of_util.rb"] == {"lib/shop/util.rb"}
 
 
 def test_ruby_builtin_constant_reopened_in_repo_adds_no_edge(tmp_path):
@@ -171,3 +173,80 @@ def test_php_heredoc_and_nowdoc_bodies_are_not_scanned(tmp_path):
     ))
     imp = imports_of(repo)
     assert imp["src/Doc.php"] == {"src/Real.php"}
+
+
+def _php_modules(tmp_path, files):
+    from aletheore.scanner.graph import build_module_graph
+
+    repo = tmp_path / "phpr"
+    for rel, body in files.items():
+        f = repo / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body)
+    modules, _, _ = build_module_graph(repo)
+    return {m["path"]: set(m["imports"]) for m in modules}
+
+
+def test_use_of_a_global_class_shadows_a_same_namespace_class_of_that_name(tmp_path):
+    imp = _php_modules(tmp_path, {
+        "src/Exceptions/Exception.php": "<?php\nnamespace App\\Exceptions;\ninterface Exception {}\n",
+        "src/Exceptions/Unit.php": "<?php\nnamespace App\\Exceptions;\nuse Exception;\nclass Unit extends Exception {}\n",
+        "src/Exceptions/Plain.php": "<?php\nnamespace App\\Exceptions;\nclass Plain implements Exception {}\n",
+    })
+    assert "src/Exceptions/Exception.php" not in imp["src/Exceptions/Unit.php"]
+    assert "src/Exceptions/Exception.php" in imp["src/Exceptions/Plain.php"]
+
+
+def test_a_trait_use_inside_a_class_body_is_not_a_global_import(tmp_path):
+    imp = _php_modules(tmp_path, {
+        "src/Helper.php": "<?php\nnamespace App;\ntrait Helper {}\n",
+        "src/Svc.php": "<?php\nnamespace App;\nclass Svc {\n    use Helper;\n}\n",
+    })
+    assert "src/Helper.php" in imp["src/Svc.php"]
+
+
+def test_psr4_prefix_mapped_again_by_autoload_dev_keeps_the_source_directory(tmp_path):
+    import json
+
+    (tmp_path / "composer.json").write_text(json.dumps({
+        "autoload": {"psr-4": {"App\\": "lib/App"}},
+        "autoload-dev": {"psr-4": {"App\\": "test/App/"}},
+    }))
+    imp = _php_modules(tmp_path, {
+        "composer.json": (tmp_path / "composer.json").read_text(),
+        "lib/App/Node/Identifier.php": "<?php\nnamespace App\\Node;\nclass Identifier {}\n",
+        "lib/App/Builder.php": "<?php\nnamespace App;\nuse App\\Node\\Identifier;\n/** @param Identifier $x */\nclass Builder {}\n",
+        "test/App/Thing.php": "<?php\nnamespace App;\nclass Thing {}\n",
+    })
+    assert "lib/App/Node/Identifier.php" in imp["lib/App/Builder.php"]
+
+
+def test_psr4_prefix_with_several_directories_resolves_in_each(tmp_path):
+    import json
+
+    imp = _php_modules(tmp_path, {
+        "composer.json": json.dumps({"autoload": {"psr-4": {"App\\": ["src/", "extra/"]}}}),
+        "src/A.php": "<?php\nnamespace App;\nclass A {}\n",
+        "extra/B.php": "<?php\nnamespace App;\nclass B {}\n",
+        "use.php": "<?php\nuse App\\A;\nuse App\\B;\n",
+    })
+    assert imp["use.php"] == {"src/A.php", "extra/B.php"}
+
+
+def test_a_hack_file_does_not_get_php_implicit_edges(tmp_path):
+    imp = _php_modules(tmp_path, {
+        "src/Dispatcher.php": "<?php\nnamespace App;\ninterface Dispatcher {}\n",
+        "test/fixture.php": "<?hh\nnamespace App\\Fixtures;\nfunction f(): \\App\\Dispatcher { return 1; }\n",
+    })
+    assert imp["test/fixture.php"] == set()
+
+
+def test_a_hack_file_is_not_a_php_declaration_either(tmp_path):
+    from aletheore.scanner.graph import build_module_graph
+
+    repo = tmp_path / "hh"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src/H.php").write_text("<?hh\nnamespace A;\nclass Hacky {}\n")
+    (repo / "src/P.php").write_text("<?php\nnamespace A;\nclass Real {}\n")
+    modules, _g, _bad = build_module_graph(repo)
+    assert {m["path"] for m in modules} >= {"src/H.php", "src/P.php"}  # still scanned, just not read as PHP references

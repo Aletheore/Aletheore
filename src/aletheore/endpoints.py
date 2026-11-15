@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -21,6 +22,8 @@ from aletheore.scanner.graph import (
     _resolve_python_from_import,
 )
 
+from aletheore import flask_blueprints as _fb
+from aletheore import express_mounts as _em
 from aletheore.safe_io import read_bytes_or_none
 
 _ROUTE_VERB_METHODS = {"get", "post", "put", "delete", "patch"}
@@ -107,6 +110,36 @@ def _resolve_from_import_binding(
             )
             if target is not None:
                 return target
+    return None
+
+
+def _resolve_import_binding_with_name(
+    root: Node, source: bytes, name: str, repo_path: Path, path: Path, source_roots: list[Path]
+) -> tuple[str, str] | None:
+    """Like _resolve_from_import_binding, but also gives the name the module itself calls it: for
+    `from app.auth import bp as auth_bp`, `auth_bp` resolves to (the file of app.auth, "bp"). The blueprint
+    registered under an alias is keyed by its real name in the file that defines it."""
+    for n in _walk_tree(root):
+        if n.type != "import_from_statement":
+            continue
+        module_node = n.child_by_field_name("module_name")
+        if module_node is None:
+            continue
+        for name_node in n.children_by_field_name("name"):
+            if name_node.type == "aliased_import":
+                imported_node = name_node.child_by_field_name("name")
+                alias_node = name_node.child_by_field_name("alias")
+                local_name = source[alias_node.start_byte:alias_node.end_byte].decode() if alias_node else None
+            else:
+                imported_node = name_node
+                local_name = source[name_node.start_byte:name_node.end_byte].decode()
+            if local_name != name or imported_node is None:
+                continue
+            module_name = source[module_node.start_byte:module_node.end_byte].decode()
+            imported_name = source[imported_node.start_byte:imported_node.end_byte].decode()
+            target, _ambiguous = _resolve_python_from_import(repo_path, module_name, imported_name, path, source_roots)
+            if target is not None:
+                return target, imported_name
     return None
 
 
@@ -218,11 +251,379 @@ def _walk_tree(root: Node):
         stack.extend(reversed(node.children))
 
 
+_PY_ROUTE_VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
+
+
+def _py_call_name(call: Node, source: bytes) -> tuple[str, str]:
+    """(last name, full dotted text) of a call's callee: `web.get` -> (`get`, `web.get`)."""
+    func = call.child_by_field_name("function")
+    text = source[func.start_byte : func.end_byte].decode() if func is not None else ""
+    return text.split(".")[-1], text
+
+
+def _py_arguments(call: Node, source: bytes) -> tuple[list[Node], dict[str, Node]]:
+    args = call.child_by_field_name("arguments")
+    positional: list[Node] = []
+    keyword: dict[str, Node] = {}
+    for child in (args.named_children if args is not None else []):
+        if child.type == "keyword_argument":
+            key, value = child.child_by_field_name("name"), child.child_by_field_name("value")
+            if key is not None and value is not None:
+                keyword[source[key.start_byte : key.end_byte].decode()] = value
+        else:
+            positional.append(child)
+    return positional, keyword
+
+
+def _py_literal(node: Node | None, source: bytes) -> str | None:
+    if node is None or node.type != "string" or any(c.type == "interpolation" for c in node.children):
+        return None
+    return _string_literal_text(node, source)
+
+
+def _extract_starlette_aiohttp_routes(root: Node, source: bytes, rel_path: str, framework: str) -> list[dict]:
+    """Starlette: `Route("/x", endpoint, methods=[..])` and `WebSocketRoute`, with `Mount("/p", routes=[..])` prefixes,
+    plus `app.add_route("/x", h, methods=[..])`. aiohttp: `web.get("/x", h)` (and post, put, ...), `web.route("GET", "/x", h)`,
+    `app.router.add_get("/x", h)` and `add_route("GET", "/x", h)`."""
+    entries: list[dict] = []
+
+    def emit(method: str, path: str, handler: str, node: Node, prefix: str = "") -> None:
+        full = (prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") if prefix else path
+        entries.append(
+            {
+                "method": method,
+                "path": full or "/",
+                "framework": framework,
+                "file": rel_path,
+                "line": node.start_point[0] + 1,
+                "handler": handler,
+                "unresolved": False,
+                "note": None,
+            }
+        )
+
+    def mount_prefix(node: Node) -> str:
+        parts: list[str] = []
+        ancestor = node.parent
+        while ancestor is not None:
+            if ancestor.type == "call" and _py_call_name(ancestor, source)[0].lower() == "mount":
+                positional = _py_arguments(ancestor, source)[0]
+                literal = _py_literal(positional[0], source) if positional else None
+                if literal:
+                    parts.append(literal)
+            ancestor = ancestor.parent
+        return "".join("/" + p.strip("/") for p in reversed(parts) if p.strip("/"))
+
+    def handler_of(node: Node | None) -> str:
+        return source[node.start_byte : node.end_byte].decode()[:60] if node is not None else "unknown"
+
+    for call in _walk_tree(root):
+        if call.type != "call":
+            continue
+        name, dotted = _py_call_name(call, source)
+        positional, keyword = _py_arguments(call, source)
+        if framework == "starlette":
+            if name in ("Route", "WebSocketRoute") or (name == "add_route" and "." in dotted) or name == "add_websocket_route":
+                path = _py_literal(positional[0] if positional else keyword.get("path"), source)
+                if path is None or not path.startswith("/"):
+                    continue  # aiohttp's add_route("GET", "/x", h) has the verb first
+                endpoint = positional[1] if len(positional) > 1 else keyword.get("endpoint") or keyword.get("route")
+                methods_node = keyword.get("methods")
+                methods = (
+                    [m.upper() for m in re.findall(r"""["']([A-Za-z]+)["']""", source[methods_node.start_byte : methods_node.end_byte].decode())]
+                    if methods_node is not None
+                    else ["WEBSOCKET"] if "WebSocket" in name or "websocket" in name else ["GET"]
+                )
+                prefix = mount_prefix(call)
+                for method in methods:
+                    emit(method, path, handler_of(endpoint), call, prefix)
+        else:
+            bare_ok = dotted == name and b"from aiohttp.web import" in source  # `from aiohttp.web import get`
+            if name in _PY_ROUTE_VERBS and (dotted == f"web.{name}" or bare_ok) or (name.startswith("add_") and name[4:] in _PY_ROUTE_VERBS):
+                verb = name if name in _PY_ROUTE_VERBS else name[4:]
+                path = _py_literal(positional[0] if positional else keyword.get("path"), source)
+                handler = positional[1] if len(positional) > 1 else keyword.get("handler")
+                if path is not None:
+                    emit(verb.upper(), path, handler_of(handler), call)
+            elif name in ("route", "add_route") and ("web" in dotted or "router" in dotted) and (len(positional) >= 2 or keyword.get("path")):
+                verb_node = positional[0] if positional else keyword.get("method")
+                path_node = positional[1] if len(positional) > 1 else keyword.get("path")
+                handler = positional[2] if len(positional) > 2 else keyword.get("handler")
+                verb, path = _py_literal(verb_node, source), _py_literal(path_node, source)
+                if verb is not None and path is not None:
+                    emit(verb.upper() if verb != "*" else "ANY", path, handler_of(handler), call)
+    return entries
+
+
+_PYMISC_VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
+_PYMISC_HANDLER_METHODS = ("get", "post", "put", "delete", "patch", "head", "options")
+
+
+def _pymisc_text(node: Node | None, source: bytes) -> str:
+    return source[node.start_byte : node.end_byte].decode() if node is not None else ""
+
+
+def _pymisc_string(node: Node | None, source: bytes) -> str | None:
+    if node is None or node.type != "string" or any(c.type == "interpolation" for c in node.children):
+        return None
+    return "".join(_pymisc_text(c, source) for c in node.children if c.type == "string_content")
+
+
+def _pymisc_call_args(call: Node, source: bytes) -> tuple[list[Node], dict[str, Node]]:
+    args = call.child_by_field_name("arguments")
+    positional: list[Node] = []
+    keyword: dict[str, Node] = {}
+    for child in (args.named_children if args is not None else []):
+        if child.type == "keyword_argument":
+            key, value = child.child_by_field_name("name"), child.child_by_field_name("value")
+            if key is not None and value is not None:
+                keyword[_pymisc_text(key, source)] = value
+        else:
+            positional.append(child)
+    return positional, keyword
+
+
+def _pymisc_strings(node: Node | None, source: bytes) -> list[str]:
+    """Every string literal in a string or a list of strings."""
+    if node is None:
+        return []
+    if node.type == "string":
+        text = _pymisc_string(node, source)
+        return [text] if text is not None else []
+    return [t for c in node.named_children for t in _pymisc_strings(c, source)]
+
+
+def _pymisc_entry(framework: str, method: str, path: str, rel_path: str, node: Node, handler: str, note: str | None = None) -> dict:
+    return {
+        "method": method,
+        "path": path or "/",
+        "framework": framework,
+        "file": rel_path,
+        "line": node.start_point[0] + 1,
+        "handler": handler,
+        "unresolved": False,
+        "note": note,
+    }
+
+
+def _pymisc_class_methods(root: Node, source: bytes, class_name: str) -> list[str] | None:
+    for cls in _walk_tree(root):
+        if cls.type == "class_definition" and _pymisc_text(cls.child_by_field_name("name"), source) == class_name:
+            body = cls.child_by_field_name("body")
+            names = []
+            for child in (body.named_children if body is not None else []):
+                fn = child.child_by_field_name("definition") if child.type == "decorated_definition" else child
+                if fn is not None and fn.type == "function_definition":
+                    names.append(_pymisc_text(fn.child_by_field_name("name"), source))
+            return names
+    return None
+
+
+def _extract_python_decorator_routes(root: Node, source: bytes, rel_path: str, framework: str) -> list[dict]:
+    """Bottle and Litestar: the bare decorators `@get('/x')`, `@post`, `@route('/x', method='POST')` (Bottle; GET when no
+    method is given) and `@route('/x', http_method=[...])` (Litestar), where a Litestar `Controller`'s `path = '/p'` prefixes
+    its handlers. A decorator on a receiver (`@app.get`) is the Flask/FastAPI matcher's."""
+    entries: list[dict] = []
+    for decorated in _walk_tree(root):
+        if decorated.type != "decorated_definition":
+            continue
+        fn = decorated.child_by_field_name("definition")
+        if fn is None or fn.type != "function_definition":
+            continue
+        handler = _pymisc_text(fn.child_by_field_name("name"), source)
+        prefix = ""
+        block = decorated.parent
+        enclosing = block.parent if block is not None and block.type == "block" else None
+        if enclosing is not None and enclosing.type != "class_definition":
+            enclosing = None  # a handler nested in another function does not belong to the enclosing class
+        if enclosing is not None and framework == "litestar":
+            body = enclosing.child_by_field_name("body")
+            for stmt in (body.named_children if body is not None else []):
+                assign = stmt.named_children[0] if stmt.type == "expression_statement" and stmt.named_children else None
+                if assign is not None and assign.type == "assignment" and _pymisc_text(assign.child_by_field_name("left"), source) == "path":
+                    prefix = _pymisc_string(assign.child_by_field_name("right"), source) or ""
+        for decorator in (c for c in decorated.children if c.type == "decorator"):
+            call = next((c for c in decorator.named_children if c.type == "call"), None)
+            if call is None:
+                continue
+            func = call.child_by_field_name("function")
+            if func is None or func.type != "identifier":
+                continue
+            name = _pymisc_text(func, source)
+            positional, keyword = _pymisc_call_args(call, source)
+            if name in _PYMISC_VERBS:
+                methods = [name.upper()]
+            elif name == "route":
+                key = keyword.get("method") or keyword.get("http_method")
+                methods = [m.upper() for m in _pymisc_strings(key, source)] or ["GET"]
+            else:
+                continue
+            paths = _pymisc_strings(positional[0] if positional else keyword.get("path"), source) or ([""] if framework == "litestar" else [])
+            for path in paths:
+                joined = (prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") if prefix else path
+                for method in methods:
+                    entries.append(_pymisc_entry(framework, method, joined, rel_path, decorator, handler))
+    return entries
+
+
+def _tornado_pattern_to_path(pattern: str) -> str:
+    """A Tornado route is a regular expression: `/items/(\\d+)$` -> `/items/{param}`, `(?P<id>[^/]+)` -> `{id}`."""
+    path = pattern.lstrip("^").rstrip("$")
+    path = re.sub(r"\(\?P<(\w+)>(?:[^()]|\([^()]*\))*\)", r"{\1}", path)
+    return re.sub(r"\((?:[^()]|\([^()]*\))*\)", "{param}", path)
+
+
+def _extract_tornado_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Tornado: `Application([(r"/users", UserHandler), url(r"/x/(\\d+)", H)])`. The verbs are the handler class's
+    `get` / `post` / ... methods when the class is in the same file, otherwise any method."""
+    entries: list[dict] = []
+    for call in _walk_tree(root):
+        if call.type != "call" or _pymisc_text(call.child_by_field_name("function"), source) not in (
+            "tornado.web.Application", "web.Application", "Application"
+        ):
+            continue  # not MyApplication / WsgiApplication / aiohttp's web.Application
+        positional, keyword = _pymisc_call_args(call, source)
+        routes = positional[0] if positional else keyword.get("handlers")
+        for item in (routes.named_children if routes is not None and routes.type == "list" else []):
+            parts = item.named_children
+            if item.type == "call":  # url(r"/x", H)
+                args, _kw = _pymisc_call_args(item, source)
+                parts = args
+            if len(parts) < 2:
+                continue
+            pattern = _pymisc_string(parts[0], source)
+            if pattern is None:
+                continue
+            path = _tornado_pattern_to_path(pattern)
+            handler = _pymisc_text(parts[1], source).split(".")[-1]
+            methods = _pymisc_class_methods(root, source, handler)
+            verbs = [m.upper() for m in (methods or []) if m in _PYMISC_HANDLER_METHODS]
+            for verb in verbs or ["ANY"]:
+                missing = "handler class not found in this file" if methods is None else "handler class defines no get/post/... method"
+                entries.append(_pymisc_entry("tornado", verb, path, rel_path, item, handler, None if verbs else missing))
+    return entries
+
+
+def _extract_falcon_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Falcon: `app.add_route('/x', Resource())`; the verbs are the resource class's `on_get` / `on_post` / ... methods
+    (any method when the class is not in this file)."""
+    entries: list[dict] = []
+    for call in _walk_tree(root):
+        if call.type != "call":
+            continue
+        func = call.child_by_field_name("function")
+        if func is None or func.type != "attribute" or _pymisc_text(func.child_by_field_name("attribute"), source) != "add_route":
+            continue
+        positional, _kw = _pymisc_call_args(call, source)
+        path = _pymisc_string(positional[0], source) if positional else None
+        if path is None or len(positional) < 2:
+            continue
+        target = positional[1]
+        class_name = _pymisc_text(target.child_by_field_name("function") if target.type == "call" else target, source).split(".")[-1]
+        methods = _pymisc_class_methods(root, source, class_name)
+        verbs = [m[3:].upper() for m in (methods or []) if m.startswith("on_") and m[3:] in _PYMISC_HANDLER_METHODS]
+        for verb in verbs or ["ANY"]:
+            missing = "resource class not found in this file" if methods is None else "resource class has no on_get/on_post/... method"
+            entries.append(_pymisc_entry("falcon", verb, path, rel_path, call, class_name, None if verbs else missing))
+    return entries
+
+
+def _pyramid_collect_routes(root: Node, source: bytes) -> dict[str, str]:
+    """`config.add_route('home', '/home')` -> {'home': '/home'} (literal name and pattern only)."""
+    routes: dict[str, str] = {}
+    for call in _walk_tree(root):
+        if call.type != "call":
+            continue
+        func = call.child_by_field_name("function")
+        if func is None or func.type != "attribute" or _pymisc_text(func.child_by_field_name("attribute"), source) != "add_route":
+            continue
+        positional, keyword = _pymisc_call_args(call, source)
+        name = _pymisc_string(positional[0] if positional else keyword.get("name"), source)
+        pattern = _pymisc_string(positional[1] if len(positional) > 1 else keyword.get("pattern"), source)
+        if name is not None and pattern is not None:
+            routes.setdefault(name, pattern)
+    return routes
+
+
+def _pyramid_pattern_for(name: str, view_file: str, routes: dict[str, dict[str, str]]) -> str | None:
+    """The pattern for a route name: the definition in the view's own file, else the one in the nearest directory
+    (a repository can hold many unrelated apps that each call their route `home`)."""
+    defined = routes.get(name)
+    if not defined:
+        return None
+    if view_file in defined:
+        return defined[view_file]
+    view_parts = view_file.split("/")[:-1]
+
+    def shared(other: str) -> int:
+        count = 0
+        for a, b in zip(view_parts, other.split("/")[:-1]):
+            if a != b:
+                break
+            count += 1
+        return count
+
+    best = max(sorted(defined), key=shared)
+    return defined[best]
+
+
+def _extract_pyramid_routes(root: Node, source: bytes, rel_path: str, routes: dict[str, dict[str, str]]) -> list[dict]:
+    """Pyramid views: `@view_config(route_name='home', request_method='GET')` on functions and methods,
+    `@view_defaults(route_name=...)` on a class, and `config.add_view(fn, route_name=..., request_method=...)`. The path is
+    the pattern `config.add_route('home', '/home')` registered for that name anywhere in the repository; the method is
+    ANY when no `request_method` is given."""
+    entries: list[dict] = []
+
+    def emit(route_name: str | None, methods_node: Node | None, node: Node, handler: str) -> None:
+        if route_name is None:
+            return
+        pattern = _pyramid_pattern_for(route_name, rel_path, routes)
+        methods = [m.upper() for m in _pymisc_strings(methods_node, source)] or ["ANY"]
+        for method in methods:
+            entries.append(
+                _pymisc_entry(
+                    "pyramid", method, pattern or "/", rel_path, node, handler,
+                    None if pattern is not None else f"route '{route_name}' has no add_route in the repository",
+                )
+            )
+
+    for node in _walk_tree(root):
+        if node.type == "decorated_definition":
+            fn = node.child_by_field_name("definition")
+            if fn is None or fn.type != "function_definition":
+                continue
+            default_route: str | None = None
+            klass = node.parent
+            while klass is not None and klass.type != "class_definition":
+                klass = klass.parent
+            if klass is not None and klass.parent is not None and klass.parent.type == "decorated_definition":
+                for decorator in (c for c in klass.parent.children if c.type == "decorator"):
+                    call = next((c for c in decorator.named_children if c.type == "call"), None)
+                    if call is not None and _pymisc_text(call.child_by_field_name("function"), source).endswith("view_defaults"):
+                        default_route = _pymisc_string(_pymisc_call_args(call, source)[1].get("route_name"), source)
+            handler = _pymisc_text(fn.child_by_field_name("name"), source)
+            for decorator in (c for c in node.children if c.type == "decorator"):
+                call = next((c for c in decorator.named_children if c.type == "call"), None)
+                if call is None or not _pymisc_text(call.child_by_field_name("function"), source).endswith("view_config"):
+                    continue
+                _pos, keyword = _pymisc_call_args(call, source)
+                emit(_pymisc_string(keyword.get("route_name"), source) or default_route, keyword.get("request_method"), decorator, handler)
+        elif node.type == "call":
+            func = node.child_by_field_name("function")
+            if func is not None and func.type == "attribute" and _pymisc_text(func.child_by_field_name("attribute"), source) == "add_view":
+                positional, keyword = _pymisc_call_args(node, source)
+                emit(_pymisc_string(keyword.get("route_name"), source), keyword.get("request_method"), node, _pymisc_text(positional[0], source)[:60] if positional else "unknown")
+    return entries
+
+
 def _extract_flask_fastapi_routes(
     root: Node,
     source: bytes,
     rel_path: str,
     external_router_mount_prefixes: dict[tuple[str, str], list[str]] | None = None,
+    flask_blueprint_prefixes: dict[tuple[str, str], list[str]] | None = None,
+    flask_unresolved_blueprints: set[tuple[str, str]] | None = None,
+    flask_key_for=None,
 ) -> list[dict]:
     entries: list[dict] = []
 
@@ -359,6 +760,18 @@ def _extract_flask_fastapi_routes(
                 mount_prefixes = (
                     router_mount_prefixes.get(router_name, []) if router_name is not None else []
                 )
+                blueprint_key = (
+                    (flask_key_for(router_name) if flask_key_for else (rel_path, router_name))
+                    if router_name is not None else None
+                )
+                is_blueprint = bool(flask_blueprint_prefixes) and blueprint_key in flask_blueprint_prefixes
+                bp_unresolved = is_blueprint and blueprint_key in (flask_unresolved_blueprints or set())
+                bp_note = "blueprint url_prefix is not a string literal; the real path is unknown" if bp_unresolved else None
+                if is_blueprint:
+                    # Flask's own rules, resolved across files (see flask_blueprints): the full prefixes this
+                    # blueprint is reachable at replace the FastAPI-style constructor + mount composition.
+                    constructor_prefix = None
+                    mount_prefixes = list(flask_blueprint_prefixes[blueprint_key])
 
                 def compose(mount_prefix: str | None, _path: str = path) -> str:
                     composed = _path
@@ -382,7 +795,8 @@ def _extract_flask_fastapi_routes(
                         if source[kw_name.start_byte : kw_name.end_byte].decode() != "methods":
                             continue
                         value = arg.child_by_field_name("value")
-                        if value is not None and value.type == "list":
+                        # a list, tuple or set of strings: methods=["POST"], methods=("POST",), methods={"GET", "POST"}
+                        if value is not None and value.type in ("list", "tuple", "set"):
                             methods = [
                                 _string_literal_text(item, source).upper()
                                 for item in value.named_children
@@ -398,8 +812,8 @@ def _extract_flask_fastapi_routes(
                                     "file": rel_path,
                                     "line": line,
                                     "handler": handler,
-                                    "unresolved": False,
-                                    "note": None,
+                                    "unresolved": bp_unresolved,
+                                    "note": bp_note,
                                 }
                             )
                 elif attribute_name in _ROUTE_VERB_METHODS:
@@ -408,12 +822,12 @@ def _extract_flask_fastapi_routes(
                             {
                                 "method": attribute_name.upper(),
                                 "path": entry_path,
-                                "framework": "flask_or_fastapi",
+                                "framework": "flask" if is_blueprint else "flask_or_fastapi",
                                 "file": rel_path,
                                 "line": line,
                                 "handler": handler,
-                                "unresolved": False,
-                                "note": None,
+                                "unresolved": bp_unresolved,
+                                "note": bp_note,
                             }
                         )
     return entries
@@ -519,6 +933,391 @@ def _looks_like_express_path(path: str) -> bool:
     # starts with "/" (or is the "*" wildcard) - this cheaply rejects the
     # overwhelming majority of false positives with no risk to real routes.
     return path == "*" or path.startswith("/")
+
+
+_NEXT_APP_ROUTE = re.compile(r"^((?:[^/]+/)*?(?:src/)?)app/((?:[^/]+/)*)route\.(?:ts|js|tsx|jsx)$")
+_NEXT_PAGES_API = re.compile(r"^((?:[^/]+/)*?(?:src/)?)pages/(api(?:/[^/]+)*)\.(?:ts|js|tsx|jsx)$")
+_NEXT_HTTP_EXPORT = re.compile(
+    r"export\s+(?:async\s+)?(?:function\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b|const\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b)"
+)
+_NEXT_EXPORT_LIST = re.compile(r"export\s*\{([^}]*)\}")
+
+
+def _next_segment(segment: str) -> str | None:
+    """One folder / file name of a Next.js route -> its URL segment; None when it adds nothing (route groups, slots)."""
+    if (segment.startswith("(") and segment.endswith(")")) or segment.startswith("@"):
+        return None
+    optional = re.fullmatch(r"\[\[\.\.\.(\w+)\]\]", segment)
+    if optional:
+        return "{..." + optional.group(1) + "?}"
+    catch_all = re.fullmatch(r"\[\.\.\.(\w+)\]", segment)
+    if catch_all:
+        return "{..." + catch_all.group(1) + "}"
+    dynamic = re.fullmatch(r"\[(\w+)\]", segment)
+    return "{" + dynamic.group(1) + "}" if dynamic else segment
+
+
+def _is_nextjs_project(repo_path: Path, prefix: str) -> bool:
+    """`app/` and `pages/` are a Next.js router only in a Next.js project: the folder that holds them (`src/`'s parent
+    when they sit under `src/`) has a `next.config.*` or a package.json that depends on `next`. A folder named `app` or
+    `pages` deeper in the tree (`lib/app/`, `components/pages/`) is not that folder."""
+    folder = (repo_path / (prefix[:-4] if prefix.endswith("src/") else prefix)).resolve()
+    if any((folder / name).is_file() for name in ("next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs")):
+        return True
+    try:
+        package_json = folder / "package.json"
+        return package_json.is_file() and bool(re.search(r'"next"\s*:', package_json.read_text(encoding="utf-8", errors="ignore")))
+    except OSError:
+        return False
+
+
+def _strip_js_comments(text: str) -> str:
+    """The text with `//` and `/* */` comments blanked (same length, newlines kept)."""
+    return re.sub(r"//[^\n]*|/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), text, flags=re.S)
+
+
+def _extract_nextjs_routes(rel_path: str, source: bytes, repo_path: Path | None = None) -> list[dict]:
+    """Next.js file-system API routes. App router: `app/**/route.ts` (or under `src/`) exporting `GET`, `POST`, ... (a
+    function, a const, or `export { GET }`); route groups `(group)` and slots `@slot` are not part of the URL and `[id]` /
+    `[...slug]` become `{id}` / `{...slug}`. Pages router: every file under `pages/api/`, answering any method.
+    A configured `basePath` is not applied."""
+    app = _NEXT_APP_ROUTE.search(rel_path)
+    pages = None if app else _NEXT_PAGES_API.search(rel_path)
+    router = app or pages
+    if router is None:
+        return []  # most files: decided by the path alone, before the source is decoded
+    if repo_path is not None and not _is_nextjs_project(repo_path, router.group(1)):
+        return []
+    text = _strip_js_comments(source.decode(errors="replace"))
+    entries: list[dict] = []
+
+    def emit(method: str, url_segments: list[str], line: int) -> None:
+        parts = [seg for seg in (_next_segment(s) for s in url_segments) if seg]
+        entries.append(
+            {
+                "method": method,
+                "path": "/" + "/".join(parts),
+                "framework": "nextjs",
+                "file": rel_path,
+                "line": line,
+                "handler": method if method != "ANY" else "default",
+                "unresolved": False,
+                "note": None,
+            }
+        )
+
+    if app:
+        folders = [f for f in app.group(2).split("/") if f]
+        found: dict[str, int] = {}
+        for match in _NEXT_HTTP_EXPORT.finditer(text):
+            found.setdefault(match.group(1) or match.group(2), text.count("\n", 0, match.start()) + 1)
+        for match in _NEXT_EXPORT_LIST.finditer(text):
+            for name in (item.split(" as ")[-1].strip() for item in match.group(1).split(",")):
+                if name in ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"):
+                    found.setdefault(name, text.count("\n", 0, match.start()) + 1)
+        for method, line in sorted(found.items()):
+            emit(method, folders, line)
+        return entries
+    default_export = re.search(r"export\s+default\b", text)
+    if pages and default_export:
+        segments = pages.group(2).split("/")
+        if segments[-1] == "index":
+            segments = segments[:-1]
+        emit("ANY", segments, text.count("\n", 0, default_export.start()) + 1)
+    return entries
+
+
+def _js_object_pairs(obj: Node, source: bytes) -> dict[str, Node]:
+    pairs: dict[str, Node] = {}
+    for child in obj.named_children:
+        if child.type == "pair":
+            key, value = child.child_by_field_name("key"), child.child_by_field_name("value")
+            if key is not None and value is not None:
+                pairs[source[key.start_byte : key.end_byte].decode().strip("'\"`")] = value
+        elif child.type in ("method_definition", "shorthand_property_identifier"):
+            name = child.child_by_field_name("name") or child
+            pairs.setdefault(source[name.start_byte : name.end_byte].decode(), child)
+    return pairs
+
+
+def _extract_js_route_objects(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """The object form of a route: Fastify `fastify.route({ method: 'POST', url: '/items', handler })` and hapi
+    `server.route({ method: 'GET', path: '/x', handler })` (also an array of them), `method: ['GET', 'HEAD']` allowed.
+    The framework is named by what the file mentions (hapi, otherwise Fastify). The verb shorthands
+    (`fastify.get('/x', h)`) are the Express matcher's."""
+    entries: list[dict] = []
+    lowered = source.lower()
+    if b"fastify" not in lowered and b"hapi" not in lowered:
+        return entries  # an object-form `.route({...})` needs one of the two frameworks to be in play
+    # hapi is named by its package (`@hapi/hapi`, `require('hapi')`), not by the word anywhere in the file
+    framework = "hapi" if re.search(rb"""['"]@?hapi(?:/hapi)?['"]""", source) and b"fastify" not in lowered else "fastify"
+    for call in _walk_tree(root):
+        if call.type != "call_expression":
+            continue
+        func = call.child_by_field_name("function")
+        if func is None or func.type != "member_expression":
+            continue
+        prop = func.child_by_field_name("property")
+        args = call.child_by_field_name("arguments")
+        if prop is None or source[prop.start_byte : prop.end_byte].decode() != "route" or args is None:
+            continue
+        first = next((a for a in args.named_children if a.type in ("object", "array")), None)
+        if first is None or (first.type == "array" and framework != "hapi"):
+            continue  # an array of routes is hapi's form; Fastify's route() takes one object
+        objects = [first] if first.type == "object" else [o for o in first.named_children if o.type == "object"]  # hapi: an array
+        for obj in objects:
+            entries.extend(_js_route_object_entries(obj, call, source, rel_path, framework))
+    return entries
+
+
+def _js_route_object_entries(obj: Node, call: Node, source: bytes, rel_path: str, framework: str) -> list[dict]:
+    pairs = _js_object_pairs(obj, source)
+    url_node = pairs.get("url") or pairs.get("path")
+    method_node = pairs.get("method")
+    if url_node is None or method_node is None or url_node.type != "string":
+        return []
+    path = _js_string_literal_text(url_node, source)
+    if not _looks_like_express_path(path):
+        return []
+    if method_node.type == "string":
+        methods = [_js_string_literal_text(method_node, source)]
+    elif method_node.type == "array":
+        methods = [_js_string_literal_text(m, source) for m in method_node.named_children if m.type == "string"]
+    else:
+        return []
+    handler = _express_handler_label(pairs.get("handler"), source)
+    return [
+        {
+            "method": method.upper(),
+            "path": path,
+            "framework": framework,
+            "file": rel_path,
+            "line": call.start_point[0] + 1,
+            "handler": handler,
+            "unresolved": False,
+            "note": None,
+        }
+        for method in methods
+    ]
+
+
+_JS_RESOLVE_SUFFIXES = ("", ".ts", ".tsx", ".js", ".jsx", ".mjs", "/index.ts", "/index.tsx", "/index.js")
+
+
+def _js_resolve_relative(repo_path: Path, from_file: Path, spec: str) -> str | None:
+    """A relative import specifier -> the repo-relative file it names (`./users` -> `src/users.ts`), None otherwise."""
+    if not spec.startswith("."):
+        return None
+    base = (from_file.parent / spec).resolve()
+    for suffix in _JS_RESOLVE_SUFFIXES:
+        candidate = Path(str(base) + suffix)
+        if candidate.is_file():
+            try:
+                return candidate.relative_to(repo_path.resolve()).as_posix()
+            except ValueError:
+                return None
+    return None
+
+
+def _js_call_receiver(call: Node, source: bytes) -> str | None:
+    """The variable a (possibly chained) method call starts from: `app.get(..).post(..)` -> `app`."""
+    func = call.child_by_field_name("function")
+    node = func.child_by_field_name("object") if func is not None and func.type == "member_expression" else None
+    while node is not None and node.type == "call_expression":
+        inner = node.child_by_field_name("function")
+        node = inner.child_by_field_name("object") if inner is not None and inner.type == "member_expression" else None
+    return source[node.start_byte : node.end_byte].decode() if node is not None and node.type == "identifier" else None
+
+
+def _js_string_arg(node: Node | None, source: bytes) -> str | None:
+    return _js_string_literal_text(node, source) if node is not None and node.type == "string" else None
+
+
+def _hono_chain_base_path(value: Node | None, source: bytes) -> str | None:
+    """`new Hono()` -> ""; `new Hono().basePath('/v1')` -> "/v1"; anything else -> None (not a Hono instance)."""
+    base = ""
+    node = value
+    while node is not None and node.type == "call_expression":
+        func = node.child_by_field_name("function")
+        if func is None or func.type != "member_expression":
+            return None
+        prop = func.child_by_field_name("property")
+        if prop is None or source[prop.start_byte : prop.end_byte].decode() != "basePath":
+            return None
+        args = node.child_by_field_name("arguments")
+        literal = _js_string_arg(args.named_children[0] if args is not None and args.named_children else None, source)
+        base = "/" + literal.strip("/") + base if literal and literal.strip("/") else base
+        node = func.child_by_field_name("object")
+    if node is not None and node.type == "new_expression":
+        ctor = node.child_by_field_name("constructor")
+        if ctor is not None and source[ctor.start_byte : ctor.end_byte].decode() in ("Hono", "OpenAPIHono"):
+            return base
+    return None
+
+
+def _hono_file_facts(root: Node, source: bytes, rel_path: str, resolve_module) -> dict:
+    instances: dict[str, str] = {}
+    mounts: list[tuple[str, str, str]] = []  # (parent var, mount path, sub-app identifier)
+    imports: dict[str, tuple[str, str]] = {}  # local name -> (file, exported name or "default")
+    exports: dict[str, str] = {}  # exported name -> local var
+    for n in _walk_tree(root):
+        if n.type == "variable_declarator":
+            name = n.child_by_field_name("name")
+            base = _hono_chain_base_path(n.child_by_field_name("value"), source)
+            if name is not None and name.type == "identifier" and base is not None:
+                instances[source[name.start_byte : name.end_byte].decode()] = base
+                parent = n.parent.parent if n.parent is not None else None
+                if parent is not None and parent.type == "export_statement":
+                    exports[source[name.start_byte : name.end_byte].decode()] = source[name.start_byte : name.end_byte].decode()
+        elif n.type == "call_expression":
+            func = n.child_by_field_name("function")
+            args = n.child_by_field_name("arguments")
+            if func is not None and func.type == "member_expression" and args is not None:
+                prop = func.child_by_field_name("property")
+                obj = func.child_by_field_name("object")
+                named = args.named_children
+                if prop is not None and source[prop.start_byte : prop.end_byte].decode() == "route" and obj is not None \
+                        and obj.type == "identifier" and len(named) >= 2 and named[1].type == "identifier":
+                    mount_path = _js_string_arg(named[0], source)
+                    if mount_path is not None:
+                        mounts.append((source[obj.start_byte : obj.end_byte].decode(), mount_path, source[named[1].start_byte : named[1].end_byte].decode()))
+        elif n.type == "import_statement":
+            spec = _js_string_arg(n.child_by_field_name("source"), source)
+            file = resolve_module(spec) if spec else None
+            if not file:
+                continue
+            for clause in (c for c in n.children if c.type == "import_clause"):
+                for part in clause.children:
+                    if part.type == "identifier":
+                        imports[source[part.start_byte : part.end_byte].decode()] = (file, "default")
+                    elif part.type == "named_imports":
+                        for spec_node in (c for c in part.children if c.type == "import_specifier"):
+                            nm, alias = spec_node.child_by_field_name("name"), spec_node.child_by_field_name("alias")
+                            if nm is not None:
+                                imports[source[(alias or nm).start_byte : (alias or nm).end_byte].decode()] = (file, source[nm.start_byte : nm.end_byte].decode())
+        elif n.type == "export_statement":
+            if any(c.type == "default" for c in n.children):
+                value = n.child_by_field_name("value")
+                if value is not None and value.type == "identifier":
+                    exports["default"] = source[value.start_byte : value.end_byte].decode()
+            for clause in (c for c in n.children if c.type == "export_clause"):
+                for spec_node in (c for c in clause.children if c.type == "export_specifier"):
+                    nm, alias = spec_node.child_by_field_name("name"), spec_node.child_by_field_name("alias")
+                    if nm is not None:
+                        exports[source[(alias or nm).start_byte : (alias or nm).end_byte].decode()] = source[nm.start_byte : nm.end_byte].decode()
+    return {"file": rel_path, "instances": instances, "mounts": mounts, "imports": imports, "exports": exports}
+
+
+def _hono_resolve_prefixes(all_facts: list[dict]) -> dict[tuple[str, str], list[str]]:
+    """(file, Hono instance variable) -> every path prefix its routes are served at: the mount path of each `parent.route(
+    '/p', sub)` in front of the instance's own `basePath`, on top of the parent's prefixes."""
+    by_file = {f["file"]: f for f in all_facts}
+    incoming: dict[tuple[str, str], list[tuple[tuple[str, str], str]]] = {}
+    for facts in all_facts:
+        for parent, mount_path, sub in facts["mounts"]:
+            if parent not in facts["instances"]:
+                continue
+            target: tuple[str, str] | None = None
+            if sub in facts["instances"]:
+                target = (facts["file"], sub)
+            elif sub in facts["imports"]:
+                file, name = facts["imports"][sub]
+                other = by_file.get(file)
+                var = other["exports"].get(name) if other else None
+                if var and other and var in other["instances"]:
+                    target = (file, var)
+            if target is not None:
+                incoming.setdefault(target, []).append(((facts["file"], parent), mount_path))
+
+    def prefixes(node: tuple[str, str], depth: int = 0) -> list[str]:
+        base = by_file[node[0]]["instances"].get(node[1], "")
+        if node not in incoming or depth > 8:
+            return [base]
+        out: list[str] = []
+        for parent, mount_path in incoming[node]:
+            for parent_prefix in prefixes(parent, depth + 1):
+                mount = "/" + mount_path.strip("/") if mount_path.strip("/") else ""
+                joined = parent_prefix + mount + base
+                if joined not in out:
+                    out.append(joined)
+        return out
+
+    return {(f["file"], var): prefixes((f["file"], var)) for f in all_facts for var in f["instances"]}
+
+
+def _object_value(obj: Node, source: bytes, key_name: str) -> Node | None:
+    """The value node of `key_name: value` in a JavaScript / TypeScript object literal."""
+    for pair in (c for c in obj.named_children if c.type == "pair"):
+        key = pair.child_by_field_name("key")
+        if key is not None and source[key.start_byte : key.end_byte].decode().strip("'\"") == key_name:
+            return pair.child_by_field_name("value")
+    return None
+
+
+def _koa_router_prefixes(root: Node, source: bytes) -> dict[str, str]:
+    """`const r = new Router({ prefix: '/api' })` and `r.prefix('/api')` in a file that uses Koa -> {r: '/api'}."""
+    found: dict[str, str] = {}
+    for n in _walk_tree(root):
+        if n.type == "variable_declarator":
+            name, value = n.child_by_field_name("name"), n.child_by_field_name("value")
+            if name is None or value is None or value.type not in ("new_expression", "call_expression"):
+                continue
+            ctor = value.child_by_field_name("constructor") or value.child_by_field_name("function")
+            if ctor is None or ctor.type != "identifier" or source[ctor.start_byte : ctor.end_byte].decode() not in ("Router", "KoaRouter"):
+                continue
+            args = value.child_by_field_name("arguments")
+            obj = next((a for a in (args.named_children if args is not None else []) if a.type == "object"), None)
+            prefix = _js_string_arg(_object_value(obj, source, "prefix"), source) if obj is not None else None
+            if prefix and prefix.strip("/"):
+                found[source[name.start_byte : name.end_byte].decode()] = "/" + prefix.strip("/")
+        elif n.type == "call_expression":
+            func = n.child_by_field_name("function")
+            args = n.child_by_field_name("arguments")
+            if func is not None and func.type == "member_expression" and args is not None:
+                prop, obj = func.child_by_field_name("property"), func.child_by_field_name("object")
+                if prop is not None and obj is not None and obj.type == "identifier" and source[prop.start_byte : prop.end_byte].decode() == "prefix":
+                    literal = _js_string_arg(args.named_children[0] if args.named_children else None, source)
+                    if literal and literal.strip("/"):
+                        found[source[obj.start_byte : obj.end_byte].decode()] = "/" + literal.strip("/")
+    return found
+
+
+def _extract_express_family_routes(
+    root: Node, source: bytes, rel_path: str, hono_prefixes: dict[tuple[str, str], list[str]] | None = None,
+    base_extract=None,
+) -> list[dict]:
+    """Express-style route calls, with the path prefixes of the frameworks that set one on the router object: a Koa
+    router's `prefix`, and the `route('/p', sub)` mounts and `basePath` of a Hono app (mounts across files are in
+    `hono_prefixes`). The receiver of each call is found by its line."""
+    entries = (base_extract or _extract_express_routes)(root, source, rel_path)
+    koa = _koa_router_prefixes(root, source) if re.search(rb"""['"](?:@koa/router|koa-router|koa-tree-router|@koa/[\w-]*router)['"]""", source) else {}
+    hono = {key[1]: prefixes for key, prefixes in (hono_prefixes or {}).items() if key[0] == rel_path}
+    if not entries or not (koa or hono):
+        return entries
+    verbs = {"get", "post", "put", "delete", "patch", "head", "options", "all", "use", "route"}
+    receivers: dict[int, list[str | None]] = {}
+    for call in _walk_tree(root):
+        if call.type != "call_expression":
+            continue
+        func = call.child_by_field_name("function")
+        prop = func.child_by_field_name("property") if func is not None and func.type == "member_expression" else None
+        if prop is not None and source[prop.start_byte : prop.end_byte].decode() in verbs:
+            receivers.setdefault(call.start_point[0] + 1, []).append(_js_call_receiver(call, source))  # source order
+    taken: dict[int, int] = {}
+    adjusted: list[dict] = []
+    for entry in entries:
+        on_line = receivers.get(entry["line"], [])
+        index = taken.get(entry["line"], 0)  # several routes on one line take their receivers in source order
+        taken[entry["line"]] = index + 1
+        receiver = on_line[index] if index < len(on_line) else None
+        if receiver in koa:
+            adjusted.append({**entry, "path": koa[receiver] + entry["path"] if entry["path"] != "/" else koa[receiver]})
+        elif receiver in hono and hono[receiver] != [""]:
+            for prefix in hono[receiver]:
+                adjusted.append({**entry, "path": (prefix + entry["path"]) if entry["path"] != "/" else (prefix or "/")})
+        else:
+            adjusted.append(entry)
+    return adjusted
 
 
 def _extract_express_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
@@ -821,6 +1620,111 @@ def _gin_group_prefix_bindings(root: Node, source: bytes) -> dict[tuple[int, str
     return bindings
 
 
+_GO_WEB_FRAMEWORK_IMPORTS = (
+    (b"github.com/go-chi/chi", "chi"),
+    (b"github.com/labstack/echo", "echo"),
+    (b"github.com/gofiber/fiber", "fiber"),
+    (b"github.com/julienschmidt/httprouter", "httprouter"),
+)
+_GO_FRAMEWORK_VERBS = {
+    "chi": {"Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH", "Head": "HEAD",
+            "Options": "OPTIONS", "Connect": "CONNECT", "Trace": "TRACE", "Handle": "ANY", "HandleFunc": "ANY"},
+    "echo": {"GET": "GET", "POST": "POST", "PUT": "PUT", "DELETE": "DELETE", "PATCH": "PATCH", "HEAD": "HEAD",
+             "OPTIONS": "OPTIONS", "CONNECT": "CONNECT", "TRACE": "TRACE", "Any": "ANY"},
+    "fiber": {"Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH", "Head": "HEAD",
+              "Options": "OPTIONS", "Connect": "CONNECT", "Trace": "TRACE", "All": "ANY"},
+    "httprouter": {"GET": "GET", "POST": "POST", "PUT": "PUT", "DELETE": "DELETE", "PATCH": "PATCH", "HEAD": "HEAD",
+                   "OPTIONS": "OPTIONS", "Handler": "ANY", "HandlerFunc": "ANY"},
+}
+
+
+def _go_web_frameworks(source: bytes) -> list[str]:
+    """Every one of chi, Echo, Fiber and httprouter the file imports: their route calls look like Gin's or net/http's, so
+    the imports decide which framework a `r.Get("/x", h)` / `e.GET("/x", h)` belongs to."""
+    return [name for marker, name in _GO_WEB_FRAMEWORK_IMPORTS if marker in source]
+
+
+def _go_chi_route_prefix(node: Node, source: bytes) -> str:
+    """Prefix a call carries from the enclosing `r.Route("/api", func(r chi.Router) { ... })` closures."""
+    parts: list[str] = []
+    current = node.parent
+    while current is not None:
+        if current.type == "func_literal":
+            args = current.parent
+            call = args.parent if args is not None and args.type == "argument_list" else None
+            func = call.child_by_field_name("function") if call is not None else None
+            if func is not None and func.type == "selector_expression":
+                field = func.child_by_field_name("field")
+                named = args.named_children
+                if (
+                    field is not None
+                    and source[field.start_byte : field.end_byte].decode() == "Route"
+                    and named
+                    and named[0].type == "interpreted_string_literal"
+                    and named[-1].id == current.id
+                ):
+                    parts.append(_go_string_literal_text(named[0], source))
+        current = current.parent
+    return "".join("/" + part.strip("/") for part in reversed(parts) if part.strip("/"))
+
+
+def _extract_go_framework_routes(root: Node, source: bytes, rel_path: str, framework: str) -> list[dict]:
+    """Routes of chi, Echo and Fiber: verb calls with a literal path, composed with the `Group("/p")` variable they are
+    called on (Echo, Fiber) or the enclosing `Route("/p", func(r chi.Router) {..})` closures (chi)."""
+    verbs = _GO_FRAMEWORK_VERBS[framework]
+    group_prefixes = _gin_group_prefix_bindings(root, source) if framework in ("echo", "fiber") else {}
+    entries: list[dict] = []
+    for n in _walk_tree(root):
+        if n.type != "call_expression":
+            continue
+        func = n.child_by_field_name("function")
+        if func is None or func.type != "selector_expression":
+            continue
+        field = func.child_by_field_name("field")
+        args = n.child_by_field_name("arguments")
+        if field is None or args is None:
+            continue
+        name = source[field.start_byte : field.end_byte].decode()
+        package = func.child_by_field_name("operand")
+        if package is not None and package.type == "identifier" and source[package.start_byte : package.end_byte] == b"http":
+            continue  # `http.HandleFunc(...)` is net/http's own matcher's
+        named = args.named_children
+        method = verbs.get(name)
+        if framework == "httprouter" and name in ("Handle", "Handler", "HandlerFunc") and len(named) >= 3 and named[0].type == "interpreted_string_literal":
+            method = _go_string_literal_text(named[0], source).upper() or None
+            named = named[1:]
+        elif framework == "httprouter" and name in ("Handler", "HandlerFunc"):
+            method = None  # `Handler(method, path, h)` needs the method first
+        if framework == "chi" and name == "Method" and len(named) >= 3 and named[0].type == "interpreted_string_literal":
+            method = _go_string_literal_text(named[0], source).upper() or None
+            named = named[1:]
+        if method is None or not named or named[0].type != "interpreted_string_literal":
+            continue
+        path = _go_string_literal_text(named[0], source)
+        if framework == "chi":
+            prefix = _go_chi_route_prefix(n, source)
+        elif framework == "httprouter":
+            prefix = ""
+        else:
+            operand = func.child_by_field_name("operand")
+            receiver = source[operand.start_byte : operand.end_byte].decode() if operand is not None and operand.type == "identifier" else None
+            prefix = _resolve_group_prefix(group_prefixes, n, root, receiver) if receiver else ""
+        full_path = f"{prefix.rstrip('/')}/{path.lstrip('/')}" if prefix else path
+        entries.append(
+            {
+                "method": method,
+                "path": full_path or "/",
+                "framework": framework,
+                "file": rel_path,
+                "line": n.start_point[0] + 1,
+                "handler": _go_handler_name(named, source),
+                "unresolved": False,
+                "note": None,
+            }
+        )
+    return entries
+
+
 def _extract_gin_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
     group_prefixes = _gin_group_prefix_bindings(root, source)
@@ -913,6 +1817,341 @@ def _collect_axum_combinators(node: Node, source: bytes) -> list[tuple[str, str]
 
     walk(node)
     return results
+
+
+_SINATRA_VERBS = {"get", "post", "put", "delete", "patch", "head", "options", "link", "unlink"}
+
+
+def _sinatra_string(node: Node | None, source: bytes) -> tuple[str | None, bool]:
+    """(text, dynamic) of a Ruby string argument; (None, False) when the argument is not a string at all."""
+    if node is None or node.type != "string":
+        return None, False
+    if any(c.type == "interpolation" for c in node.children):
+        return None, True
+    return "".join(source[c.start_byte : c.end_byte].decode(errors="replace") for c in node.children if c.type == "string_content"), False
+
+
+def _extract_sinatra_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Sinatra routes: `get '/users/:id' do ... end`, `post("/x") { }` and `route :get, :post, '/x' do`, with the
+    `namespace '/api' do ... end` blocks (sinatra-contrib) around them composed into the path."""
+    entries: list[dict] = []
+    for node in _walk_tree(root):
+        if node.type != "call":
+            continue
+        name_node = node.child_by_field_name("method") or next((c for c in node.children if c.type == "identifier"), None)
+        if name_node is None or node.child_by_field_name("receiver") is not None:
+            continue
+        name = source[name_node.start_byte : name_node.end_byte].decode(errors="replace")
+        args_node = node.child_by_field_name("arguments") or next((c for c in node.children if c.type == "argument_list"), None)
+        if args_node is None or not any(c.type in ("do_block", "block") for c in node.children):
+            continue
+        args = args_node.named_children
+        methods: list[str]
+        if name in _SINATRA_VERBS:
+            methods = [name.upper()]
+        elif name == "route":
+            methods = [source[a.start_byte + 1 : a.end_byte].decode(errors="replace").upper() for a in args if a.type == "simple_symbol"]
+            if not methods:
+                continue
+        else:
+            continue
+        path_node = next((a for a in args if a.type == "string"), None)
+        path, dynamic = _sinatra_string(path_node, source)
+        if path is None and not dynamic:
+            continue  # a regular expression or a constant: not a literal route
+        prefix = ""
+        ancestor = node.parent
+        while ancestor is not None:
+            if ancestor.type == "call":
+                anc_name = ancestor.child_by_field_name("method") or next((c for c in ancestor.children if c.type == "identifier"), None)
+                if anc_name is not None and source[anc_name.start_byte : anc_name.end_byte].decode(errors="replace") == "namespace":
+                    anc_args = ancestor.child_by_field_name("arguments") or next((c for c in ancestor.children if c.type == "argument_list"), None)
+                    anc_path, _ = _sinatra_string(next((a for a in (anc_args.named_children if anc_args else []) if a.type == "string"), None), source)
+                    prefix = "/" + (anc_path or "").strip("/") + prefix if anc_path else prefix
+            ancestor = ancestor.parent
+        for method in methods:
+            full = (prefix + "/" + (path or "").lstrip("/")).rstrip("/") if prefix else (path or "")
+            entries.append(
+                {
+                    "method": method,
+                    "path": full or "/",
+                    "framework": "sinatra",
+                    "file": rel_path,
+                    "line": node.start_point[0] + 1,
+                    "handler": "block",
+                    "unresolved": dynamic,
+                    "note": "path is built at run time" if dynamic else None,
+                }
+            )
+    return entries
+
+
+_GRAPE_NESTERS = {"namespace", "resource", "resources", "group", "segment", "route_param"}
+
+
+def _grape_name(call: Node, source: bytes) -> str:
+    name = call.child_by_field_name("method") or next((c for c in call.children if c.type == "identifier"), None)
+    return source[name.start_byte : name.end_byte].decode(errors="replace") if name is not None else ""
+
+
+def _grape_first_argument(call: Node, source: bytes) -> str | None:
+    """First argument of a Grape DSL call as a path segment: `:users` / `'users'` / `"/users"` -> `users`."""
+    args = call.child_by_field_name("arguments") or next((c for c in call.children if c.type == "argument_list"), None)
+    first = args.named_children[0] if args is not None and args.named_children else None
+    if first is None:
+        return None
+    if first.type == "simple_symbol":
+        return source[first.start_byte + 1 : first.end_byte].decode(errors="replace")
+    text, _dynamic = _sinatra_string(first, source)
+    return text.strip("/") if text is not None else None
+
+
+def _extract_grape_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Grape APIs: `get ':id' do ... end` (and post, put, delete, patch, head, options), inside the `resource :users`,
+    `namespace :x`, `group`, `segment` and `route_param :id` blocks around them, with a class-level `prefix :api` and
+    `version 'v1', using: :path` in front. Mounting one API class in another is not followed."""
+    entries: list[dict] = []
+    class_prefix: dict[int, list[str]] = {}
+    for call in _walk_tree(root):
+        if call.type == "call" and call.child_by_field_name("receiver") is None and _grape_name(call, source) in ("prefix", "version"):
+            segment = _grape_first_argument(call, source)
+            using_path = "using: :path" in source[call.start_byte : call.end_byte].decode(errors="replace") or _grape_name(call, source) == "prefix"
+            klass = call.parent
+            while klass is not None and klass.type != "class":
+                klass = klass.parent
+            if segment and using_path and klass is not None:
+                class_prefix.setdefault(klass.id, []).append(segment)
+    for call in _walk_tree(root):
+        if call.type != "call" or call.child_by_field_name("receiver") is not None:
+            continue
+        name = _grape_name(call, source)
+        if name not in _SINATRA_VERBS or not any(c.type in ("do_block", "block") for c in call.children):
+            continue
+        segments: list[str] = []
+        ancestor = call.parent
+        klass_id = None
+        while ancestor is not None:
+            if ancestor.type == "call" and _grape_name(ancestor, source) in _GRAPE_NESTERS:
+                part = _grape_first_argument(ancestor, source)
+                if part:
+                    segments.insert(0, (":" + part) if _grape_name(ancestor, source) == "route_param" else part)
+            if ancestor.type == "class" and klass_id is None:
+                klass_id = ancestor.id
+            ancestor = ancestor.parent
+        leaf = _grape_first_argument(call, source)
+        parts = [*class_prefix.get(klass_id, []), *segments, *([leaf] if leaf else [])]
+        entries.append(
+            {
+                "method": name.upper(),
+                "path": "/" + "/".join(p.strip("/") for p in parts if p.strip("/")),
+                "framework": "grape",
+                "file": rel_path,
+                "line": call.start_point[0] + 1,
+                "handler": "block",
+                "unresolved": False,
+                "note": None,
+            }
+        )
+    return entries
+
+
+_ROCKET_ATTRIBUTE_ROUTE = re.compile(
+    r'#\[\s*(get|post|put|delete|patch|head|options)\s*\(\s*"([^"]*)"[^\]]*\](?:\s|//[^\n]*\n|/\*(?:[^*]|\*(?!/))*\*/|#\[[^\]]*\])*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)',
+    re.S,
+)
+_ROCKET_ROUTE_ATTRIBUTE = re.compile(
+    r'#\[\s*route\s*\(\s*([A-Z]+)\s*,\s*uri\s*=\s*"([^"]*)"[^\]]*\](?:\s|//[^\n]*\n|/\*(?:[^*]|\*(?!/))*\*/|#\[[^\]]*\])*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)',
+    re.S,
+)
+_ROCKET_MOUNT = re.compile(r'\.mount\(\s*"([^"]*)"\s*,\s*routes!\[([^\]]*)\]', re.S)
+
+
+def _rocket_collect_mounts(text: str) -> list[tuple[str, str | None, str]]:
+    """(prefix, module the handler is written under or None, handler) for every `.mount("/p", routes![m::h, h2])`."""
+    found: list[tuple[str, str | None, str]] = []
+    for prefix, handlers in _ROCKET_MOUNT.findall(text):
+        for item in (h.strip() for h in handlers.split(",")):
+            if not item:
+                continue
+            segments = item.split("::")
+            module = segments[-2] if len(segments) > 1 and segments[-2] not in ("self", "super", "crate") else None
+            found.append((prefix, module, segments[-1]))
+    return found
+
+
+def _extract_rocket_routes(
+    source: bytes, rel_path: str, repo_mounts: list[tuple[str, str | None, str]] | None = None
+) -> list[dict]:
+    """Rocket routes are attribute macros on functions (`#[get("/users/<id>")]`, `#[route(GET, uri = "/x")]`) mounted with
+    `.mount("/api", routes![a, b])`, usually in a different file from the handlers (`routes![users::login]`). A handler
+    takes the prefix of a mount that names it: one written with its module (`users::login`) matches the file or folder
+    of that name, an unqualified one matches only a mount in the same file. A handler mounted at several prefixes is
+    listed at each; one no mount names is listed with a note that its mount prefix is unknown."""
+    text = source.decode(errors="replace")
+    stem = Path(rel_path).stem
+    module = Path(rel_path).parent.name if stem in ("mod", "lib", "main") else stem
+    local = _rocket_collect_mounts(text)
+    entries: list[dict] = []
+    matches = [(m.group(1).upper(), m.group(2), m.group(3), m.start()) for m in _ROCKET_ATTRIBUTE_ROUTE.finditer(text)]
+    matches += [(m.group(1), m.group(2), m.group(3), m.start()) for m in _ROCKET_ROUTE_ATTRIBUTE.finditer(text)]
+    for method, raw_path, handler, start in sorted(matches, key=lambda item: item[3]):
+        path = raw_path.split("?", 1)[0] or "/"  # `/articles?<params..>`: the query part is not the path
+        prefixes: list[str] = []
+        for prefix, mount_module, name in [*local, *(repo_mounts or [])]:
+            if name == handler and (mount_module is None or mount_module == module) and prefix not in prefixes:
+                if mount_module is None and (prefix, None, name) not in local:
+                    continue
+                prefixes.append(prefix)
+        for prefix in prefixes or [None]:
+            joined = ((prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") or "/") if prefix is not None else path
+            entries.append(
+                {
+                    "method": method,
+                    "path": joined,
+                    "framework": "rocket",
+                    "file": rel_path,
+                    "line": text.count("\n", 0, start) + 1,
+                    "handler": handler,
+                    "unresolved": False,
+                    "note": None if prefix is not None else "no mount of this handler found",
+                }
+            )
+    return entries
+
+
+_WARP_VERB = re.compile(r"warp::(get|post|put|delete|patch|head|options)\s*\(\s*\)")
+_WARP_PATH_CALL = re.compile(r'warp::path\s*\(\s*"([^"]*)"\s*\)')
+_WARP_PATH_MACRO = re.compile(r"warp::path!\s*\(([^)]*)\)")
+_WARP_PARAM = re.compile(r"warp::path::param\b")
+_WARP_HANDLER = re.compile(r"\.(?:and_then|then)\(\s*(?:[\w:]*::)?(\w+)\s*\)")
+
+
+def _warp_skip_string(text: str, start: int) -> int:
+    """Index just past the Rust string literal that opens at `start` (a `"`)."""
+    i = start + 1
+    while i < len(text) and text[i] != '"':
+        i += 2 if text[i] == "\\" else 1
+    return i + 1
+
+
+def _warp_close(text: str, open_index: int) -> int:
+    """Index just past the bracket that closes the one at `open_index` (strings skipped)."""
+    depth = 0
+    i = open_index
+    while i < len(text):
+        if text[i] == '"':
+            i = _warp_skip_string(text, i)
+            continue
+        if text[i] in "([{":
+            depth += 1
+        elif text[i] in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return len(text)
+
+
+def _warp_split_alternatives(text: str) -> list[str]:
+    """`head.or(a).or(b).and(tail)` -> [head.and(tail), a.and(tail), b.and(tail)], alternatives split in turn (the
+    combinators after the last `.or(...)` apply to every alternative)."""
+    head_end: int | None = None
+    alternatives: list[str] = []
+    last_end = 0
+    depth = 0
+    i = 0
+    while i < len(text):
+        if text[i] == '"':
+            i = _warp_skip_string(text, i)
+            continue
+        if depth == 0 and text.startswith(".or(", i):
+            if head_end is None:
+                head_end = i
+            end = _warp_close(text, i + 3)
+            alternatives.append(text[i + 4 : end - 1])
+            last_end = end
+            i = end
+            continue
+        if text[i] in "([{":
+            depth += 1
+        elif text[i] in ")]}":
+            depth -= 1
+        i += 1
+    if head_end is None:
+        return [text]
+    tail = text[last_end:]
+    pieces: list[str] = []
+    for alternative in [text[:head_end], *alternatives]:
+        pieces.extend(_warp_split_alternatives(alternative + tail) if ".or(" in alternative else [alternative + tail])
+    return pieces
+
+
+def _warp_statements(text: str) -> list[tuple[int, str]]:
+    """(offset, initializer text) of every `let name = ...;` whose initializer mentions `warp::`; the end is the first `;`
+    outside any bracket or string, so closures with their own blocks and semicolons stay whole."""
+    found: list[tuple[int, str]] = []
+    consumed = 0
+    for match in re.finditer(r"\blet\s+(?:mut\s+)?\w+\s*(?::[^=;{}]+)?=\s*", text):
+        if match.start() < consumed:
+            continue
+        i = match.end()
+        depth = 0
+        while i < len(text):
+            if text[i] == '"':
+                i = _warp_skip_string(text, i)
+                continue
+            if text[i] in "([{":
+                depth += 1
+            elif text[i] in ")]}":
+                depth -= 1
+            elif text[i] == ";" and depth == 0:
+                break
+            i += 1
+        expression = text[match.end() : i]
+        consumed = i
+        if "warp::" in expression:
+            found.append((match.end(), expression))
+    return found
+
+
+def _extract_warp_routes(source: bytes, rel_path: str) -> list[dict]:
+    """warp filters: each `let name = warp::path("users").and(warp::get())...;` chain (and each of its `.or(...)`
+    alternatives) is one route: the `warp::path("a")` / `warp::path!("a" / "b" / u32)` segments in order (a non-literal
+    segment or `path::param` is `{param}`), the `warp::get()` ... verb (any method when none is named), and the
+    `and_then(handler)` name. A filter composed only of other named filters is not followed."""
+    text = source.decode(errors="replace")
+    entries: list[dict] = []
+    for statement_start, body in _warp_statements(text):
+        for piece in _warp_split_alternatives(body):
+            events: list[tuple[int, str]] = []
+            for m in _WARP_PATH_CALL.finditer(piece):
+                events.append((m.start(), m.group(1)))
+            for m in _WARP_PATH_MACRO.finditer(piece):
+                for part in (p.strip() for p in m.group(1).split("/")):
+                    if part:
+                        events.append((m.start(), part.strip('"') if part.startswith('"') else "{param}"))
+            for m in _WARP_PARAM.finditer(piece):
+                events.append((m.start(), "{param}"))
+            verb = _WARP_VERB.search(piece)
+            if not events and verb is None:
+                continue
+            if not events and "path::end" not in piece:
+                continue
+            segments = [seg.strip("/") for _pos, seg in sorted(events, key=lambda item: item[0]) if seg.strip("/") or seg == ""]
+            handler = _WARP_HANDLER.search(piece)
+            entries.append(
+                {
+                    "method": verb.group(1).upper() if verb else "ANY",
+                    "path": "/" + "/".join(s for s in segments if s),
+                    "framework": "warp",
+                    "file": rel_path,
+                    "line": text.count("\n", 0, statement_start) + 1,
+                    "handler": handler.group(1) if handler else "closure",
+                    "unresolved": False,
+                    "note": "read from the text of one filter chain; filters combined elsewhere are not followed",
+                }
+            )
+    return entries
 
 
 def _extract_axum_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
@@ -1064,6 +2303,313 @@ def _extract_spring_boot_routes(root: Node, source: bytes, rel_path: str) -> lis
                                     "note": _spring_class_prefix_note(n, source),
                                 }
                             )
+    return entries
+
+
+_JAXRS_VERBS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+_JAXRS_APPLICATION_PATH = re.compile(r'@ApplicationPath\(\s*(?:value\s*=\s*)?"([^"]*)"')
+
+
+def _jaxrs_annotations(modifiers: Node | None, source: bytes) -> list[tuple[str, str | None]]:
+    """(annotation name, first string literal in its arguments) of each annotation in a Java `modifiers` node."""
+    found: list[tuple[str, str | None]] = []
+    for ann in (c for c in (modifiers.children if modifiers is not None else []) if c.type in ("annotation", "marker_annotation")):
+        name_node = ann.child_by_field_name("name")
+        if name_node is None:
+            continue
+        args = ann.child_by_field_name("arguments")
+        literal = next((c for c in (args.children if args is not None else []) if c.type == "string_literal"), None)
+        if literal is None and args is not None:  # `@Path(value = "/x")`
+            for pair in args.children:
+                literal = next((c for c in pair.children if c.type == "string_literal"), None)
+                if literal is not None:
+                    break
+        text = _java_string_literal_text(literal, source) if literal is not None else None
+        found.append((source[name_node.start_byte : name_node.end_byte].decode().split(".")[-1], text))
+    return found
+
+
+def _extract_jaxrs_routes(
+    root: Node, source: bytes, rel_path: str, application_path: str = "", ambiguous_application_path: bool = False
+) -> list[dict]:
+    """JAX-RS resources (javax.ws.rs / jakarta.ws.rs): a class `@Path` prefix, methods annotated `@GET` ... `@PATCH` with
+    an optional `@Path`. The application-wide `@ApplicationPath`, declared on another class, is prepended when the
+    repository has exactly one."""
+    entries: list[dict] = []
+    for cls in _walk_tree(root):
+        if cls.type not in ("class_declaration", "interface_declaration"):
+            continue
+        class_path = next((text for name, text in _jaxrs_annotations(next((c for c in cls.children if c.type == "modifiers"), None), source) if name == "Path"), None)
+        body = next((c for c in cls.children if c.type == "class_body" or c.type == "interface_body"), None)
+        for method in (c for c in (body.children if body is not None else []) if c.type == "method_declaration"):
+            annotations = _jaxrs_annotations(next((c for c in method.children if c.type == "modifiers"), None), source)
+            verbs = [name for name, _t in annotations if name in _JAXRS_VERBS]
+            if not verbs:
+                continue
+            method_path = next((text for name, text in annotations if name == "Path"), None)
+            name_node = method.child_by_field_name("name")
+            handler = source[name_node.start_byte : name_node.end_byte].decode() if name_node is not None else "unknown"
+            parts = [p for p in (application_path, class_path, method_path) if p and p.strip("/")]
+            path = "/" + "/".join(p.strip("/") for p in parts)
+            for verb in verbs:
+                entries.append(
+                    {
+                        "method": verb,
+                        "path": path,
+                        "framework": "jaxrs",
+                        "file": rel_path,
+                        "line": method.start_point[0] + 1,
+                        "handler": handler,
+                        "unresolved": False,
+                        "note": (
+                            "prefix from @ApplicationPath found elsewhere in the repository" if application_path
+                            else "the repository declares several different @ApplicationPath values: none is applied"
+                            if ambiguous_application_path else None
+                        ),
+                    }
+                )
+    return entries
+
+
+_KOTLIN_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
+_KOTLIN_SPRING_CONTROLLERS = {"RestController", "Controller"}
+
+
+_SPRING_PLACEHOLDER = re.compile(r"\$\{[^}:]*:([^}]*)\}")
+
+
+def _spring_placeholder_defaults(path: str) -> tuple[str, bool]:
+    """`${api.base-path:/api}/users` -> (`/api/users`, True): a Spring property placeholder with a default stands for that
+    default unless configuration overrides it."""
+    replaced = _SPRING_PLACEHOLDER.sub(lambda m: m.group(1), path)
+    return re.sub(r"/{2,}", "/", replaced), replaced != path
+
+
+def _kotlin_annotations(modifiers: Node | None, source: bytes) -> list[tuple[str, str, Node]]:
+    """(annotation name, argument text, node) for every annotation in a Kotlin `modifiers` node."""
+    found: list[tuple[str, str, Node]] = []
+    for ann in (c for c in (modifiers.children if modifiers is not None else []) if c.type == "annotation"):
+        invocation = next((c for c in ann.children if c.type == "constructor_invocation"), None)
+        head = invocation if invocation is not None else next((c for c in ann.children if c.type == "user_type"), None)
+        if head is None:
+            continue
+        name_node = head if head.type == "user_type" else next((c for c in head.children if c.type in ("user_type", "identifier")), head)
+        name = source[name_node.start_byte : name_node.end_byte].decode(errors="replace").split(".")[-1].split("<")[0].strip()
+        args = next((c for c in head.children if c.type == "value_arguments"), None)
+        found.append((name, source[args.start_byte : args.end_byte].decode() if args is not None else "", ann))
+    return found
+
+
+def _kotlin_split_arguments(body: str) -> list[str]:
+    """Top-level comma-separated arguments of an annotation (brackets, parentheses and strings kept whole)."""
+    parts: list[str] = []
+    depth = 0
+    quote = ""
+    start = 0
+    for i, char in enumerate(body):
+        if quote:
+            if char == quote and body[i - 1] != "\\":
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(body[start:i])
+            start = i + 1
+    parts.append(body[start:])
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _kotlin_spring_paths(args_text: str) -> list[str] | None:
+    """The literal paths of a mapping annotation: the first positional argument, or `value =` / `path =` (a string or a list
+    of them). [""] when no path is given; None when one is given but is not a string literal (a constant). Other string
+    attributes (`name = "x"`, `params = "a,b"`) are not paths."""
+    body = args_text.strip()[1:-1] if args_text else ""
+    chosen: str | None = None
+    for index, argument in enumerate(_kotlin_split_arguments(body)):
+        named = re.match(r"(\w+)\s*=\s*(.*)$", argument, re.S)
+        if named and named.group(1) in ("value", "path"):
+            chosen = named.group(2)
+        elif not named and index == 0:
+            chosen = argument
+    if chosen is None:
+        return [""]
+    literals = [text.replace("\\$", "$") for text in _KOTLIN_STRING.findall(chosen)]
+    return literals or None
+
+
+def _extract_kotlin_spring_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Spring MVC controllers written in Kotlin: `@RestController` / `@Controller` classes with a class-level
+    `@RequestMapping` prefix and `@GetMapping` ... `@PatchMapping` / `@RequestMapping(method = [..])` functions."""
+    entries: list[dict] = []
+    for cls in _walk_tree(root):
+        if cls.type != "class_declaration":
+            continue
+        class_annotations = _kotlin_annotations(next((c for c in cls.children if c.type == "modifiers"), None), source)
+        if not any(name in _KOTLIN_SPRING_CONTROLLERS for name, _a, _n in class_annotations):
+            continue
+        prefixes = [""]
+        prefix_is_constant = False
+        for name, args, _node in class_annotations:
+            if name == "RequestMapping":
+                found = _kotlin_spring_paths(args)
+                prefix_is_constant = found is None
+                prefixes = found or [""]
+        body = next((c for c in cls.children if c.type == "class_body"), None)
+        for fn in (c for c in (body.children if body is not None else []) if c.type == "function_declaration"):
+            ident = next((c for c in fn.children if c.type == "identifier"), None)
+            handler = source[ident.start_byte : ident.end_byte].decode() if ident is not None else "unknown"
+            for name, args, node in _kotlin_annotations(next((c for c in fn.children if c.type == "modifiers"), None), source):
+                if name in _SPRING_VERB_ANNOTATIONS:
+                    method = _SPRING_VERB_ANNOTATIONS[name]
+                elif name == "RequestMapping":
+                    found = re.search(r"RequestMethod\.([A-Z]+)", args)
+                    method = found.group(1) if found else "ANY"
+                else:
+                    continue
+                paths = _kotlin_spring_paths(args)
+                for prefix in prefixes:
+                    for path in paths if paths is not None else [None]:
+                        joined = (prefix.rstrip("/") + "/" + (path or "").lstrip("/")).rstrip("/") if (prefix or path) else ""
+                        joined, defaulted = _spring_placeholder_defaults(joined)
+                        note = None
+                        if path is None:
+                            note = "path is a constant, not a string literal"
+                        elif prefix_is_constant:
+                            note = "the controller's @RequestMapping path is a constant, not a string literal"
+                        elif "${" in joined:
+                            note = "path holds a property placeholder with no default"
+                        elif defaulted:
+                            note = "a property placeholder was replaced by its default value"
+                        entries.append(
+                            {
+                                "method": method,
+                                "path": joined or "/",
+                                "framework": "spring_boot",
+                                "file": rel_path,
+                                "line": node.start_point[0] + 1,
+                                "handler": handler,
+                                "unresolved": path is None or prefix_is_constant or "${" in joined,
+                                "note": note,
+                            }
+                        )
+    return entries
+
+
+_MICRONAUT_VERBS = {"Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH", "Head": "HEAD",
+                    "Options": "OPTIONS", "Trace": "TRACE"}
+_MICRONAUT_CONTROLLER = re.compile(r"@Controller\b(?:\(([^)]*)\))?")
+_MICRONAUT_ROUTE = re.compile(
+    r"@(Get|Post|Put|Delete|Patch|Head|Options|Trace)\b(?:\(([^)]*)\))?"
+    r"(?:\s*@\w+(?:\([^)]*\))?)*\s*"
+    r"(?:[^;{}()@=]*?\bfun\s+(?:<[^>]*>\s*)?(\w+)|[^;{}()@=]*?\b(\w+)\s*\()"
+)
+_MICRONAUT_PLACEHOLDER = re.compile(r"\$\{[^}:]*:([^}]*)\}")
+
+
+def _micronaut_blank_comments(text: str) -> str:
+    """The text with `//`, `/* */` and KDoc/Javadoc comments blanked (same length, newlines kept)."""
+    return re.sub(r"//[^\n]*|/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), text, flags=re.S)
+
+
+def _micronaut_paths(args: str | None) -> list[str]:
+    """Literal paths of a Micronaut annotation: the first positional argument, or `uri =` / `uris =` / `value =` (a string
+    or a list of them). [""] when none is given. Other string attributes (`name = "x"`, `produces = ...`) are not paths."""
+    if not args:
+        return [""]
+    parts: list[str] = []
+    depth = 0
+    quote = ""
+    start = 0
+    for i, char in enumerate(args):
+        if quote:
+            if char == quote and args[i - 1] != "\\":
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(args[start:i])
+            start = i + 1
+    parts.append(args[start:])
+    found: list[str] = []
+    for index, part in enumerate(p.strip() for p in parts if p.strip()):
+        named = re.match(r"(\w+)\s*=\s*(.*)$", part, re.S)
+        if named and named.group(1) in ("uri", "uris", "value"):
+            found.extend(re.findall(r"""["']([^"']*)["']""", named.group(2)))
+        elif not named and index == 0:
+            found.extend(re.findall(r"""["']([^"']*)["']""", part))
+    return found or [""]
+
+
+def _micronaut_class_spans(text: str, starts: list[int]) -> list[tuple[int, int]]:
+    """(open, close) offsets of the class body that follows each annotation offset in `starts`."""
+    spans: list[tuple[int, int]] = []
+    for start in starts:
+        open_index = text.find("{", start)
+        if open_index < 0:
+            continue
+        depth = 0
+        i = open_index
+        while i < len(text):
+            if text[i] == '"':
+                i += 1
+                while i < len(text) and text[i] != '"':
+                    i += 2 if text[i] == "\\" else 1
+            elif text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        spans.append((open_index, i))
+    return spans
+
+
+def _extract_micronaut_routes(source: bytes, rel_path: str) -> list[dict]:
+    """Micronaut controllers in Java or Kotlin: a class `@Controller("/users")` (the root when it has no path) prefixes the
+    `@Get("/{id}")` ... `@Trace` methods inside that class's body. Methods of other classes (a `@Client` interface uses the
+    same annotations) and anything in a comment are ignored; a `${property:default}` placeholder is replaced by its default,
+    one without a default is reported unresolved."""
+    text = _micronaut_blank_comments(source.decode(errors="replace"))
+    controllers = list(_MICRONAUT_CONTROLLER.finditer(text))
+    spans = _micronaut_class_spans(text, [m.end() for m in controllers])
+    entries: list[dict] = []
+    for match in _MICRONAUT_ROUTE.finditer(text):
+        owner = None
+        for controller, (open_index, close_index) in zip(controllers, spans):
+            if open_index < match.start() < close_index and (owner is None or open_index > owner[1][0]):
+                owner = (controller, (open_index, close_index))
+        if owner is None:
+            continue  # an annotation outside a controller class
+        prefix = _micronaut_paths(owner[0].group(1))[0]
+        handler = match.group(3) or match.group(4) or "unknown"
+        for path in _micronaut_paths(match.group(2)):
+            joined = (prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") if prefix or path else ""
+            replaced = _MICRONAUT_PLACEHOLDER.sub(lambda m: m.group(1), joined)
+            unresolved = "${" in replaced
+            entries.append(
+                {
+                    "method": _MICRONAUT_VERBS[match.group(1)],
+                    "path": re.sub(r"/{2,}", "/", replaced) or "/",
+                    "framework": "micronaut",
+                    "file": rel_path,
+                    "line": text.count("\n", 0, match.start()) + 1,
+                    "handler": handler,
+                    "unresolved": unresolved,
+                    "note": (
+                        "path holds a property placeholder with no default" if unresolved
+                        else "a property placeholder was replaced by its default value" if replaced != joined else None
+                    ),
+                }
+            )
     return entries
 
 
@@ -1280,7 +2826,7 @@ def _extract_vapor_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                                 # Normalized to a leading "/" for consistency
                                 # with every other framework's stored paths -
                                 # Vapor's own source never writes one.
-                                "path": "/" + "/".join(path_segments),
+                                "path": "/" + "/".join(seg.strip("/") for seg in path_segments if seg.strip("/")),
                                 "framework": "vapor",
                                 "file": rel_path,
                                 "line": n.start_point[0] + 1,
@@ -1727,6 +3273,147 @@ def _laravel_singular(segment: str) -> str:
     return word[:-1] if word.endswith("s") and not word.endswith("ss") else word
 
 
+_SYMFONY_ROUTE = re.compile(
+    r"#\[\s*(?:\\?Symfony\\Component\\Routing\\(?:Attribute|Annotation)\\)?Route\s*\(((?:[^()]|\([^()]*\))*)\)\s*\]"
+    r"\s*(?:#\[[^\]]*\]\s*)*(?:(?:public|private|protected|final|abstract|static|readonly)\s+)*(class|function)\s+(\w+)",
+    re.S,
+)
+_SLIM_ROUTE = re.compile(
+    r"\$\w+\s*->\s*(get|post|put|delete|patch|options|any)\s*\(\s*(['\"])([^'\"]*)\2"
+    r"(?:\s*,\s*(['\"][\w\\\\:]+['\"]|[\w\\\\]+::class|\[[^\]]*\]|(?:static\s+)?(?:function|fn)\b))?"
+)
+_SLIM_GROUP = re.compile(r"->\s*group\s*\(\s*(['\"])([^'\"]*)\1\s*,\s*(?:static\s+)?(?:function|fn)[^{]*\{")
+_PHP_STRING = re.compile(r"""['"]([^'"]*)['"]""")
+
+
+def _php_brace_end(text: str, open_index: int) -> int:
+    """Index of the `}` closing the `{` at `open_index`; braces inside strings and comments are not counted."""
+    depth = 0
+    i = open_index
+    while i < len(text):
+        char = text[i]
+        if char in "'\"":
+            i += 1
+            while i < len(text) and text[i] != char:
+                i += 2 if text[i] == "\\" else 1
+        elif text.startswith("//", i) or char == "#" and not text.startswith("#[", i):
+            i = text.find("\n", i) if text.find("\n", i) >= 0 else len(text)
+            continue
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = end + 1 if end >= 0 else len(text)
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return len(text)
+
+
+def _php_split_arguments(body: str) -> list[str]:
+    """Top-level comma-separated arguments of an attribute (brackets, parentheses and strings kept whole)."""
+    parts: list[str] = []
+    depth = 0
+    quote = ""
+    start = 0
+    for i, char in enumerate(body):
+        if quote:
+            if char == quote and body[i - 1] != "\\":
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(body[start:i])
+            start = i + 1
+    parts.append(body[start:])
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _extract_symfony_routes(source: bytes, rel_path: str) -> list[dict]:
+    """Symfony attribute routes: `#[Route('/api')]` on a class prefixes the `#[Route('/x', methods: ['GET', 'POST'])]`
+    on its methods (any HTTP method when `methods` is absent). Routes configured in YAML or by docblock annotations
+    are not read."""
+    text = source.decode(errors="replace")
+    entries: list[dict] = []
+    class_prefixes: dict[str, str] = {}
+    class_starts = [(m.start(), m.group(1)) for m in re.finditer(r"\bclass\s+(\w+)", text)]
+    for match in _SYMFONY_ROUTE.finditer(text):
+        args, kind, name = match.group(1), match.group(2), match.group(3)
+        path = ""
+        for index, argument in enumerate(_php_split_arguments(args)):
+            named = re.match(r"(\w+)\s*:\s*(.*)$", argument, re.S)
+            literal = _PHP_STRING.fullmatch((named.group(2) if named else argument).strip())
+            if literal and ((named and named.group(1) == "path") or (not named and index == 0)):
+                path = literal.group(1)
+        if kind == "class":
+            class_prefixes[name] = path
+            continue
+        enclosing = next((cname for start, cname in reversed(class_starts) if start < match.start()), None)
+        class_prefix = class_prefixes.get(enclosing or "", "")
+        methods_match = re.search(r"\bmethods\s*:\s*\[([^\]]*)\]", args)
+        methods = (
+            [m.upper() for m in _PHP_STRING.findall(methods_match.group(1))]
+            + re.findall(r"\bMETHOD_([A-Z]+)\b", methods_match.group(1))  # Request::METHOD_GET
+            if methods_match else ["ANY"]
+        )
+        full = (class_prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") if class_prefix else path
+        for method in methods:
+            entries.append(
+                {
+                    "method": method,
+                    "path": full or "/",
+                    "framework": "symfony",
+                    "file": rel_path,
+                    "line": text.count("\n", 0, match.start()) + 1,
+                    "handler": name,
+                    "unresolved": False,
+                    "note": None,
+                }
+            )
+    return entries
+
+
+def _extract_slim_routes(source: bytes, rel_path: str) -> list[dict]:
+    """Slim routes: `$app->get('/x', $handler)` (also post, put, delete, patch, options, any), inside any number of
+    `$app->group('/api', function (...) { ... })` closures whose prefixes are composed."""
+    text = source.decode(errors="replace")
+    groups = [(m.end() - 1, _php_brace_end(text, m.end() - 1), m.group(2)) for m in _SLIM_GROUP.finditer(text)]
+    entries: list[dict] = []
+    for match in _SLIM_ROUTE.finditer(text):
+        prefix = "".join("/" + g[2].strip("/") for g in sorted(groups) if g[0] < match.start() < g[1] and g[2].strip("/"))
+        path = match.group(3)
+        if path and not path.startswith(("/", "[")):
+            continue  # `$settings->get('displayErrorDetails')`: a container or config lookup, not a route
+        full = (prefix + "/" + path.lstrip("/")).rstrip("/") if prefix else path
+        entries.append(
+            {
+                "method": "ANY" if match.group(1) == "any" else match.group(1).upper(),
+                "path": full or "/",
+                "framework": "slim",
+                "file": rel_path,
+                "line": text.count("\n", 0, match.start()) + 1,
+                "handler": _slim_handler_label(match.group(4)),
+                "unresolved": False,
+                "note": None,
+            }
+        )
+    return entries
+
+
+def _slim_handler_label(raw: str | None) -> str:
+    if not raw:
+        return "unknown"
+    if raw.startswith(("function", "fn", "static")):
+        return "closure"
+    return raw.strip("'\"")
+
+
 def _extract_laravel_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
     # routes/api.php is mounted under /api by Laravel's default routing (RouteServiceProvider / bootstrap/app.php)
@@ -1837,52 +3524,92 @@ def _aspnet_attributes(node: Node) -> list[Node]:
     ]
 
 
-def _aspnet_class_prefix_note(method_node: Node, source: bytes) -> str | None:
+def _aspnet_enclosing_class(method_node: Node) -> Node | None:
     node = method_node.parent
     while node is not None and node.type != "class_declaration":
         node = node.parent
-    if node is None:
-        return None
-    for attr in _aspnet_attributes(node):
+    return node
+
+
+def _aspnet_class_template(class_node: Node | None, source: bytes) -> tuple[str | None, bool]:
+    """(literal template, present) of a controller's class-level [Route] / [RoutePrefix]. `present` with a None template
+    means the attribute exists but its argument is not a string literal."""
+    if class_node is None:
+        return None, False
+    for attr in _aspnet_attributes(class_node):
         name_node = attr.child_by_field_name("name")
-        if (
-            name_node is not None
-            and source[name_node.start_byte : name_node.end_byte].decode() == "Route"
-        ):
-            return "class-level [Route] template present, not composed into this path"
-    return None
+        if name_node is not None and source[name_node.start_byte : name_node.end_byte].decode() in ("Route", "RoutePrefix"):
+            return _aspnet_attribute_path(attr, source), True
+    return None, False
+
+
+def _aspnet_compose_route(class_template: str | None, method_template: str | None, controller: str, action: str) -> str:
+    """ASP.NET attribute routing: a method template starting with `/` or `~/` replaces the class template, otherwise the
+    two are joined; `[controller]` and `[action]` tokens are replaced by the class name (without `Controller`) and the
+    method name."""
+    if method_template is not None and method_template.startswith(("/", "~/")):
+        path = "/" + method_template.lstrip("~").lstrip("/")
+    else:
+        parts = [p.strip("/") for p in (class_template, method_template) if p]
+        path = "/" + "/".join(p for p in parts if p)
+    return path.replace("[controller]", controller).replace("[action]", action)
 
 
 def _extract_aspnet_attribute_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
     for n in _walk_tree(root):
-        if n.type == "method_declaration":
-            name_node = n.child_by_field_name("name")
-            handler = "unknown"
-            if name_node is not None:
-                handler = source[name_node.start_byte : name_node.end_byte].decode()
+        if n.type != "method_declaration":
+            continue
+        name_node = n.child_by_field_name("name")
+        handler = "unknown"
+        if name_node is not None:
+            handler = source[name_node.start_byte : name_node.end_byte].decode()
+        class_node = _aspnet_enclosing_class(n)
+        class_template, has_class_route = _aspnet_class_template(class_node, source)
+        controller = ""
+        if class_node is not None:
+            class_name = class_node.child_by_field_name("name")
+            if class_name is not None:
+                controller = source[class_name.start_byte : class_name.end_byte].decode().removesuffix("Controller")
 
-            for attr in _aspnet_attributes(n):
-                attr_name_node = attr.child_by_field_name("name")
-                if attr_name_node is None:
-                    continue
-                attr_name = source[attr_name_node.start_byte : attr_name_node.end_byte].decode()
-                if attr_name in _ASPNET_ATTRIBUTE_METHODS:
-                    path = _aspnet_attribute_path(attr, source)
-                    if path is not None:
-                        entries.append(
-                            {
-                                "method": _ASPNET_ATTRIBUTE_METHODS[attr_name],
-                                "path": path,
-                                "framework": "aspnet_attribute",
-                                "file": rel_path,
-                                "line": attr.start_point[0] + 1,
-                                "handler": handler,
-                                "unresolved": False,
-                                "note": _aspnet_class_prefix_note(n, source),
-                            }
-                        )
+        verb_attrs: list[tuple[str, str | None, Node]] = []
+        route_template: str | None = None
+        route_attr: Node | None = None
+        for attr in _aspnet_attributes(n):
+            attr_name_node = attr.child_by_field_name("name")
+            if attr_name_node is None:
+                continue
+            attr_name = source[attr_name_node.start_byte : attr_name_node.end_byte].decode()
+            if attr_name in _ASPNET_ATTRIBUTE_METHODS:
+                verb_attrs.append((_ASPNET_ATTRIBUTE_METHODS[attr_name], _aspnet_attribute_path(attr, source), attr))
+            elif attr_name == "Route":
+                route_template = _aspnet_attribute_path(attr, source)
+                route_attr = attr
+        if not verb_attrs and route_template is not None and route_attr is not None:
+            verb_attrs.append(("ANY", route_template, route_attr))
+        for method, template, attr in verb_attrs:
+            if template is None:
+                template = route_template  # [HttpGet] with no template of its own uses the method's [Route]
+            class_unresolved = has_class_route and class_template is None
+            if class_unresolved:
+                path, note = template or "/", "class-level [Route] template is not a string literal, not composed into this path"
+            elif class_template is not None or template is None:
+                path, note = _aspnet_compose_route(class_template, template, controller, handler), None
+            else:
+                path, note = template, None  # no class template: the path as written on the method
+            entries.append(
+                {
+                    "method": method,
+                    "path": path,
+                    "framework": "aspnet_attribute",
+                    "file": rel_path,
+                    "line": attr.start_point[0] + 1,
+                    "handler": handler,
+                    "unresolved": class_unresolved,  # the class route could not be read: the path is partial
+                    "note": note,
+                }
+            )
     return entries
 
 
@@ -1956,6 +3683,33 @@ def _extract_aspnet_minimal_routes(root: Node, source: bytes, rel_path: str) -> 
     return entries
 
 
+_JS_RESOLVE_EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx")
+
+
+def _resolve_js_module_spec(repo_path: Path, from_path: Path, spec: str) -> str | None:
+    """Repo-relative file a relative `require('./x')` / `import ... from './x'` points at (x.js, x/index.js, an
+    explicit extension, or a `.js` spec whose source is `.ts`); None for packages and anything outside the repo."""
+    if not spec.startswith("."):
+        return None
+    base = (from_path.parent / spec).resolve()
+    root = repo_path.resolve()
+    candidates = [base]
+    if base.suffix in _JS_RESOLVE_EXTENSIONS:
+        candidates += [base.with_suffix(ext) for ext in _JS_RESOLVE_EXTENSIONS]
+    candidates += [Path(str(base) + ext) for ext in _JS_RESOLVE_EXTENSIONS]
+    candidates += [base / ("index" + ext) for ext in _JS_RESOLVE_EXTENSIONS]
+    for candidate in candidates:
+        try:
+            if candidate.is_file() and (candidate == root or root in candidate.parents):
+                return str(candidate.relative_to(root)).replace("\\", "/")
+        except OSError:
+            continue
+    return None
+
+
+_JS_REEXPORT = re.compile(rb"\bexport\s+(?:\*|\{[^}]*\})(?:\s+as\s+\w+)?\s+from\b")
+
+
 def map_api_endpoints(
     repo_path: Path,
     *,
@@ -1996,6 +3750,7 @@ def map_api_endpoints(
     # build_module_graph's own four-call version of this).
     source_paths = list(_iter_source_files(repo_path, ignored_paths))
     cross_file_router_mounts: dict[tuple[str, str], list[str]] = {}
+    flask_facts: list[dict] = []
     for path in source_paths:
         if path.suffix != ".py":
             continue
@@ -2008,6 +3763,14 @@ def map_api_endpoints(
         )
         for key, prefixes in collected.items():
             cross_file_router_mounts.setdefault(key, []).extend(prefixes)
+        if b"lueprint" in source or b"add_url_rule" in source:  # Blueprint(...), register_blueprint(...)
+            flask_facts.append(_fb.collect_file_facts(
+                tree.root_node, source, _rel(repo_path, path),
+                lambda name, _r=tree.root_node, _s=source, _p=path: _resolve_import_binding_with_name(
+                    _r, _s, name, repo_path, _p, python_source_roots
+                ),
+            ))
+    flask_prefixes, flask_unresolved = _fb.effective_prefixes(flask_facts)
 
     # A router-defining file's composed endpoint paths depend on every
     # include_router(..., prefix=...) call that targets it, which can live
@@ -2023,6 +3786,114 @@ def map_api_endpoints(
     # correctness that doesn't depend on tracking which mounting file
     # changed - see docs/audits/Claude_Audit.md finding 20.
     cross_file_mount_defining_files = {defining_file for defining_file, _router in cross_file_router_mounts}
+    # a blueprint's routes depend on registrations in other files too (url_prefix, nesting, factories)
+    cross_file_mount_defining_files |= {file for file, _name in flask_prefixes}
+
+    # JAX-RS: `@ApplicationPath("/api")` sits on an Application class, apart from the resources it prefixes, so resource
+    # files are read afresh each scan, never reused from the cache.
+    jaxrs_application_paths: set[str] = set()
+    for path in source_paths:
+        if path.suffix != ".java":
+            continue
+        jaxrs_source = read_bytes_or_none(path)
+        if jaxrs_source is None or b"ws.rs" not in jaxrs_source:
+            continue
+        cross_file_mount_defining_files.add(_rel(repo_path, path))
+        uncommented = re.sub(r"/\*.*?\*/|//[^\n]*", " ", jaxrs_source.decode(errors="replace"), flags=re.S)
+        jaxrs_application_paths.update(_JAXRS_APPLICATION_PATH.findall(uncommented))
+    jaxrs_application_path = next(iter(jaxrs_application_paths)) if len(jaxrs_application_paths) == 1 else ""
+    jaxrs_ambiguous_application_path = len(jaxrs_application_paths) > 1
+
+    # Hono: `app.route('/api', sub)` mounts a sub-app that can live in another file, so every file that mentions Hono
+    # is read afresh each scan, never reused from the cache.
+    hono_facts: list[dict] = []
+    for path in source_paths:
+        hono_key = {".js": "js", ".jsx": "js", ".ts": "ts", ".tsx": "tsx"}.get(path.suffix)
+        if hono_key is None:
+            continue
+        hono_source = read_bytes_or_none(path)
+        if hono_source is None or b"hono" not in hono_source.lower():
+            continue
+        cross_file_mount_defining_files.add(_rel(repo_path, path))
+        hono_facts.append(
+            _hono_file_facts(
+                parsers[hono_key].parse(hono_source).root_node, hono_source, _rel(repo_path, path),
+                lambda spec, _p=path: _js_resolve_relative(repo_path, _p, spec),
+            )
+        )
+    hono_prefixes = _hono_resolve_prefixes(hono_facts) if hono_facts else {}
+
+    # Pyramid: a view's path is the pattern `config.add_route('name', '/p')` gave its route name, usually in another
+    # file (an `includeme(config)` that never imports pyramid), so every file that mentions pyramid or calls add_route is
+    # read afresh each scan, never reused from the cache. The table is only used when some file mentions pyramid.
+    pyramid_routes: dict[str, dict[str, str]] = {}
+    pyramid_files: list[str] = []
+    repo_uses_pyramid = False
+    for path in source_paths:
+        if path.suffix != ".py":
+            continue
+        pyramid_source = read_bytes_or_none(path)
+        if pyramid_source is None:
+            continue
+        mentions = b"pyramid" in pyramid_source
+        repo_uses_pyramid = repo_uses_pyramid or mentions
+        if not mentions and b"add_route(" not in pyramid_source:
+            continue
+        pyramid_files.append(_rel(repo_path, path))
+        for route_name, pattern in _pyramid_collect_routes(parsers["py"].parse(pyramid_source).root_node, pyramid_source).items():
+            pyramid_routes.setdefault(route_name, {})[_rel(repo_path, path)] = pattern
+    if repo_uses_pyramid:
+        cross_file_mount_defining_files.update(pyramid_files)  # not for a repo whose add_route calls belong to another framework
+    else:
+        pyramid_routes = {}
+
+    # Rocket: `.mount("/api", routes![users::login])` lives apart from the handlers it prefixes, so every file that
+    # mentions rocket is read afresh each scan, never reused from the cache.
+    rocket_mounts: list[tuple[str, str | None, str]] = []
+    rocket_prelude_candidates: list[str] = []
+    for path in source_paths:
+        if path.suffix != ".rs":
+            continue
+        rocket_source = read_bytes_or_none(path)
+        if rocket_source is None:
+            continue
+        if b"rocket" not in rocket_source:
+            # a handler file that gets the route macros through a prelude re-export never says "rocket"
+            if b"actix_web" not in rocket_source and b"#[" in rocket_source and _ROCKET_ATTRIBUTE_ROUTE.search(rocket_source.decode(errors="replace")):
+                rocket_prelude_candidates.append(_rel(repo_path, path))
+            continue
+        cross_file_mount_defining_files.add(_rel(repo_path, path))
+        rocket_mounts.extend(_rocket_collect_mounts(rocket_source.decode(errors="replace")))
+    rocket_prelude_files = set(rocket_prelude_candidates) if rocket_mounts else set()
+    cross_file_mount_defining_files |= rocket_prelude_files
+
+    express_facts: list[dict] = []
+    for path in source_paths:
+        parser_key = {".js": "js", ".jsx": "js", ".ts": "ts", ".tsx": "tsx"}.get(path.suffix)
+        if parser_key is None:
+            continue
+        source = read_bytes_or_none(path)
+        if source is None or (b"express" not in source and b".use(" not in source and b"Router" not in source
+                              and not _JS_REEXPORT.search(source)):  # a barrel that re-exports routers
+            continue
+        tree = parsers[parser_key].parse(source)
+        express_facts.append(_em.collect_file_facts(
+            tree.root_node, source, _rel(repo_path, path),
+            lambda spec, _p=path: _resolve_js_module_spec(repo_path, _p, spec),
+        ))
+    express_prefixes, express_unresolved, express_resolved_sites, express_receiver_node = (
+        _em.resolve(express_facts) if express_facts else ({}, set(), set(), lambda _f, _n: None)
+    )
+    express_helpers = (_looks_like_express_path, _express_handler_label, _js_string_literal_text)
+
+    def express_extract(root_node, source_bytes, rel):
+        return _em.extract_routes(
+            root_node, source_bytes, rel, express_prefixes, express_unresolved, express_resolved_sites,
+            express_receiver_node, express_helpers,
+        )
+
+    # an Express router's paths depend on `use(...)` mounts in other files, so its file is never reused from cache
+    cross_file_mount_defining_files |= {file for file, _name in express_prefixes}
 
     for path in source_paths:
         rel_path = _rel(repo_path, path)
@@ -2042,50 +3913,100 @@ def map_api_endpoints(
             if source is None:
                 continue
             tree = parsers["py"].parse(source)
+            def flask_key_for(name, _r=tree.root_node, _s=source, _p=path, _rel_path=rel_path):
+                # the blueprint a name in THIS file stands for: its own definition, or the one it imports
+                if (_rel_path, name) in flask_prefixes:
+                    return (_rel_path, name)
+                bound = _resolve_import_binding_with_name(_r, _s, name, repo_path, _p, python_source_roots)
+                return bound if bound and bound in flask_prefixes else (_rel_path, name)
+
             endpoints.extend(
                 _extract_flask_fastapi_routes(
-                    tree.root_node, source, rel_path, cross_file_router_mounts
+                    tree.root_node, source, rel_path, cross_file_router_mounts,
+                    flask_blueprint_prefixes=flask_prefixes, flask_unresolved_blueprints=flask_unresolved,
+                    flask_key_for=flask_key_for if flask_prefixes else None,
                 )
             )
+            if b"add_url_rule" in source:
+                endpoints.extend(_fb.extract_add_url_rules(
+                    tree.root_node, source, rel_path, flask_prefixes, flask_unresolved, key_for=flask_key_for
+                ))
             if path.name == "urls.py":
                 endpoints.extend(_extract_django_routes(tree.root_node, source, rel_path))
+            if b"starlette" in source:
+                endpoints.extend(_extract_starlette_aiohttp_routes(tree.root_node, source, rel_path, "starlette"))
+            if b"aiohttp" in source:
+                endpoints.extend(_extract_starlette_aiohttp_routes(tree.root_node, source, rel_path, "aiohttp"))
+            if b"bottle" in source:
+                endpoints.extend(_extract_python_decorator_routes(tree.root_node, source, rel_path, "bottle"))
+            if b"litestar" in source:
+                endpoints.extend(_extract_python_decorator_routes(tree.root_node, source, rel_path, "litestar"))
+            if b"tornado" in source:
+                endpoints.extend(_extract_tornado_routes(tree.root_node, source, rel_path))
+            if b"falcon" in source:
+                endpoints.extend(_extract_falcon_routes(tree.root_node, source, rel_path))
+            if b"pyramid" in source:
+                endpoints.extend(_extract_pyramid_routes(tree.root_node, source, rel_path, pyramid_routes))
         elif suffix in (".js", ".jsx"):
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["js"].parse(source)
-            endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes, express_extract))
+            endpoints.extend(_extract_nextjs_routes(rel_path, source, repo_path))
+            endpoints.extend(_extract_js_route_objects(tree.root_node, source, rel_path))
         elif suffix == ".ts":
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["ts"].parse(source)
-            endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes, express_extract))
+            endpoints.extend(_extract_nextjs_routes(rel_path, source, repo_path))
+            endpoints.extend(_extract_js_route_objects(tree.root_node, source, rel_path))
         elif suffix == ".tsx":
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["tsx"].parse(source)
-            endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes, express_extract))
+            endpoints.extend(_extract_nextjs_routes(rel_path, source, repo_path))
+            endpoints.extend(_extract_js_route_objects(tree.root_node, source, rel_path))
         elif suffix == ".go":
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["go"].parse(source)
-            endpoints.extend(_extract_go_net_http_routes(tree.root_node, source, rel_path))
-            endpoints.extend(_extract_gin_routes(tree.root_node, source, rel_path))
+            go_frameworks = _go_web_frameworks(source)
+            for go_framework in go_frameworks:
+                endpoints.extend(_extract_go_framework_routes(tree.root_node, source, rel_path, go_framework))
+            # net/http and Gin keep their own matchers: always when no framework above is imported, and otherwise only when
+            # the file really uses them (package-level http.Handle*, or the gin import), so a chi file is not read twice
+            if not go_frameworks or b"http.Handle" in source or b"http.NewServeMux" in source:
+                endpoints.extend(_extract_go_net_http_routes(tree.root_node, source, rel_path))
+            if not go_frameworks or b"gin-gonic/gin" in source:
+                endpoints.extend(_extract_gin_routes(tree.root_node, source, rel_path))
         elif suffix == ".rs":
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["rs"].parse(source)
             endpoints.extend(_extract_axum_routes(tree.root_node, source, rel_path))
+            if b"rocket" in source or rel_path in rocket_prelude_files:
+                endpoints.extend(_extract_rocket_routes(source, rel_path, rocket_mounts))
+            if b"warp::" in source:
+                endpoints.extend(_extract_warp_routes(source, rel_path))
         elif suffix == ".java":
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["java"].parse(source)
             endpoints.extend(_extract_spring_boot_routes(tree.root_node, source, rel_path))
+            if b"ws.rs" in source:
+                endpoints.extend(
+                    _extract_jaxrs_routes(tree.root_node, source, rel_path, jaxrs_application_path, jaxrs_ambiguous_application_path)
+                )
+            if b"io.micronaut" in source:
+                endpoints.extend(_extract_micronaut_routes(source, rel_path))
         elif suffix == ".swift":
             source = read_bytes_or_none(path)
             if source is None:
@@ -2098,12 +4019,29 @@ def map_api_endpoints(
                 continue
             tree = parsers["rb"].parse(source)
             endpoints.extend(_extract_rails_routes(tree.root_node, source, rel_path))
+        elif suffix == ".rb":
+            source = read_bytes_or_none(path)
+            if source is None or (b"sinatra" not in source.lower() and b"Grape" not in source):
+                continue
+            tree = parsers["rb"].parse(source)
+            if b"Grape" in source:
+                endpoints.extend(_extract_grape_routes(tree.root_node, source, rel_path))
+            if b"sinatra" in source.lower():
+                endpoints.extend(_extract_sinatra_routes(tree.root_node, source, rel_path))
         elif suffix == ".php" and "routes" in Path(rel_path).parts:
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["php"].parse(source)
             endpoints.extend(_extract_laravel_routes(tree.root_node, source, rel_path))
+        elif suffix == ".php":
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
+            if b"Route(" in source and b"#[" in source:
+                endpoints.extend(_extract_symfony_routes(source, rel_path))
+            if b"Slim\\" in source or b"Slim/" in source:
+                endpoints.extend(_extract_slim_routes(source, rel_path))
         elif suffix == ".cs":
             source = read_bytes_or_none(path)
             if source is None:
@@ -2117,5 +4055,8 @@ def map_api_endpoints(
                 continue
             tree = parsers["kt"].parse(source)
             endpoints.extend(_extract_ktor_routes(tree.root_node, source, rel_path))
+            if b"io.micronaut" in source:
+                endpoints.extend(_extract_micronaut_routes(source, rel_path))
+            endpoints.extend(_extract_kotlin_spring_routes(tree.root_node, source, rel_path))
 
     return {"checked": True, "endpoints": endpoints}
