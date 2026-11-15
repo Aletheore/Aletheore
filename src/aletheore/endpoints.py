@@ -1074,42 +1074,109 @@ _MICRONAUT_CONTROLLER = re.compile(r"@Controller\b(?:\(([^)]*)\))?")
 _MICRONAUT_ROUTE = re.compile(
     r"@(Get|Post|Put|Delete|Patch|Head|Options|Trace)\b(?:\(([^)]*)\))?"
     r"(?:\s*@\w+(?:\([^)]*\))?)*\s*"
-    r"(?:(?:public|private|protected|open|override|suspend|final|abstract|static|default)\s+)*"
-    r"(?:fun\s+(?:<[^>]*>\s*)?(\w+)|[\w<>\[\],.?]+(?:\s*<[^>]*>)?\s+(\w+)\s*\()"
+    r"(?:[^;{}()@=]*?\bfun\s+(?:<[^>]*>\s*)?(\w+)|[^;{}()@=]*?\b(\w+)\s*\()"
 )
+_MICRONAUT_PLACEHOLDER = re.compile(r"\$\{[^}:]*:([^}]*)\}")
+
+
+def _micronaut_blank_comments(text: str) -> str:
+    """The text with `//`, `/* */` and KDoc/Javadoc comments blanked (same length, newlines kept)."""
+    return re.sub(r"//[^\n]*|/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), text, flags=re.S)
 
 
 def _micronaut_paths(args: str | None) -> list[str]:
-    """Literal paths of a Micronaut annotation: `("/x")`, `(uri = "/x")`, `(value = "/x")`, `(uris = {"/a", "/b"})`."""
+    """Literal paths of a Micronaut annotation: the first positional argument, or `uri =` / `uris =` / `value =` (a string
+    or a list of them). [""] when none is given. Other string attributes (`name = "x"`, `produces = ...`) are not paths."""
     if not args:
         return [""]
-    found = re.findall(r"""["']([^"']*)["']""", re.sub(r"\b(?:processes|consumes|produces)\s*=\s*(?:\{[^}]*\}|[^,)]*)", "", args))
+    parts: list[str] = []
+    depth = 0
+    quote = ""
+    start = 0
+    for i, char in enumerate(args):
+        if quote:
+            if char == quote and args[i - 1] != "\\":
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(args[start:i])
+            start = i + 1
+    parts.append(args[start:])
+    found: list[str] = []
+    for index, part in enumerate(p.strip() for p in parts if p.strip()):
+        named = re.match(r"(\w+)\s*=\s*(.*)$", part, re.S)
+        if named and named.group(1) in ("uri", "uris", "value"):
+            found.extend(re.findall(r"""["']([^"']*)["']""", named.group(2)))
+        elif not named and index == 0:
+            found.extend(re.findall(r"""["']([^"']*)["']""", part))
     return found or [""]
+
+
+def _micronaut_class_spans(text: str, starts: list[int]) -> list[tuple[int, int]]:
+    """(open, close) offsets of the class body that follows each annotation offset in `starts`."""
+    spans: list[tuple[int, int]] = []
+    for start in starts:
+        open_index = text.find("{", start)
+        if open_index < 0:
+            continue
+        depth = 0
+        i = open_index
+        while i < len(text):
+            if text[i] == '"':
+                i += 1
+                while i < len(text) and text[i] != '"':
+                    i += 2 if text[i] == "\\" else 1
+            elif text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        spans.append((open_index, i))
+    return spans
 
 
 def _extract_micronaut_routes(source: bytes, rel_path: str) -> list[dict]:
     """Micronaut controllers in Java or Kotlin: a class `@Controller("/users")` (the root when it has no path) prefixes the
-    `@Get("/{id}")` ... `@Trace` methods that follow it in the file."""
-    text = source.decode(errors="replace")
-    controllers = [(m.start(), _micronaut_paths(m.group(1))[0]) for m in _MICRONAUT_CONTROLLER.finditer(text)]
+    `@Get("/{id}")` ... `@Trace` methods inside that class's body. Methods of other classes (a `@Client` interface uses the
+    same annotations) and anything in a comment are ignored; a `${property:default}` placeholder is replaced by its default,
+    one without a default is reported unresolved."""
+    text = _micronaut_blank_comments(source.decode(errors="replace"))
+    controllers = list(_MICRONAUT_CONTROLLER.finditer(text))
+    spans = _micronaut_class_spans(text, [m.end() for m in controllers])
     entries: list[dict] = []
     for match in _MICRONAUT_ROUTE.finditer(text):
-        prefix = next((path for start, path in reversed(controllers) if start < match.start()), None)
-        if prefix is None:
-            continue  # an annotation outside a controller
+        owner = None
+        for controller, (open_index, close_index) in zip(controllers, spans):
+            if open_index < match.start() < close_index and (owner is None or open_index > owner[1][0]):
+                owner = (controller, (open_index, close_index))
+        if owner is None:
+            continue  # an annotation outside a controller class
+        prefix = _micronaut_paths(owner[0].group(1))[0]
         handler = match.group(3) or match.group(4) or "unknown"
         for path in _micronaut_paths(match.group(2)):
             joined = (prefix.rstrip("/") + "/" + path.lstrip("/")).rstrip("/") if prefix or path else ""
+            replaced = _MICRONAUT_PLACEHOLDER.sub(lambda m: m.group(1), joined)
+            unresolved = "${" in replaced
             entries.append(
                 {
                     "method": _MICRONAUT_VERBS[match.group(1)],
-                    "path": joined or "/",
+                    "path": re.sub(r"/{2,}", "/", replaced) or "/",
                     "framework": "micronaut",
                     "file": rel_path,
                     "line": text.count("\n", 0, match.start()) + 1,
                     "handler": handler,
-                    "unresolved": False,
-                    "note": None,
+                    "unresolved": unresolved,
+                    "note": (
+                        "path holds a property placeholder with no default" if unresolved
+                        else "a property placeholder was replaced by its default value" if replaced != joined else None
+                    ),
                 }
             )
     return entries
