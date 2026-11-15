@@ -61,3 +61,32 @@ def test_property_placeholder_without_a_default_is_unresolved(tmp_path):
     (tmp_path / "A.kt").write_text(code)
     got = [(e["unresolved"]) for e in map_api_endpoints(tmp_path)["endpoints"]]
     assert got == [True]
+
+
+def test_fully_qualified_annotation_names_are_recognised(tmp_path):
+    code = """@org.springframework.web.bind.annotation.RestController
+class A {
+    @org.springframework.web.bind.annotation.GetMapping("/x")
+    fun g() = 1
+}
+"""
+    assert _routes(tmp_path, code) == [("GET", "/x", False)]
+
+
+def test_constant_controller_prefix_marks_routes_unresolved(tmp_path):
+    code = '@RestController\n@RequestMapping(ApiPaths.BASE)\nclass A {\n    @GetMapping("/x")\n    fun g() = 1\n}\n'
+    (tmp_path / "A.kt").write_text(code)
+    got = [(e["path"], e["unresolved"], bool(e["note"])) for e in map_api_endpoints(tmp_path)["endpoints"]]
+    assert got == [("/x", True, True)]
+
+
+def test_other_string_attributes_are_not_paths(tmp_path):
+    code = """@RestController
+class A {
+    @RequestMapping(name = "myBean", path = ["/real"], params = "a,b", method = [RequestMethod.POST])
+    fun g() = 1
+    @GetMapping(value = "/v", produces = "text/plain")
+    fun h() = 2
+}
+"""
+    assert _routes(tmp_path, code) == [("GET", "/v", False), ("POST", "/real", False)]

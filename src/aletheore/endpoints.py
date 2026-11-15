@@ -1090,21 +1090,52 @@ def _kotlin_annotations(modifiers: Node | None, source: bytes) -> list[tuple[str
         head = invocation if invocation is not None else next((c for c in ann.children if c.type == "user_type"), None)
         if head is None:
             continue
-        name_node = next((c for c in head.children if c.type in ("user_type", "identifier")), head)
-        name = source[name_node.start_byte : name_node.end_byte].decode().split(".")[-1].split("<")[0]
+        name_node = head if head.type == "user_type" else next((c for c in head.children if c.type in ("user_type", "identifier")), head)
+        name = source[name_node.start_byte : name_node.end_byte].decode(errors="replace").split(".")[-1].split("<")[0].strip()
         args = next((c for c in head.children if c.type == "value_arguments"), None)
         found.append((name, source[args.start_byte : args.end_byte].decode() if args is not None else "", ann))
     return found
 
 
+def _kotlin_split_arguments(body: str) -> list[str]:
+    """Top-level comma-separated arguments of an annotation (brackets, parentheses and strings kept whole)."""
+    parts: list[str] = []
+    depth = 0
+    quote = ""
+    start = 0
+    for i, char in enumerate(body):
+        if quote:
+            if char == quote and body[i - 1] != "\\":
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(body[start:i])
+            start = i + 1
+    parts.append(body[start:])
+    return [p.strip() for p in parts if p.strip()]
+
+
 def _kotlin_spring_paths(args_text: str) -> list[str] | None:
-    """The literal paths of a mapping annotation (`"/x"`, `value = ["/a", "/b"]`, `path = [...]`); [""] for none given,
-    None when a path is given but is not a string literal (a constant)."""
-    body = re.sub(r"\b(?:method|produces|consumes|headers|params)\s*=\s*(?:\[[^\]]*\]|[^,)]*)", "", args_text.strip()[1:-1] if args_text else "")
-    literals = [text.replace("\\$", "$") for text in _KOTLIN_STRING.findall(body)]
-    if literals:
-        return literals
-    return [""] if not body.strip() else None
+    """The literal paths of a mapping annotation: the first positional argument, or `value =` / `path =` (a string or a list
+    of them). [""] when no path is given; None when one is given but is not a string literal (a constant). Other string
+    attributes (`name = "x"`, `params = "a,b"`) are not paths."""
+    body = args_text.strip()[1:-1] if args_text else ""
+    chosen: str | None = None
+    for index, argument in enumerate(_kotlin_split_arguments(body)):
+        named = re.match(r"(\w+)\s*=\s*(.*)$", argument, re.S)
+        if named and named.group(1) in ("value", "path"):
+            chosen = named.group(2)
+        elif not named and index == 0:
+            chosen = argument
+    if chosen is None:
+        return [""]
+    literals = [text.replace("\\$", "$") for text in _KOTLIN_STRING.findall(chosen)]
+    return literals or None
 
 
 def _extract_kotlin_spring_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
@@ -1118,9 +1149,12 @@ def _extract_kotlin_spring_routes(root: Node, source: bytes, rel_path: str) -> l
         if not any(name in _KOTLIN_SPRING_CONTROLLERS for name, _a, _n in class_annotations):
             continue
         prefixes = [""]
+        prefix_is_constant = False
         for name, args, _node in class_annotations:
             if name == "RequestMapping":
-                prefixes = _kotlin_spring_paths(args) or [""]
+                found = _kotlin_spring_paths(args)
+                prefix_is_constant = found is None
+                prefixes = found or [""]
         body = next((c for c in cls.children if c.type == "class_body"), None)
         for fn in (c for c in (body.children if body is not None else []) if c.type == "function_declaration"):
             ident = next((c for c in fn.children if c.type == "identifier"), None)
@@ -1141,6 +1175,8 @@ def _extract_kotlin_spring_routes(root: Node, source: bytes, rel_path: str) -> l
                         note = None
                         if path is None:
                             note = "path is a constant, not a string literal"
+                        elif prefix_is_constant:
+                            note = "the controller's @RequestMapping path is a constant, not a string literal"
                         elif "${" in joined:
                             note = "path holds a property placeholder with no default"
                         elif defaulted:
@@ -1153,7 +1189,7 @@ def _extract_kotlin_spring_routes(root: Node, source: bytes, rel_path: str) -> l
                                 "file": rel_path,
                                 "line": node.start_point[0] + 1,
                                 "handler": handler,
-                                "unresolved": path is None or "${" in joined,
+                                "unresolved": path is None or prefix_is_constant or "${" in joined,
                                 "note": note,
                             }
                         )
