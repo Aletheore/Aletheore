@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fastify `route({ method, url, handler })` and hapi `route({ method, path, handler })` object routes (also an array of them) are found.
 - Starlette routes with nested mounts and aiohttp route helpers are found.
 - JAX-RS routes (Jersey, RESTEasy, Quarkus) are found with class and method paths and the application path.
 - Sinatra routes are found, including `route` with several verbs and nested `namespace` prefixes; Grape APIs are read with their `resource`, `namespace` and `route_param` nesting and class-level `prefix`/`version`.

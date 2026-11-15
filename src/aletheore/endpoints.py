@@ -626,6 +626,80 @@ def _looks_like_express_path(path: str) -> bool:
     return path == "*" or path.startswith("/")
 
 
+def _js_object_pairs(obj: Node, source: bytes) -> dict[str, Node]:
+    pairs: dict[str, Node] = {}
+    for child in obj.named_children:
+        if child.type == "pair":
+            key, value = child.child_by_field_name("key"), child.child_by_field_name("value")
+            if key is not None and value is not None:
+                pairs[source[key.start_byte : key.end_byte].decode().strip("'\"`")] = value
+        elif child.type in ("method_definition", "shorthand_property_identifier"):
+            name = child.child_by_field_name("name") or child
+            pairs.setdefault(source[name.start_byte : name.end_byte].decode(), child)
+    return pairs
+
+
+def _extract_js_route_objects(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """The object form of a route: Fastify `fastify.route({ method: 'POST', url: '/items', handler })` and hapi
+    `server.route({ method: 'GET', path: '/x', handler })` (also an array of them), `method: ['GET', 'HEAD']` allowed.
+    The framework is named by what the file mentions (hapi, otherwise Fastify). The verb shorthands
+    (`fastify.get('/x', h)`) are the Express matcher's."""
+    entries: list[dict] = []
+    lowered = source.lower()
+    if b"fastify" not in lowered and b"hapi" not in lowered:
+        return entries  # an object-form `.route({...})` needs one of the two frameworks to be in play
+    # hapi is named by its package (`@hapi/hapi`, `require('hapi')`), not by the word anywhere in the file
+    framework = "hapi" if re.search(rb"""['"]@?hapi(?:/hapi)?['"]""", source) and b"fastify" not in lowered else "fastify"
+    for call in _walk_tree(root):
+        if call.type != "call_expression":
+            continue
+        func = call.child_by_field_name("function")
+        if func is None or func.type != "member_expression":
+            continue
+        prop = func.child_by_field_name("property")
+        args = call.child_by_field_name("arguments")
+        if prop is None or source[prop.start_byte : prop.end_byte].decode() != "route" or args is None:
+            continue
+        first = next((a for a in args.named_children if a.type in ("object", "array")), None)
+        if first is None or (first.type == "array" and framework != "hapi"):
+            continue  # an array of routes is hapi's form; Fastify's route() takes one object
+        objects = [first] if first.type == "object" else [o for o in first.named_children if o.type == "object"]  # hapi: an array
+        for obj in objects:
+            entries.extend(_js_route_object_entries(obj, call, source, rel_path, framework))
+    return entries
+
+
+def _js_route_object_entries(obj: Node, call: Node, source: bytes, rel_path: str, framework: str) -> list[dict]:
+    pairs = _js_object_pairs(obj, source)
+    url_node = pairs.get("url") or pairs.get("path")
+    method_node = pairs.get("method")
+    if url_node is None or method_node is None or url_node.type != "string":
+        return []
+    path = _js_string_literal_text(url_node, source)
+    if not _looks_like_express_path(path):
+        return []
+    if method_node.type == "string":
+        methods = [_js_string_literal_text(method_node, source)]
+    elif method_node.type == "array":
+        methods = [_js_string_literal_text(m, source) for m in method_node.named_children if m.type == "string"]
+    else:
+        return []
+    handler = _express_handler_label(pairs.get("handler"), source)
+    return [
+        {
+            "method": method.upper(),
+            "path": path,
+            "framework": framework,
+            "file": rel_path,
+            "line": call.start_point[0] + 1,
+            "handler": handler,
+            "unresolved": False,
+            "note": None,
+        }
+        for method in methods
+    ]
+
+
 def _extract_express_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
@@ -2538,18 +2612,21 @@ def map_api_endpoints(
                 continue
             tree = parsers["js"].parse(source)
             endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_js_route_objects(tree.root_node, source, rel_path))
         elif suffix == ".ts":
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["ts"].parse(source)
             endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_js_route_objects(tree.root_node, source, rel_path))
         elif suffix == ".tsx":
             source = read_bytes_or_none(path)
             if source is None:
                 continue
             tree = parsers["tsx"].parse(source)
             endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
+            endpoints.extend(_extract_js_route_objects(tree.root_node, source, rel_path))
         elif suffix == ".go":
             source = read_bytes_or_none(path)
             if source is None:
