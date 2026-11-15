@@ -535,9 +535,12 @@ def _js_object_pairs(obj: Node, source: bytes) -> dict[str, Node]:
 
 
 def _extract_js_route_objects(root: Node, source: bytes, rel_path: str) -> list[dict]:
-    """Fastify's object form: `fastify.route({ method: 'POST', url: '/items', handler })`, also `method: ['GET', 'HEAD']`
-    and `path:` for `url:`. The verb shorthands (`fastify.get('/x', h)`) are the Express matcher's."""
+    """The object form of a route: Fastify `fastify.route({ method: 'POST', url: '/items', handler })` and hapi
+    `server.route({ method: 'GET', path: '/x', handler })` (also an array of them), `method: ['GET', 'HEAD']` allowed.
+    The framework is named by what the file mentions (hapi, otherwise Fastify). The verb shorthands
+    (`fastify.get('/x', h)`) are the Express matcher's."""
     entries: list[dict] = []
+    framework = "hapi" if b"hapi" in source else "fastify"
     for call in _walk_tree(root):
         if call.type != "call_expression":
             continue
@@ -548,38 +551,44 @@ def _extract_js_route_objects(root: Node, source: bytes, rel_path: str) -> list[
         args = call.child_by_field_name("arguments")
         if prop is None or source[prop.start_byte : prop.end_byte].decode() != "route" or args is None:
             continue
-        obj = next((a for a in args.named_children if a.type == "object"), None)
-        if obj is None:
+        first = next((a for a in args.named_children if a.type in ("object", "array")), None)
+        if first is None:
             continue
-        pairs = _js_object_pairs(obj, source)
-        url_node = pairs.get("url") or pairs.get("path")
-        method_node = pairs.get("method")
-        if url_node is None or method_node is None or url_node.type != "string":
-            continue
-        path = _js_string_literal_text(url_node, source)
-        if not _looks_like_express_path(path):
-            continue
-        if method_node.type == "string":
-            methods = [_js_string_literal_text(method_node, source)]
-        elif method_node.type == "array":
-            methods = [_js_string_literal_text(m, source) for m in method_node.named_children if m.type == "string"]
-        else:
-            continue
-        handler = _express_handler_label(pairs.get("handler"), source)
-        for method in methods:
-            entries.append(
-                {
-                    "method": method.upper(),
-                    "path": path,
-                    "framework": "fastify",
-                    "file": rel_path,
-                    "line": call.start_point[0] + 1,
-                    "handler": handler,
-                    "unresolved": False,
-                    "note": None,
-                }
-            )
+        objects = [first] if first.type == "object" else [o for o in first.named_children if o.type == "object"]  # hapi: an array
+        for obj in objects:
+            entries.extend(_js_route_object_entries(obj, call, source, rel_path, framework))
     return entries
+
+
+def _js_route_object_entries(obj: Node, call: Node, source: bytes, rel_path: str, framework: str) -> list[dict]:
+    pairs = _js_object_pairs(obj, source)
+    url_node = pairs.get("url") or pairs.get("path")
+    method_node = pairs.get("method")
+    if url_node is None or method_node is None or url_node.type != "string":
+        return []
+    path = _js_string_literal_text(url_node, source)
+    if not _looks_like_express_path(path):
+        return []
+    if method_node.type == "string":
+        methods = [_js_string_literal_text(method_node, source)]
+    elif method_node.type == "array":
+        methods = [_js_string_literal_text(m, source) for m in method_node.named_children if m.type == "string"]
+    else:
+        return []
+    handler = _express_handler_label(pairs.get("handler"), source)
+    return [
+        {
+            "method": method.upper(),
+            "path": path,
+            "framework": framework,
+            "file": rel_path,
+            "line": call.start_point[0] + 1,
+            "handler": handler,
+            "unresolved": False,
+            "note": None,
+        }
+        for method in methods
+    ]
 
 
 def _extract_express_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:

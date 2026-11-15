@@ -5,7 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- Fastify `route({ method, url, handler })` object routes are found.
+- Fastify `route({ method, url, handler })` and hapi `route({ method, path, handler })` object routes (also an array of them) are found.
 
 ## 0.13.0 - 2026-11-14
 

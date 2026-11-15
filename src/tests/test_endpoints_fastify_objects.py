@@ -24,3 +24,16 @@ def test_typescript_file_and_shorthand_verbs_are_not_doubled(tmp_path):
 def test_route_object_without_a_literal_url_is_ignored(tmp_path):
     code = "fastify.route({ method: 'GET', url: PATH, handler: h })\nrouter.route('/x').get(h)\n"
     assert all(framework != "fastify" for framework, _m, _p in _routes(tmp_path, code))
+
+
+def test_hapi_route_objects_and_arrays_are_labelled_hapi(tmp_path):
+    code = """const Hapi = require('@hapi/hapi')
+server.route({ method: 'GET', path: '/users', handler: list })
+server.route([
+  { method: 'POST', path: '/items', handler: add },
+  { method: ['PUT', 'PATCH'], path: '/items/{id}', handler: update },
+])
+"""
+    assert _routes(tmp_path, code) == [
+        ("hapi", "GET", "/users"), ("hapi", "PATCH", "/items/{id}"), ("hapi", "POST", "/items"), ("hapi", "PUT", "/items/{id}"),
+    ]
