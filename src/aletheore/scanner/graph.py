@@ -3727,6 +3727,7 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
     bases: dict[str, set[str]] = {}
     partial: dict[str, dict] = {}  # top-level `partial` type name -> {ns, nested, members}
     nested_partial: set[str] = set()  # "namespace|Outer.Inner" of every nested `partial` type declared in this file
+    arity: dict[str, set[int]] = {}  # top-level type name -> generic arities declared (`Mock` is 0, `Mock<T>` is 1)
 
     def collect_nested_partial(type_node: Node, ns: str, path: str) -> None:
         body = type_node.child_by_field_name("body")
@@ -3775,6 +3776,10 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
                         else:
                             partial[type_name] = {"ns": ns, **facts}
                     collect_nested_partial(c, ns, type_name)
+                    type_params = next((child for child in c.children if child.type == "type_parameter_list"), None)
+                    arity.setdefault(type_name, set()).add(
+                        sum(1 for tp in (type_params.children if type_params is not None else []) if tp.type == "type_parameter")
+                    )
                     types.setdefault(type_name, ns)
                     members.setdefault(type_name, {}).update(_csharp_value_members(c, source))
                     bases.setdefault(type_name, set()).update(_csharp_base_names(c, source))
@@ -3812,6 +3817,7 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
         "bases": {name: sorted(parents) for name, parents in bases.items()},
         "partial": partial,
         "nested_partial": sorted(nested_partial),
+        "arity": {name: sorted(values) for name, values in arity.items()},
     }
 
 
@@ -3849,6 +3855,100 @@ def _csharp_code_identifiers(root: Node, source: bytes) -> list[str]:
             continue
         stack.extend(reversed(n.children))
     return out
+
+
+_CSHARP_DECLARING_NODES = {
+    "variable_declarator", "parameter", "property_declaration", "method_declaration", "local_function_statement",
+    "enum_member_declaration", "type_parameter", "catch_declaration", "single_variable_designation",
+    "declaration_pattern", "foreach_statement", "event_field_declaration", "delegate_declaration",
+}
+
+
+def _csharp_name_uses(root: Node, source: bytes) -> dict[str, dict]:
+    """How each identifier is used in the code of one file, from the grammar alone (no type information):
+
+    kinds: "call" = the called name of `x.Name(...)` (a method group, never a type), "static" = the left side of
+    `Name.Member`, "generic" = `Name<...>`, "new" = `new Name(...)`, "decl" = the type of a declaration or
+    parameter, "other" = anything else; arities: the generic arity at each use (`Mock<T>` is 1, `Mock` is 0);
+    declared: the name is also declared here as a variable, parameter, member or type parameter."""
+    uses: dict[str, dict] = {}
+
+    def entry(name: str) -> dict:
+        return uses.setdefault(name, {"kinds": set(), "arities": set(), "declared": False})
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
+
+    def is_call_name(n: Node) -> bool:
+        parent = n.parent
+        if parent is None or parent.type != "member_access_expression":
+            return False
+        name_node = parent.child_by_field_name("name")
+        if name_node is None or name_node.id != n.id:
+            return False
+        grand = parent.parent
+        if grand is None or grand.type != "invocation_expression":
+            return False
+        func = grand.child_by_field_name("function")
+        return func is not None and func.id == parent.id
+
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        if n.type == "using_directive":
+            continue
+        if n.type in ("namespace_declaration", "file_scoped_namespace_declaration"):
+            name_node = n.child_by_field_name("name")
+            stack.extend(reversed([c for c in n.children if name_node is None or c.id != name_node.id]))
+            continue
+        if n.type == "generic_name":
+            ident = next((c for c in n.children if c.type == "identifier"), None)
+            args = next((c for c in n.children if c.type == "type_argument_list"), None)
+            if ident is not None:
+                count = 0
+                if args is not None:
+                    parts = [c for c in args.children if c.type not in ("<", ">", ",")]
+                    commas = sum(1 for c in args.children if c.type == ",")
+                    count = len(parts) if parts else commas + 1  # `Mock<>` (unbound) has only commas
+                item = entry(text(ident))
+                item["arities"].add(count)
+                item["kinds"].add("call" if is_call_name(ident) or (n.parent is not None and n.parent.type == "member_access_expression" and is_call_name(n)) else "generic")
+            for c in n.children:
+                if c.type == "type_argument_list":
+                    stack.append(c)
+            continue
+        if n.type == "identifier":
+            parent = n.parent
+            name = text(n)
+            item = entry(name)
+            if parent is not None and parent.type in _CSHARP_DECLARING_NODES and (
+                (parent.child_by_field_name("name") is not None and parent.child_by_field_name("name").id == n.id)
+                or parent.type in ("type_parameter", "single_variable_designation")
+            ):
+                item["declared"] = True
+            elif is_call_name(n):
+                item["kinds"].add("call")
+                item["arities"].add(0)
+            elif parent is not None and parent.type == "member_access_expression" and (
+                parent.child_by_field_name("expression") is not None and parent.child_by_field_name("expression").id == n.id
+            ):
+                item["kinds"].add("static")
+                item["arities"].add(0)
+            elif parent is not None and parent.type == "object_creation_expression":
+                item["kinds"].add("new")
+                item["arities"].add(0)
+            elif parent is not None and parent.type in (
+                "variable_declaration", "parameter", "typeof_expression", "cast_expression", "as_expression",
+                "is_expression", "array_type", "nullable_type", "base_list",
+            ):
+                item["kinds"].add("decl")
+                item["arities"].add(0)
+            else:
+                item["kinds"].add("other")
+                item["arities"].add(0)
+            continue
+        stack.extend(reversed(n.children))
+    return uses
 
 
 _PROJECT_XML_MAX_BYTES = 2 * 1024 * 1024
@@ -3976,7 +4076,8 @@ def _csharp_visibility_scope(importer: Path, index: dict, usings: list[str] | No
 
 
 def _csharp_visible_owners(
-    name: str, owners: set[Path], importer: Path, index: dict, scope: dict, text: str
+    name: str, owners: set[Path], importer: Path, index: dict, scope: dict, text: str,
+    arities: set[int] | None = None,
 ) -> list[Path]:
     """The declaring files of `name` the importer can reach (see _csharp_type_reference_targets)."""
     best_rank: tuple[int, int] | None = None
@@ -3986,6 +4087,11 @@ def _csharp_visible_owners(
             continue
         owner_info = index["files"].get(owner) or {"types": {}, "ext_methods": []}
         ns = owner_info["types"].get(name)
+        if ns is not None and arities:
+            # `Mock<T>` and `Mock` are different types: a use with generic arity 1 does not name the arity-0 `Mock`
+            declared_arity = owner_info.get("arity", {}).get(name)
+            if declared_arity and not (set(declared_arity) & arities):
+                ns = None
         if ns is None and name in owner_info["ext_methods"]:
             ns = owner_info["ext_ns"]
         if ns is None:
@@ -4204,6 +4310,7 @@ def _csharp_type_reference_targets(
                     referenced.append((other, False))
                 elif member_used:
                     referenced.append((other, "inferred"))
+    uses = _csharp_name_uses(tree_root, source) if scope is not None and tree_root is not None else None
     shadowing: set[str] = set()
     type_context: set[str] = set()
     if scope is not None and tree_root is not None:
@@ -4224,6 +4331,9 @@ def _csharp_type_reference_targets(
             ):
                 continue
         owners = type_owners.get(name) if len(name) >= _CSHARP_MIN_TYPE_NAME else None
+        use = uses.get(name) if uses is not None else None
+        if use is not None and use["kinds"] and use["kinds"] <= {"call"}:
+            owners = None  # only ever the called name of `x.Name(...)`: a method group, not a type
         if scope is not None:
             # an extension method is "owned" by the file that declares it and reached by calling it by name
             owners = (owners or set()) | index["ext_owners"].get(name, set())
@@ -4231,7 +4341,9 @@ def _csharp_type_reference_targets(
             continue
         seen.add(name)
         if scope is not None:
-            chosen = _csharp_visible_owners(name, owners, importer, index, scope, text)
+            chosen = _csharp_visible_owners(
+                name, owners, importer, index, scope, text, use["arities"] if use is not None else None
+            )
             for owner in chosen:
                 referenced.append((owner, len(chosen) > 1))
             if len(referenced) >= _CSHARP_MAX_TYPE_EDGES:
