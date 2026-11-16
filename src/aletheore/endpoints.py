@@ -4105,6 +4105,113 @@ def _compose_django_routes(
     return rest + composed
 
 
+_NEST_VERBS = {"Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH", "All": "ANY", "Head": "HEAD", "Options": "OPTIONS"}
+
+
+def _nest_decorator(dec: Node, source: bytes) -> tuple[str, Node | None] | None:
+    """(name, arguments node) of `@Name(...)` / `@Name`, or None."""
+    for child in dec.named_children:
+        if child.type == "call_expression":
+            func = child.child_by_field_name("function")
+            if func is not None and func.type == "identifier":
+                return source[func.start_byte : func.end_byte].decode(), child.child_by_field_name("arguments")
+        if child.type == "identifier":
+            return source[child.start_byte : child.end_byte].decode(), None
+    return None
+
+
+def _nest_paths(args: Node | None, source: bytes, key: str | None = None) -> list[str] | None:
+    """Literal path(s) of a NestJS decorator argument: '' when there is no argument, a string, an array of strings, or
+    `{ path: ... }` for @Controller; None when the value is not a literal."""
+    if args is None or not args.named_children:
+        return [""]
+    first = args.named_children[0]
+    if first.type == "object" and key:
+        for pair in first.named_children:
+            if pair.type == "pair":
+                k = pair.child_by_field_name("key")
+                if k is not None and source[k.start_byte : k.end_byte].decode().strip("'\"") == key:
+                    return _nest_paths_value(pair.child_by_field_name("value"), source)
+        return [""]
+    return _nest_paths_value(first, source)
+
+
+def _nest_paths_value(node: Node | None, source: bytes) -> list[str] | None:
+    if node is None:
+        return None
+    if node.type == "string":
+        return [_js_string_literal_text(node, source)]
+    if node.type == "array":
+        out = []
+        for el in node.named_children:
+            if el.type != "string":
+                return None
+            out.append(_js_string_literal_text(el, source))
+        return out
+    return None
+
+
+def _extract_nestjs_routes(root: Node, source: bytes, rel_path: str, global_prefix: str = "") -> list[dict]:
+    entries: list[dict] = []
+    for cls in _walk_tree(root):
+        if cls.type != "class_declaration":
+            continue
+        decorators = [c for c in cls.children if c.type == "decorator"]
+        if cls.parent is not None and cls.parent.type == "export_statement":
+            decorators += [c for c in cls.parent.children if c.type == "decorator"]
+        controller = next((d for d in decorators if (_nest_decorator(d, source) or ("", None))[0] == "Controller"), None)
+        if controller is None:
+            continue
+        prefixes = _nest_paths(_nest_decorator(controller, source)[1], source, key="path")
+        note = None
+        if prefixes is None:
+            prefixes, note = [""], "@Controller path is not a string literal, not composed into this path"
+        body = next((c for c in cls.children if c.type == "class_body"), None)
+        if body is None:
+            continue
+        pending: list[Node] = []
+        for member in body.children:
+            if member.type == "decorator":
+                pending.append(member)
+                continue
+            if member.type == "method_definition":
+                name_node = member.child_by_field_name("name")
+                handler = source[name_node.start_byte : name_node.end_byte].decode() if name_node is not None else "unknown"
+                for dec in pending:
+                    info = _nest_decorator(dec, source)
+                    if info is None or info[0] not in _NEST_VERBS:
+                        continue
+                    paths = _nest_paths(info[1], source)
+                    unresolved = paths is None or note is not None  # a non-literal @Controller path leaves the route partial
+                    for path in paths or [""]:
+                        for prefix in prefixes:
+                            parts = [p.strip("/") for p in (global_prefix, prefix, path) if p and p.strip("/")]
+                            entries.append({
+                                "method": _NEST_VERBS[info[0]], "path": "/" + "/".join(parts), "framework": "nestjs",
+                                "file": rel_path, "line": dec.start_point[0] + 1, "handler": handler,
+                                "unresolved": unresolved,
+                                "note": note or ("route path is not a string literal" if unresolved else (
+                                    "composed with app.setGlobalPrefix()" if global_prefix else None)),
+                            })
+            pending = []
+    return entries
+
+
+_NEST_GLOBAL_PREFIX = re.compile(r"setGlobalPrefix\(\s*['\"]([^'\"]+)['\"]")
+
+
+def _nest_global_prefix(source_paths: list[Path]) -> str:
+    """The `app.setGlobalPrefix('api')` prefix when the repository sets exactly one literal one, else ''."""
+    found: set[str] = set()
+    for path in source_paths:
+        if path.suffix == ".ts":
+            data = read_bytes_or_none(path)
+            if data is not None and b"setGlobalPrefix" in data:
+                code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", data.decode(errors="ignore"), flags=re.S)  # not from a comment
+                found |= set(_NEST_GLOBAL_PREFIX.findall(code))
+    return next(iter(found)).strip("/") if len(found) == 1 else ""
+
+
 def map_api_endpoints(
     repo_path: Path,
     *,
@@ -4144,6 +4251,7 @@ def map_api_endpoints(
     # + sort passes over the same tree per scan (same fix as
     # build_module_graph's own four-call version of this).
     source_paths = list(_iter_source_files(repo_path, ignored_paths))
+    nest_global_prefix = _nest_global_prefix(source_paths)
     cross_file_router_mounts: dict[tuple[str, str], list[str]] = {}
     flask_facts: list[dict] = []
     for path in source_paths:
@@ -4360,6 +4468,8 @@ def map_api_endpoints(
             endpoints.extend(_extract_express_family_routes(tree.root_node, source, rel_path, hono_prefixes, express_extract))
             endpoints.extend(_extract_nextjs_routes(rel_path, source, repo_path))
             endpoints.extend(_extract_js_route_objects(tree.root_node, source, rel_path))
+            if b"@Controller" in source:
+                endpoints.extend(_extract_nestjs_routes(tree.root_node, source, rel_path, nest_global_prefix))
         elif suffix == ".tsx":
             source = read_bytes_or_none(path)
             if source is None:

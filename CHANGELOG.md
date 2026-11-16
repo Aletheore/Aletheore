@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Added: NestJS `@Controller` / `@Get` / `@Post` ... routes are mapped, composed with the controller path and `app.setGlobalPrefix()`. On the RealWorld NestJS app, 0 of the spec's 19 routes were found; now all 19.
 - Added: Django `include()` prefixes are composed across files, `url()` and regex routes are read as templates, DRF `router.register()` expands to list/detail routes through `include(router.urls)`, and `View.as_view()` / `@api_view` routes report their real HTTP methods instead of ANY. On the RealWorld Django app, 0 of the spec's 19 routes were found; now 18.
 - Fixed: Spring `@RequestMapping` class prefixes are composed with method mappings, a bare `@GetMapping`/`@PostMapping` is the class route (it used to be skipped), and `path =`, path arrays and `RequestMethod` arrays are read. On the RealWorld Spring Boot app, 0 of the spec's 19 routes were found; now all 19.
 - Fixed: Laravel `Route::resource()`/`apiResource()` expand to their standard routes (honouring `only`/`except`), `prefix` groups are composed, URIs get a leading slash, and `routes/api.php` gets Laravel's default `/api` prefix (noted as an assumption). On the RealWorld Laravel app, 0 of the spec's 19 routes matched; now all 19.
