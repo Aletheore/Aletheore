@@ -345,6 +345,23 @@ _KNOWN_OS_ARCH = (
     "ppc64le|riscv|riscv64|s390|s390x|sparc|sparc64|wasm"
 )
 _GOOS_ARCH_SUFFIX = re.compile(rf"_({_KNOWN_OS_ARCH})(_({_KNOWN_OS_ARCH}))?(_test)?\.go$")
+_GOOS_SUFFIX = re.compile(
+    r"_(aix|android|darwin|dragonfly|freebsd|hurd|illumos|ios|js|linux|nacl|netbsd|openbsd|plan9|solaris|wasip1|windows|zos)"
+    r"(?:_(?:386|amd64|amd64p32|arm|armbe|arm64|arm64be|loong64|mips|mipsle|mips64|mips64le|mips64p32|mips64p32le|ppc|ppc64|ppc64le|riscv|riscv64|s390|s390x|sparc|sparc64|wasm))?(?:_test)?\.go$"
+)
+_GOOS_COMPATIBLE = (frozenset({"android", "linux"}), frozenset({"ios", "darwin"}), frozenset({"illumos", "solaris"}))
+
+
+def mutually_exclusive_platforms(source: str, target: str) -> bool:
+    """Only reject filename-constrained pairs that cannot share a Go build target."""
+    left = _GOOS_SUFFIX.search(Path(source).name)
+    right = _GOOS_SUFFIX.search(Path(target).name)
+    if not left or not right or left.group(1) == right.group(1):
+        return False
+    pair = frozenset({left.group(1), right.group(1)})
+    return pair not in _GOOS_COMPATIBLE
+
+
 _BUILD_LINE = re.compile(r"(?m)^\s*//\s*(?:go:build|\+build)\b")
 
 
