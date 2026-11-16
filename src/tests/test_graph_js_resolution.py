@@ -115,3 +115,92 @@ def test_module_extensions_are_scanned_and_resolved(tmp_path):
     assert got["a.cjs"] == ["b.cjs"]
     assert got["c.mjs"] == ["d.mjs"]
     assert got["e.mts"] == ["f.mts"]
+
+
+def _js_repo(tmp_path, files):
+    repo = tmp_path / "jsr"
+    for rel, body in files.items():
+        f = repo / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body)
+    modules, _, _ = build_module_graph(repo)
+    return {m["path"]: set(m["imports"]) for m in modules}
+
+
+def test_require_of_the_package_directory_resolves_to_its_package_json_main(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "package.json": '{"name": "pkg", "main": "pkg.js"}',
+        "pkg.js": "module.exports = {}\n",
+        "test/a.test.js": "const pkg = require('..')\n",
+    })
+    assert imp["test/a.test.js"] == {"pkg.js"}
+
+
+def test_a_directory_import_prefers_package_json_main_over_an_index_file(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "lib/package.json": '{"main": "./entry.js"}',
+        "lib/entry.js": "module.exports = 1\n",
+        "lib/index.js": "module.exports = 2\n",
+        "app.js": "const lib = require('./lib')\n",
+    })
+    assert imp["app.js"] == {"lib/entry.js"}
+
+
+def test_an_extensionless_import_of_a_declaration_file_resolves_to_it(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "types/context.d.ts": "export interface Ctx {}\n",
+        "types/route.d.ts": "import { Ctx } from './context'\nexport type R = Ctx\n",
+    })
+    assert imp["types/route.d.ts"] == {"types/context.d.ts"}
+
+
+def test_a_source_file_wins_over_a_declaration_file_of_the_same_name(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "a.ts": "export const x = 1\n",
+        "a.d.ts": "export declare const x: number\n",
+        "b.ts": "import { x } from './a'\n",
+    })
+    assert imp["b.ts"] == {"a.ts"}
+
+
+def test_a_dot_js_specifier_resolves_to_the_declaration_file_when_there_is_no_source(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "types/options.d.ts": "export interface Options {}\n",
+        "index.d.ts": "import { Options } from './types/options.js'\nexport type X = Options\n",
+    })
+    assert imp["index.d.ts"] == {"types/options.d.ts"}
+
+
+def test_a_directory_import_can_resolve_to_an_index_declaration_file(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "test-dts/index.d.ts": "export declare const a: number\n",
+        "test-dts/store.test-d.ts": "import { a } from '.'\nexport const b = a\n",
+    })
+    assert imp["test-dts/store.test-d.ts"] == {"test-dts/index.d.ts"}
+
+
+def test_package_json_main_cannot_leave_the_package_directory(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "outside.js": "module.exports = 1\n",
+        "pkg/package.json": '{"main": "../outside.js"}',
+        "app.js": "const p = require('./pkg')\n",
+    })
+    assert imp["app.js"] == set()
+
+
+def test_package_json_main_naming_a_directory_resolves_to_its_index(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "pkg/package.json": '{"main": "./lib"}',
+        "pkg/lib/index.js": "module.exports = 1\n",
+        "app.js": "const p = require('./pkg')\n",
+    })
+    assert imp["app.js"] == {"pkg/lib/index.js"}
+
+
+def test_package_json_main_naming_a_js_file_resolves_to_its_ts_source(tmp_path):
+    imp = _js_repo(tmp_path, {
+        "pkg/package.json": '{"main": "lib/index.js"}',
+        "pkg/lib/index.ts": "export const a = 1\n",
+        "app.js": "const p = require('./pkg')\n",
+    })
+    assert imp["app.js"] == {"pkg/lib/index.ts"}
