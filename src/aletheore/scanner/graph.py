@@ -6053,6 +6053,64 @@ def _swift_type_facts(root: Node, source: bytes) -> tuple[set[str], set[str], se
     return top, declared, refs, imports
 
 
+def _swift_nested_facts(root: Node, source: bytes) -> tuple[set[tuple[str, str]], set[tuple[str, str]], dict[str, set[str]]]:
+    """Nested types and how they are named: (declared as (outer, name), written qualified as (outer, name),
+    unqualified uses of a name -> the types whose body or extension the use sits in).
+
+    `extension Logger { struct MetadataProvider }` declares `Logger.MetadataProvider`, which other files write as
+    `Logger.MetadataProvider`, or as plain `MetadataProvider` inside Logger's own body. The outer type of an extension
+    is the type it extends."""
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
+
+    declared: set[tuple[str, str]] = set()
+    qualified: set[tuple[str, str]] = set()
+    scoped: dict[str, set[str]] = {}
+
+    def walk(node: Node, chain: tuple[str, ...]) -> None:
+        kind = node.type
+        if kind in ("class_declaration", "protocol_declaration", "typealias_declaration"):
+            keyword = next((c.type for c in node.children if c.type in _SWIFT_DECL_KEYWORDS), None)
+            if keyword == "extension":
+                extended = next((c for c in node.children if c.type == "user_type"), None)
+                names = [text(c) for c in extended.children if c.type == "type_identifier"] if extended is not None else []
+                if extended is not None:
+                    for child in node.children:
+                        if child is not extended:
+                            walk(child, chain + tuple(names[-1:]))
+                    for left, right in zip(names, names[1:]):
+                        qualified.add((left, right))
+                return
+            name_node = next((c for c in node.children if c.type == "type_identifier"), None)
+            if name_node is not None:
+                name = text(name_node)
+                if chain:
+                    declared.add((chain[-1], name))
+                for child in node.children:
+                    if child is not name_node:
+                        walk(child, chain + (name,))
+                return
+        elif kind == "user_type":
+            names = [text(c) for c in node.children if c.type == "type_identifier"]
+            if len(names) >= 2:
+                for left, right in zip(names, names[1:]):
+                    qualified.add((left, right))
+                for child in node.children:
+                    if child.type != "type_identifier":
+                        walk(child, chain)
+                return
+            if names and chain:
+                scoped.setdefault(names[0], set()).update(chain)
+        elif kind == "import_declaration":
+            return
+        for child in node.children:
+            walk(child, chain)
+
+    walk(root, ())
+    return declared, qualified, scoped
+
+
 def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_files: dict[str, list[Path]]) -> None:
     """Edges between Swift files that name each other's types.
 
@@ -6078,6 +6136,8 @@ def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_fil
     owners: dict[str, dict[str, set[str]]] = {}
     member_facts: dict[str, tuple[set[str], set[str]]] = {}
     member_owners: dict[str, dict[str, set[str]]] = {}
+    nested_facts: dict[str, tuple[set[tuple[str, str]], set[tuple[str, str]], dict[str, set[str]]]] = {}
+    nested_owners: dict[str, dict[tuple[str, str], set[str]]] = {}
     for module in swift_modules:
         rel = module["path"]
         target = target_of.get(rel)
@@ -6091,12 +6151,15 @@ def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_fil
             tree_root = parser.parse(data).root_node
             facts[rel] = _swift_type_facts(tree_root, data)
             member_facts[rel] = _swift_member_facts(tree_root, data)
+            nested_facts[rel] = _swift_nested_facts(tree_root, data)
         except OSError:
             continue
         for name in facts[rel][0]:
             owners.setdefault(target, {}).setdefault(name, set()).add(rel)
         for name in member_facts[rel][0]:
             member_owners.setdefault(target, {}).setdefault(name, set()).add(rel)
+        for key in nested_facts[rel][0]:
+            nested_owners.setdefault(target, {}).setdefault(key, set()).add(rel)
     # A file too large to parse never becomes a module, but it is still part of its target: its type names are read from
     # the text so a same-named type in another file is not mistaken for the only owner of that name.
     for rel, target in target_of.items():
@@ -6136,6 +6199,24 @@ def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_fil
                     if other != target:
                         candidates |= owners.get(other, {}).get(name, set())
                 found = candidates
+            if len(found) != 1:
+                continue
+            dest = next(iter(found))
+            if dest != rel and dest not in present:
+                present.add(dest)
+                module.setdefault("imports", []).append(dest)
+        # Nested types: `Outer.Name` written out, or `Name` used inside Outer's own body, resolve to the one file that
+        # declares Name inside Outer (or an extension of Outer) in this target or an imported one.
+        _decl, written, scoped_uses = nested_facts[rel]
+        wanted: set[tuple[str, str]] = set(written)
+        for name, outers in scoped_uses.items():
+            wanted.update((outer, name) for outer in outers)
+        for key in sorted(wanted):
+            found = set(nested_owners.get(target, {}).get(key, ()))
+            if not found:
+                for other in imported:
+                    if other != target:
+                        found |= nested_owners.get(other, {}).get(key, set())
             if len(found) != 1:
                 continue
             dest = next(iter(found))
