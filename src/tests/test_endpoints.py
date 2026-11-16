@@ -1131,7 +1131,7 @@ def test_extract_spring_request_mapping_without_method_is_any():
     assert entries[0]["method"] == "ANY"
 
 
-def test_extract_spring_class_level_prefix_produces_a_note():
+def test_extract_spring_class_level_prefix_is_composed_with_the_method_path():
     root, source = parse_java(
         '@RequestMapping("/api/users")\n'
         "public class UserController {\n"
@@ -1142,10 +1142,51 @@ def test_extract_spring_class_level_prefix_produces_a_note():
 
     entries = _extract_spring_boot_routes(root, source, "UserController.java")
 
-    assert entries[0]["path"] == "/{id}"
-    assert entries[0]["note"] == (
-        "class-level @RequestMapping prefix present, not composed into this path"
+    assert entries[0]["path"] == "/api/users/{id}"
+    assert entries[0]["note"] is None
+
+
+def test_extract_spring_bare_mapping_annotation_is_the_class_route():
+    root, source = parse_java(
+        '@RestController\n@RequestMapping(path = "/articles")\n'
+        "public class ArticlesApi {\n"
+        "    @PostMapping\n    public void create() { }\n"
+        '    @GetMapping(path = "feed")\n    public void feed() { }\n'
+        '    @GetMapping(value = "{slug}")\n    public void one() { }\n'
+        "}\n"
     )
+
+    got = {(e["method"], e["path"]) for e in _extract_spring_boot_routes(root, source, "A.java")}
+
+    assert got == {("POST", "/articles"), ("GET", "/articles/feed"), ("GET", "/articles/{slug}")}
+
+
+def test_extract_spring_request_mapping_method_arrays_and_path_arrays_expand():
+    root, source = parse_java(
+        "public class C {\n"
+        '    @RequestMapping(value = {"/a", "/b"}, method = {RequestMethod.GET, RequestMethod.POST})\n'
+        "    public void both() { }\n"
+        "}\n"
+    )
+
+    got = {(e["method"], e["path"]) for e in _extract_spring_boot_routes(root, source, "C.java")}
+
+    assert got == {("GET", "/a"), ("POST", "/a"), ("GET", "/b"), ("POST", "/b")}
+
+
+def test_extract_spring_constant_paths_are_not_guessed():
+    root, source = parse_java(
+        '@RequestMapping(Paths.BASE)\n'
+        "public class C {\n"
+        '    @GetMapping("/x")\n    public void a() { }\n'
+        "    @GetMapping(Paths.ONE)\n    public void b() { }\n"
+        "}\n"
+    )
+
+    entries = _extract_spring_boot_routes(root, source, "C.java")
+
+    assert [e["path"] for e in entries] == ["/x"]
+    assert "not a string literal" in entries[0]["note"]
 
 
 def test_extract_rails_get_route():
@@ -1936,6 +1977,28 @@ def test_map_api_endpoints_extracts_kotlin_ktor_routes(tmp_path):
 
     paths = {e["path"] for e in result["endpoints"]}
     assert "/kt" in paths
+
+
+def test_extract_spring_request_mapping_method_given_as_a_statically_imported_constant():
+    root, source = parse_java('public class C {\n    @RequestMapping(path = "/users", method = POST)\n    public void f() { }\n}\n')
+
+    assert [(e["method"], e["path"]) for e in _extract_spring_boot_routes(root, source, "C.java")] == [("POST", "/users")]
+
+
+def test_extract_spring_route_under_a_constant_class_prefix_is_flagged_unresolved():
+    root, source = parse_java(
+        "@RequestMapping(Paths.BASE)\npublic class C {\n    @GetMapping\n    public void a() { }\n    @GetMapping(\"/x\")\n    public void b() { }\n}\n"
+    )
+
+    entries = _extract_spring_boot_routes(root, source, "C.java")
+
+    assert entries and all(e["unresolved"] is True for e in entries)
+
+
+def test_extract_spring_request_mapping_with_an_unreadable_method_is_unresolved_not_any():
+    root, source = parse_java('public class C {\n    @RequestMapping(path = "/x", method = Consts.VERB)\n    public void a() { }\n}\n')
+    entry = _extract_spring_boot_routes(root, source, "C.java")[0]
+    assert entry["unresolved"] is True and "RequestMethod" in entry["note"]
 
 
 def test_extract_laravel_non_route_group_chain_is_not_a_route_group_and_notes_combine():

@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: Spring `@RequestMapping` class prefixes are composed with method mappings, a bare `@GetMapping`/`@PostMapping` is the class route (it used to be skipped), and `path =`, path arrays and `RequestMethod` arrays are read. On the RealWorld Spring Boot app, 0 of the spec's 19 routes were found; now all 19.
 - Fixed: Laravel `Route::resource()`/`apiResource()` expand to their standard routes (honouring `only`/`except`), `prefix` groups are composed, URIs get a leading slash, and `routes/api.php` gets Laravel's default `/api` prefix (noted as an assumption). On the RealWorld Laravel app, 0 of the spec's 19 routes matched; now all 19.
 - Fixed: ASP.NET attribute routing is composed. A controller's class-level `[Route("api/[controller]")]` (or `[RoutePrefix]`) is joined with the method's `[HttpGet("{id}")]` template, `[controller]` and `[action]` are expanded, a `/` or `~/` template replaces the prefix, a bare `[HttpGet]` is the class route itself (it used to be dropped), and a method-level `[Route]` is read. A class route that is not a string literal is noted rather than guessed. On the RealWorld ASP.NET Core app, 0 of the spec's 19 routes were found; now 19.
 - Fixed: Flask `@route(..., methods=("POST",))` (a tuple) or `methods={"GET", "POST"}` (a set) was ignored and the route reported as GET, so POST and DELETE endpoints were wrong rather than merely missing. On the RealWorld Flask app, 7 of the spec's 19 routes were found; now all 19.

@@ -2214,95 +2214,178 @@ def _java_string_literal_text(node: Node, source: bytes) -> str:
     return source[content.start_byte : content.end_byte].decode()
 
 
-def _spring_path_from_args(args_list: Node | None, source: bytes) -> str | None:
-    if args_list is None:
+def _spring_annotation_args(ann: Node) -> Node | None:
+    return ann.child_by_field_name("arguments")
+
+
+def _spring_literal_strings(node: Node | None, source: bytes) -> list[str] | None:
+    """A string literal, or an array `{"/a", "/b"}` of them; None when it is anything else (a constant, a concatenation)."""
+    if node is None:
         return None
-    for arg in args_list.named_children:
-        if arg.type == "string_literal":
-            return _java_string_literal_text(arg, source)
-        if arg.type == "element_value_pair":
-            key = arg.child_by_field_name("key")
-            if key is not None and source[key.start_byte : key.end_byte].decode() == "value":
-                value = arg.child_by_field_name("value")
-                if value is not None and value.type == "string_literal":
-                    return _java_string_literal_text(value, source)
+    if node.type == "string_literal":
+        return [_java_string_literal_text(node, source)]
+    if node.type == "element_value_array_initializer":
+        out: list[str] = []
+        for el in node.named_children:
+            if el.type != "string_literal":
+                return None
+            out.append(_java_string_literal_text(el, source))
+        return out
     return None
 
 
-def _spring_request_mapping_method(args_list: Node | None, source: bytes) -> str:
+def _spring_paths_from_args(args_list: Node | None, source: bytes) -> tuple[list[str] | None, bool]:
+    """(literal paths, present). The mapping path is the lone positional argument or `value = ...` / `path = ...`.
+    `present` with None paths means the attribute is there but not a literal."""
     if args_list is None:
-        return "ANY"
+        return None, False
+    for arg in args_list.named_children:
+        if arg.type in ("string_literal", "element_value_array_initializer"):
+            paths = _spring_literal_strings(arg, source)
+            return paths, True
+        if arg.type == "element_value_pair":
+            key = arg.child_by_field_name("key")
+            if key is not None and source[key.start_byte : key.end_byte].decode() in ("value", "path"):
+                paths = _spring_literal_strings(arg.child_by_field_name("value"), source)
+                return paths, True
+        if arg.type in ("identifier", "field_access", "binary_expression"):
+            return None, True  # a constant or a concatenation
+    return None, False
+
+
+def _spring_path_from_args(args_list: Node | None, source: bytes) -> str | None:
+    paths, _present = _spring_paths_from_args(args_list, source)
+    return paths[0] if paths else None
+
+
+def _spring_request_methods(args_list: Node | None, source: bytes) -> list[str]:
+    """The HTTP methods of @RequestMapping(method = RequestMethod.GET) or ({RequestMethod.GET, RequestMethod.POST});
+    ANY when none is given."""
+    if args_list is None:
+        return ["ANY"]
     for arg in args_list.named_children:
         if arg.type == "element_value_pair":
             key = arg.child_by_field_name("key")
             if key is not None and source[key.start_byte : key.end_byte].decode() == "method":
                 value = arg.child_by_field_name("value")
-                if value is not None and value.type == "field_access":
-                    field_node = value.child_by_field_name("field")
-                    if field_node is not None:
-                        return source[field_node.start_byte : field_node.end_byte].decode()
-    return "ANY"
+                nodes = value.named_children if value is not None and value.type == "element_value_array_initializer" else [value]
+                methods = []
+                for node in nodes:
+                    if node is not None and node.type == "field_access":
+                        field_node = node.child_by_field_name("field")
+                        if field_node is not None and source[field_node.start_byte : field_node.end_byte].decode() in _HTTP_METHODS:
+                            methods.append(source[field_node.start_byte : field_node.end_byte].decode())
+                    elif node is not None and node.type == "identifier":
+                        # `method = POST` with `import static ...RequestMethod.POST`
+                        word = source[node.start_byte : node.end_byte].decode()
+                        if word in _HTTP_METHODS:
+                            methods.append(word)
+                if methods:
+                    return methods
+    return ["ANY"]
 
 
-def _spring_class_prefix_note(method_node: Node, source: bytes) -> str | None:
+def _spring_method_attribute_unreadable(args_list: Node | None, source: bytes) -> bool:
+    """True when @RequestMapping has a `method = ...` attribute that is not RequestMethod constants we can read."""
+    if args_list is None:
+        return False
+    for arg in args_list.named_children:
+        if arg.type == "element_value_pair":
+            key = arg.child_by_field_name("key")
+            if key is not None and source[key.start_byte : key.end_byte].decode() == "method":
+                return _spring_request_methods(args_list, source) == ["ANY"]
+    return False
+
+
+def _spring_request_mapping_method(args_list: Node | None, source: bytes) -> str:
+    return _spring_request_methods(args_list, source)[0]
+
+
+def _spring_annotations(node: Node) -> list[Node]:
+    modifiers = next((c for c in node.children if c.type == "modifiers"), None)
+    if modifiers is None:
+        return []
+    return [c for c in modifiers.children if c.type in ("annotation", "marker_annotation")]
+
+
+def _spring_class_prefix(method_node: Node, source: bytes) -> tuple[list[str], bool]:
+    """(literal prefixes, unresolved) of the enclosing class's @RequestMapping. `unresolved` is True when the class has a
+    @RequestMapping whose path is not a literal."""
     node = method_node.parent
     while node is not None and node.type != "class_declaration":
         node = node.parent
     if node is None:
-        return None
-    modifiers = next((c for c in node.children if c.type == "modifiers"), None)
-    if modifiers is None:
-        return None
-    for ann in (c for c in modifiers.children if c.type == "annotation"):
+        return [], False
+    for ann in _spring_annotations(node):
         name_node = ann.child_by_field_name("name")
-        if (
-            name_node is not None
-            and source[name_node.start_byte : name_node.end_byte].decode() == "RequestMapping"
-        ):
-            return "class-level @RequestMapping prefix present, not composed into this path"
-    return None
+        if name_node is not None and source[name_node.start_byte : name_node.end_byte].decode() == "RequestMapping":
+            paths, present = _spring_paths_from_args(_spring_annotation_args(ann), source)
+            if paths:
+                return paths, False
+            return [], present
+    return [], False
+
+
+def _spring_class_prefix_note(method_node: Node, source: bytes) -> str | None:
+    _paths, unresolved = _spring_class_prefix(method_node, source)
+    return "class-level @RequestMapping path is not a string literal, not composed into this path" if unresolved else None
+
+
+def _spring_join(prefix: str | None, path: str | None) -> str:
+    parts = [p.strip("/") for p in (prefix, path) if p and p.strip("/")]
+    return "/" + "/".join(parts)
 
 
 def _extract_spring_boot_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
     for n in _walk_tree(root):
-        if n.type == "method_declaration":
-            name_node = n.child_by_field_name("name")
-            handler = "unknown"
-            if name_node is not None:
-                handler = source[name_node.start_byte : name_node.end_byte].decode()
+        if n.type != "method_declaration":
+            continue
+        name_node = n.child_by_field_name("name")
+        handler = "unknown"
+        if name_node is not None:
+            handler = source[name_node.start_byte : name_node.end_byte].decode()
+        prefixes, prefix_unresolved = _spring_class_prefix(n, source)
+        note = _spring_class_prefix_note(n, source)
 
-            modifiers = next((c for c in n.children if c.type == "modifiers"), None)
-            if modifiers is not None:
-                for ann in (c for c in modifiers.children if c.type == "annotation"):
-                    ann_name_node = ann.child_by_field_name("name")
-                    if ann_name_node is None:
-                        continue
-                    ann_name = source[ann_name_node.start_byte : ann_name_node.end_byte].decode()
-                    args_list = ann.child_by_field_name("arguments")
-
-                    method: str | None = None
-                    if ann_name in _SPRING_VERB_ANNOTATIONS:
-                        method = _SPRING_VERB_ANNOTATIONS[ann_name]
-                    elif ann_name == "RequestMapping":
-                        method = _spring_request_mapping_method(args_list, source)
-
-                    if method is not None:
-                        path = _spring_path_from_args(args_list, source)
-                        if path is not None:
-                            entries.append(
-                                {
-                                    "method": method,
-                                    "path": path,
-                                    "framework": "spring_boot",
-                                    "file": rel_path,
-                                    "line": ann.start_point[0] + 1,
-                                    "handler": handler,
-                                    "unresolved": False,
-                                    "note": _spring_class_prefix_note(n, source),
-                                }
-                            )
+        for ann in _spring_annotations(n):
+            ann_name_node = ann.child_by_field_name("name")
+            if ann_name_node is None:
+                continue
+            ann_name = source[ann_name_node.start_byte : ann_name_node.end_byte].decode()
+            args_list = _spring_annotation_args(ann)
+            if ann_name in _SPRING_VERB_ANNOTATIONS:
+                methods = [_SPRING_VERB_ANNOTATIONS[ann_name]]
+            elif ann_name == "RequestMapping":
+                methods = _spring_request_methods(args_list, source)
+            else:
+                continue
+            method_unreadable = ann_name == "RequestMapping" and _spring_method_attribute_unreadable(args_list, source)
+            paths, present = _spring_paths_from_args(args_list, source)
+            if present and not paths:
+                continue  # the method's path is a constant or concatenation: not guessed
+            for method in methods:
+                for path in paths or [None]:
+                    for prefix in prefixes or [None]:
+                        if prefix is None and path is not None and not prefix_unresolved:
+                            composed = path  # no class prefix: the path as written on the method
+                        elif prefix is None and path is None and not prefix_unresolved:
+                            composed = "/"
+                        else:
+                            composed = _spring_join(prefix, path) if not prefix_unresolved else (path or "/")
+                        entries.append(
+                            {
+                                "method": method,
+                                "path": composed,
+                                "framework": "spring_boot",
+                                "file": rel_path,
+                                "line": ann.start_point[0] + 1,
+                                "handler": handler,
+                                "unresolved": prefix_unresolved or method_unreadable,  # a class prefix or method constraint could not be read
+                                "note": note or ("RequestMapping method is not a RequestMethod constant" if method_unreadable else None),
+                            }
+                        )
     return entries
 
 
