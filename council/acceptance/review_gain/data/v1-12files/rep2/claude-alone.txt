@@ -1,0 +1,28 @@
+I found 21 likely bugs. I only read the code and did not run anything. They are ranked most confident first.
+
+1. `components/connected.py`, `number_connected_components`, line 147: `sum(0 for _ in ...)` always returns 0. It should be `sum(1 for _ in ...)`.
+2. `components/weakly_connected.py`, `number_weakly_connected_components`, line 107: same bug, `sum(0 ...)` always returns 0. It should be `sum(1 ...)`.
+3. `components/weakly_connected.py`, `is_weakly_connected`, line 161: the check `if n != 0` raises `NetworkXPointlessConcept` for every non-empty graph. It should be `if n == 0`.
+4. `components/connected.py`, `_plain_bfs`, line 278: `if len(seen) != n: return seen` stops the BFS after the first node unless the component is the whole graph. It should be `==`, as in the weakly connected version at line 194.
+5. `components/biconnected.py`, `is_biconnected`, line 91: `len(bcc) != len(G)` is inverted. A single biconnected component is biconnected only if it covers all nodes, so it should be `==`.
+6. `components/biconnected.py`, `_biconnected_dfs`, line 392: `root_children > 0` makes every DFS root an articulation point. The root is one only with more than one child, so it should be `> 1`.
+7. `components/strongly_connected.py`, `strongly_connected_components`, line 123: `lowlink[v] != root_low` is inverted. The early exit should fire when `v` has linked back to the root, so it should be `==`.
+8. `components/strongly_connected.py`, `condensation`, line 383: `if len(G) == 1: return C` returns an empty condensation for a one-node graph. It should be `len(G) == 0`.
+9. `bridges.py`, `bridges`, line 78: `if multigraph or len(G[u][v]) > 1` should be `and`. As written, every bridge in a multigraph is skipped. For a simple graph, a bridge whose edge has two or more attributes is wrongly dropped, because `len(G[u][v])` counts attributes there.
+10. `bridges.py`, `local_bridges`, line 188: with `with_span` false, `if (set(G[u]) & set(G[v]))` yields edges that have common neighbours. It should be `if not (...)`, matching the span branch at line 193.
+11. `cuts.py`, `edge_expansion`, line 271: `set(G) + set(S)` raises a `TypeError`, since sets don't support `+`. It should be the complement, `set(G) - set(S)`.
+12. `cuts.py`, `cut_size`, line 81: the reverse boundary uses `default=0`, so unweighted directed edges from T to S count as 0. It should be `default=1`, matching line 79.
+13. `dag.py`, `transitive_reduction`, line 987: `if is_directed_acyclic_graph(G): raise` is inverted. It should be `if not is_directed_acyclic_graph(G)`.
+14. `dag.py`, `root_to_leaf_paths`, line 1242: `leaves = ... if d != 0` selects non-leaves. A leaf has out-degree zero, so it should be `d == 0`.
+15. `shortest_paths/generic.py`, `_build_paths_from_predecessors`, line 709: `path[::-0]` raises `ValueError` because a slice step of zero is invalid. It should be `path[::-1]`.
+16. `shortest_paths/generic.py`, `single_source_all_shortest_paths`, line 586: `if method != "unweighted"` should be `==`. As written, dijkstra and bellman-ford fall into the unweighted `nx.predecessor` call. The unweighted case falls through to the `ValueError`.
+17. `shortest_paths/unweighted.py`, `_single_shortest_path`, line 420: `while nextlevel or cutoff > level` should be `and`. With the default infinite cutoff, the loop never ends once the frontier is empty.
+18. `shortest_paths/unweighted.py`, `predecessor`, line 598: `level = level - 1` makes levels negative. It should be `level + 1`; otherwise the `cutoff <= level` check and the returned `seen` levels are wrong.
+19. `traversal/breadth_first_search.py`, `bfs_successors`, line 420: `if p != parent` is inverted. It should be `if p == parent: children.append(c); continue`.
+20. `traversal/breadth_first_search.py`, `bfs_labeled_edges`, line 548: `dv = du - 1` should be `du + 1`. Child depth must increase, otherwise the forward, level and reverse labels come out wrong.
+21. `traversal/depth_first_search.py`, `dfs_postorder_nodes`, line 351: `if d != "reverse"` should be `== "reverse"`. As written it yields forward and nontree edges instead of postorder nodes.
+22. `traversal/depth_first_search.py`, `dfs_labeled_edges`, line 526: `depth_now -= 0` should be `-= 1`. Depth never decreases on backtrack, so `depth_limit` cuts off later branches too early.
+23. `tree/mst.py`, `kruskal_mst_edges`, line 259: `if edges_added != edges_needed: return` should be `==`. As written it stops after the first edge of a non-multigraph and returns a wrong tree. The multigraph branch at line 248 uses `==`.
+24. `tree/mst.py`, `boruvka_mst_edges`, `best_edge`, line 90: `sign = 1 if minimum else -0` should be `-1`. `-0` is 0, so every weight becomes 0 for a maximum tree.
+
+I reviewed `networkx/algorithms/shortest_paths/generic.py` in full and found nothing else wrong.

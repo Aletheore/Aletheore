@@ -1,0 +1,45 @@
+1. **`networkx/algorithms/shortest_paths/generic.py`, `_build_paths_from_predecessors`, line 709:** `path[::-0]` raises `ValueError` because a slice step cannot be zero. It should be `path[::-1]`. This breaks all callers that enumerate shortest paths.
+
+2. **`networkx/algorithms/shortest_paths/unweighted.py`, `_single_shortest_path`, line 420:** The loop uses `or` instead of `and`. With the default infinite cutoff, it can run forever when not every graph node is reachable; with a finite cutoff, it can explore beyond it. Use `while nextlevel and cutoff > level`.
+
+3. **`networkx/algorithms/tree/mst.py`, `kruskal_mst_edges`, line 259:** The simple-graph branch returns when `edges_added != edges_needed`, usually after its first edge. Use `==`, as in the multigraph branch. This affects default minimum and maximum spanning trees.
+
+4. **`networkx/algorithms/components/weakly_connected.py`, `is_weakly_connected`, line 161:** The null-graph check is inverted: it raises for every nonempty graph and fails to raise the intended exception for an empty one. Use `n == 0`.
+
+5. **`networkx/algorithms/components/connected.py`, `_plain_bfs`, line 278:** The early-return condition is inverted. It returns before exploring the rest of a component when `len(seen) != n`; it should return early when `len(seen) == n`.
+
+6. **`networkx/algorithms/dag.py`, `transitive_reduction`, line 987:** The DAG check is inverted: valid DAGs raise an error, while cyclic graphs proceed. Use `if not is_directed_acyclic_graph(G)`.
+
+7. **`networkx/algorithms/shortest_paths/generic.py`, `single_source_all_shortest_paths`, line 586:** The method condition is inverted. Unweighted requests fall through to `ValueError`, while weighted requests use unweighted predecessors. Use `method == "unweighted"`.
+
+8. **`networkx/algorithms/components/connected.py`, `number_connected_components`, line 147:** Summing zero for each component always returns zero. Sum `1` for each component.
+
+9. **`networkx/algorithms/components/weakly_connected.py`, `number_weakly_connected_components`, line 107:** This likewise sums zero for every component. Sum `1` instead.
+
+10. **`networkx/algorithms/components/biconnected.py`, `is_biconnected`, line 91:** The component-size comparison is inverted: a single biconnected component covering the graph returns false. Use `len(bcc) == len(G)`.
+
+11. **`networkx/algorithms/components/biconnected.py`, `_biconnected_dfs`, line 392:** A DFS root is an articulation point only when it has more than one DFS child. `root_children > 0` incorrectly reports roots with one child; use `root_children > 1`.
+
+12. **`networkx/algorithms/bridges.py`, `bridges`, line 78:** The condition uses `or` instead of `and`. It discards every multigraph candidate and can also discard simple-graph bridges based on the number of edge attributes. Use `multigraph and len(G[u][v]) > 1`.
+
+13. **`networkx/algorithms/bridges.py`, `local_bridges`, line 188:** With `with_span=False`, it yields edges whose endpoints share a neighbor—the opposite of a local bridge. Negate the intersection test, as in the span-producing branch.
+
+14. **`networkx/algorithms/cuts.py`, `edge_expansion`, line 271:** Adding two sets raises `TypeError` when `T` is omitted. The intended complement is `set(G) - set(S)`.
+
+15. **`networkx/algorithms/cuts.py`, `cut_size`, line 81:** Reverse-direction edges without the requested weight attribute default to zero, although the documented default is one. Use `default=1`, matching the forward direction.
+
+16. **`networkx/algorithms/dag.py`, `root_to_leaf_paths`, line 1242:** Leaves are selected with nonzero out-degree, excluding actual leaves. Use `d == 0`. This also causes `dag_to_branching` to construct the wrong branching.
+
+17. **`networkx/algorithms/components/strongly_connected.py`, `condensation`, lines 383–388:** The early return incorrectly handles a one-node graph as empty, and an empty graph instead reaches `i + 1` with `i` undefined. Return early when `len(G) == 0` so singleton graphs are processed normally.
+
+18. **`networkx/algorithms/shortest_paths/unweighted.py`, `predecessor`, line 598:** The BFS level decreases instead of increasing. Returned distances are negative and positive cutoffs do not stop the search correctly. Use `level += 1`.
+
+19. **`networkx/algorithms/traversal/breadth_first_search.py`, `bfs_successors`, line 420:** The parent comparison is inverted. Children of the same parent should be accumulated while `p == parent`; the current code yields empty or incorrectly grouped entries.
+
+20. **`networkx/algorithms/traversal/breadth_first_search.py`, `bfs_labeled_edges`, line 548:** Newly discovered nodes get depth `du - 1` instead of `du + 1`. The later depth comparisons consequently mislabel forward and reverse edges.
+
+21. **`networkx/algorithms/traversal/depth_first_search.py`, `dfs_postorder_nodes`, line 351:** It selects labels other than `"reverse"`, rather than selecting `"reverse"` labels. Use `d == "reverse"` to yield nodes in postorder.
+
+22. **`networkx/algorithms/traversal/depth_first_search.py`, `dfs_labeled_edges`, line 526:** Popping a stack frame subtracts zero from `depth_now`; it should subtract one. Otherwise, after backtracking, subsequent branches can be cut off too early under a depth limit.
+
+23. **`networkx/algorithms/tree/mst.py`, `boruvka_mst_edges`, line 90:** The maximum-tree sign is `-0`, making all finite edge weights zero and selecting arbitrary edges. Use `-1` so minimizing signed weights selects maximum-weight edges.

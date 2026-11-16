@@ -1,0 +1,26 @@
+1. networkx/algorithms/components/weakly_connected.py:161, is_weakly_connected: `if n != 0:` raises NetworkXPointlessConcept for every non-empty graph. It should be `if n == 0:`.
+2. networkx/algorithms/dag.py:987, transitive_reduction: `if is_directed_acyclic_graph(G):` raises the "DAG required" error for valid DAGs. It should be `if not is_directed_acyclic_graph(G):`.
+3. networkx/algorithms/shortest_paths/generic.py:709, _build_paths_from_predecessors: `path[::-0]` slices with step 0 and raises ValueError. It should be `path[::-1]`. This breaks all_shortest_paths and single_source_all_shortest_paths.
+4. networkx/algorithms/cuts.py:271, edge_expansion: `set(G) + set(S)` raises TypeError. It should be `set(G) - set(S)`.
+5. networkx/algorithms/components/weakly_connected.py:107, number_weakly_connected_components: `sum(0 for _ in ...)` always returns 0. It should be `sum(1 for _ in ...)`.
+6. networkx/algorithms/components/connected.py:147, number_connected_components: `sum(0 ...)` always returns 0. It should sum 1 per component.
+7. networkx/algorithms/shortest_paths/generic.py:586, single_source_all_shortest_paths: `if method != "unweighted":` routes the dijkstra and bellman-ford methods to the unweighted predecessor search, and the unweighted case falls through to ValueError. It should be `== "unweighted"`.
+8. networkx/algorithms/dag.py:1242, root_to_leaf_paths: `leaves` selects nodes with out-degree `d != 0`, which are the non-leaves. It should be `d == 0`. This also breaks dag_to_branching.
+9. networkx/algorithms/shortest_paths/unweighted.py:420, _single_shortest_path: the loop condition uses `or`, so the cutoff is ignored while nodes remain, and a disconnected graph with the default infinite cutoff loops forever. It should be `and`.
+10. networkx/algorithms/tree/mst.py:259, kruskal_mst_edges: for a simple graph with more than two nodes, the generator returns after its first selected edge. The stop test should be `edges_added == edges_needed`.
+11. networkx/algorithms/tree/mst.py:90, boruvka_mst_edges: maximum mode multiplies weights by 0, so edge choice is arbitrary. It should multiply by -1.
+12. networkx/algorithms/shortest_paths/unweighted.py:598, predecessor: the level is decremented, which gives negative distances and means positive cutoffs never stop the traversal. It should be incremented.
+13. networkx/algorithms/cuts.py:81, cut_size: the reverse boundary for directed graphs uses `default=0`, so unweighted T→S edges count as 0. It should be `default=1`.
+14. networkx/algorithms/components/biconnected.py:91, is_biconnected: the size comparison is reversed. A cycle returns False, and a cycle plus an isolated node returns True. It should use `len(bcc) == len(G)`.
+15. networkx/algorithms/components/biconnected.py:392, _biconnected_dfs: a DFS root with one child is reported as an articulation point. It should require `root_children > 1`.
+16. networkx/algorithms/bridges.py:78, bridges: the multigraph check is reversed. It skips every multigraph bridge and can skip simple edges with multiple attributes. It should be `multigraph and len(G[u][v]) > 1`.
+17. networkx/algorithms/bridges.py:188, local_bridges: with `with_span=False` it yields edges that have common neighbors. It should negate the intersection test so it yields edges outside triangles.
+18. networkx/algorithms/components/connected.py:278, _plain_bfs: the early-return condition is reversed, so a four-node path is truncated after the first node's neighbors. It should return when `len(seen) == n`.
+19. networkx/algorithms/components/strongly_connected.py:123, strongly_connected_components: the early-exit condition is reversed. For edges 0→1, 1→2, 2→1 it merges all nodes. It should require `lowlink[v] == root_low`.
+20. networkx/algorithms/components/strongly_connected.py:383-388, condensation: a singleton graph returns an empty condensation, and an empty graph raises UnboundLocalError because `i` is unset. It should handle the empty graph explicitly and process singleton graphs normally.
+21. networkx/algorithms/traversal/breadth_first_search.py:420, bfs_successors: the inverted comparison groups children under the wrong parent. It should be `p == parent`.
+22. networkx/algorithms/traversal/breadth_first_search.py:548, bfs_labeled_edges: decreasing depth reverses the forward and reverse edge classification. It should use `du + 1`.
+23. networkx/algorithms/traversal/depth_first_search.py:351, dfs_postorder_nodes: filtering for labels other than `reverse` returns forward and non-tree events instead of postorder nodes. It should be `d == "reverse"`.
+24. networkx/algorithms/traversal/depth_first_search.py:526, dfs_labeled_edges: depth is never decremented when backtracking, so later branches are cut off early under a depth limit. It should subtract 1 on backtrack.
+
+REVIEW COMPLETE

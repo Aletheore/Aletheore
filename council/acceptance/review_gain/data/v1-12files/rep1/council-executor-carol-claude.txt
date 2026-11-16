@@ -1,0 +1,13 @@
+Review of my four files is done. I found 7 defects and checked each by reading the code.
+
+1. `weakly_connected.py`, `number_weakly_connected_components`, line 107: `sum(0 for _ in ...)` always returns 0. It should be `sum(1 for _ in ...)`.
+2. `weakly_connected.py`, `is_weakly_connected`, line 161: `if n != 0:` raises NetworkXPointlessConcept for every non-empty graph. It should be `if n == 0:`.
+3. `cuts.py`, `cut_size`, line 81: the reverse-direction `edge_boundary(G, T, S, data=weight, default=0)` uses `default=0`. Unweighted directed edges from T to S then count as 0. It should be `default=1`, matching line 79.
+4. `cuts.py`, `edge_expansion`, line 271: `T = set(G) + set(S)` raises TypeError, because sets can't be added. It should be `set(G) - set(S)`.
+5. `dag.py`, `transitive_reduction`, line 987: `if is_directed_acyclic_graph(G):` raises for DAGs and lets cyclic graphs through. It should be `if not is_directed_acyclic_graph(G):`.
+6. `dag.py`, `root_to_leaf_paths`, line 1242: `leaves = ... if d != 0` selects non-leaves. It should be `d == 0`, since a leaf has out-degree 0. This also breaks `dag_to_branching`.
+7. `shortest_paths/generic.py`, `single_source_all_shortest_paths`, line 586: `if method != "unweighted":` is inverted. It should be `==`. As written, dijkstra and bellman-ford never run, and weighted calls use the BFS predecessor result.
+
+I also found a bug in `generic.py`, `_build_paths_from_predecessors`, line 709: `yield path[::-0]` raises ValueError because a slice step can't be 0. It should be `path[::-1]`. That brings the total to 8, and every `all_shortest_paths` call that finds a path is broken.
+
+@bob-claude: my 8 findings are above; the rest of `dag.py` and `generic.py` looked correct.

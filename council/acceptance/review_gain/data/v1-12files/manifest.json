@@ -1,0 +1,222 @@
+{
+ "networkx": "3.7",
+ "seed": 20261116,
+ "bugs": [
+  {
+   "id": "M01",
+   "file": "networkx/algorithms/shortest_paths/unweighted.py",
+   "function": "_single_shortest_path",
+   "line": 420,
+   "kind": "boolean",
+   "original": "while nextlevel and cutoff > level:",
+   "mutated": "while nextlevel or cutoff > level:"
+  },
+  {
+   "id": "M02",
+   "file": "networkx/algorithms/shortest_paths/unweighted.py",
+   "function": "predecessor",
+   "line": 598,
+   "kind": "arithmetic",
+   "original": "level = level + 1",
+   "mutated": "level = level - 1"
+  },
+  {
+   "id": "M03",
+   "file": "networkx/algorithms/shortest_paths/generic.py",
+   "function": "single_source_all_shortest_paths",
+   "line": 586,
+   "kind": "comparison",
+   "original": "if method == \"unweighted\":",
+   "mutated": "if method != \"unweighted\":"
+  },
+  {
+   "id": "M04",
+   "file": "networkx/algorithms/shortest_paths/generic.py",
+   "function": "_build_paths_from_predecessors",
+   "line": 709,
+   "kind": "constant",
+   "original": "yield path[::-1]",
+   "mutated": "yield path[::-0]"
+  },
+  {
+   "id": "M05",
+   "file": "networkx/algorithms/components/connected.py",
+   "function": "number_connected_components",
+   "line": 147,
+   "kind": "constant",
+   "original": "return sum(1 for _ in connected_components(G))",
+   "mutated": "return sum(0 for _ in connected_components(G))"
+  },
+  {
+   "id": "M06",
+   "file": "networkx/algorithms/components/connected.py",
+   "function": "_plain_bfs",
+   "line": 278,
+   "kind": "comparison",
+   "original": "if len(seen) == n:",
+   "mutated": "if len(seen) != n:"
+  },
+  {
+   "id": "M07",
+   "file": "networkx/algorithms/components/strongly_connected.py",
+   "function": "strongly_connected_components",
+   "line": 123,
+   "kind": "comparison",
+   "original": "if lowlink[v] == root_low and index == N:",
+   "mutated": "if lowlink[v] != root_low and index == N:"
+  },
+  {
+   "id": "M08",
+   "file": "networkx/algorithms/components/strongly_connected.py",
+   "function": "condensation",
+   "line": 383,
+   "kind": "constant",
+   "original": "if len(G) == 0:",
+   "mutated": "if len(G) == 1:"
+  },
+  {
+   "id": "M09",
+   "file": "networkx/algorithms/components/biconnected.py",
+   "function": "is_biconnected",
+   "line": 91,
+   "kind": "comparison",
+   "original": "return len(bcc) == len(G)",
+   "mutated": "return len(bcc) != len(G)"
+  },
+  {
+   "id": "M10",
+   "file": "networkx/algorithms/components/biconnected.py",
+   "function": "_biconnected_dfs",
+   "line": 392,
+   "kind": "constant",
+   "original": "if root_children > 1:",
+   "mutated": "if root_children > 0:"
+  },
+  {
+   "id": "M11",
+   "file": "networkx/algorithms/components/weakly_connected.py",
+   "function": "number_weakly_connected_components",
+   "line": 107,
+   "kind": "constant",
+   "original": "return sum(1 for _ in weakly_connected_components(G))",
+   "mutated": "return sum(0 for _ in weakly_connected_components(G))"
+  },
+  {
+   "id": "M12",
+   "file": "networkx/algorithms/components/weakly_connected.py",
+   "function": "is_weakly_connected",
+   "line": 161,
+   "kind": "comparison",
+   "original": "if n == 0:",
+   "mutated": "if n != 0:"
+  },
+  {
+   "id": "M13",
+   "file": "networkx/algorithms/traversal/breadth_first_search.py",
+   "function": "bfs_successors",
+   "line": 420,
+   "kind": "comparison",
+   "original": "if p == parent:",
+   "mutated": "if p != parent:"
+  },
+  {
+   "id": "M14",
+   "file": "networkx/algorithms/traversal/breadth_first_search.py",
+   "function": "bfs_labeled_edges",
+   "line": 548,
+   "kind": "arithmetic",
+   "original": "depth[v] = dv = du + 1",
+   "mutated": "depth[v] = dv = du - 1"
+  },
+  {
+   "id": "M15",
+   "file": "networkx/algorithms/traversal/depth_first_search.py",
+   "function": "dfs_postorder_nodes",
+   "line": 351,
+   "kind": "comparison",
+   "original": "return (v for u, v, d in edges if d == \"reverse\")",
+   "mutated": "return (v for u, v, d in edges if d != \"reverse\")"
+  },
+  {
+   "id": "M16",
+   "file": "networkx/algorithms/traversal/depth_first_search.py",
+   "function": "dfs_labeled_edges",
+   "line": 526,
+   "kind": "constant",
+   "original": "depth_now -= 1",
+   "mutated": "depth_now -= 0"
+  },
+  {
+   "id": "M17",
+   "file": "networkx/algorithms/bridges.py",
+   "function": "bridges",
+   "line": 78,
+   "kind": "boolean",
+   "original": "if multigraph and len(G[u][v]) > 1:",
+   "mutated": "if multigraph or len(G[u][v]) > 1:"
+  },
+  {
+   "id": "M18",
+   "file": "networkx/algorithms/bridges.py",
+   "function": "local_bridges",
+   "line": 188,
+   "kind": "negation",
+   "original": "if not (set(G[u]) & set(G[v])):",
+   "mutated": "if (set(G[u]) & set(G[v])):"
+  },
+  {
+   "id": "M19",
+   "file": "networkx/algorithms/cuts.py",
+   "function": "cut_size",
+   "line": 81,
+   "kind": "constant",
+   "original": "edges = chain(edges, nx.edge_boundary(G, T, S, data=weight, default=1))",
+   "mutated": "edges = chain(edges, nx.edge_boundary(G, T, S, data=weight, default=0))"
+  },
+  {
+   "id": "M20",
+   "file": "networkx/algorithms/cuts.py",
+   "function": "edge_expansion",
+   "line": 271,
+   "kind": "arithmetic",
+   "original": "T = set(G) - set(S)",
+   "mutated": "T = set(G) + set(S)"
+  },
+  {
+   "id": "M21",
+   "file": "networkx/algorithms/dag.py",
+   "function": "transitive_reduction",
+   "line": 987,
+   "kind": "negation",
+   "original": "if not is_directed_acyclic_graph(G):",
+   "mutated": "if is_directed_acyclic_graph(G):"
+  },
+  {
+   "id": "M22",
+   "file": "networkx/algorithms/dag.py",
+   "function": "root_to_leaf_paths",
+   "line": 1242,
+   "kind": "comparison",
+   "original": "leaves = (v for v, d in G.out_degree() if d == 0)",
+   "mutated": "leaves = (v for v, d in G.out_degree() if d != 0)"
+  },
+  {
+   "id": "M23",
+   "file": "networkx/algorithms/tree/mst.py",
+   "function": "boruvka_mst_edges.best_edge",
+   "line": 90,
+   "kind": "constant",
+   "original": "sign = 1 if minimum else -1",
+   "mutated": "sign = 1 if minimum else -0"
+  },
+  {
+   "id": "M24",
+   "file": "networkx/algorithms/tree/mst.py",
+   "function": "kruskal_mst_edges",
+   "line": 259,
+   "kind": "comparison",
+   "original": "if edges_added == edges_needed:",
+   "mutated": "if edges_added != edges_needed:"
+  }
+ ]
+}

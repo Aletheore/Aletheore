@@ -1,0 +1,41 @@
+1. **`tree/mst.py`, `kruskal_mst_edges`, line 259:** The simple-graph branch returns when `edges_added != edges_needed`, usually after selecting just one edge. It should return when the counts are equal.
+
+2. **`shortest_paths/unweighted.py`, `_single_shortest_path`, line 420:** The loop uses `or` instead of `and`. It ignores the cutoff while nodes remain and can loop forever after exhausting a disconnected component when the cutoff is infinite.
+
+3. **`shortest_paths/generic.py`, `_build_paths_from_predecessors`, line 709:** `path[::-0]` raises `ValueError` because the slice step is zero. It should be `path[::-1]` to yield the path in source-to-target order.
+
+4. **`components/strongly_connected.py`, `strongly_connected_components`, line 123:** The early-exit condition uses `lowlink[v] != root_low`; it should use `==`. As written, it can merge distinct components and stop before reporting them.
+
+5. **`components/connected.py`, `_plain_bfs`, line 278:** The early return tests `len(seen) != n` instead of `== n`. It can stop after the first processed vertex and split a connected component into incorrect pieces.
+
+6. **`bridges.py`, `bridges`, line 78:** `multigraph or len(G[u][v]) > 1` skips every multigraph edge and can skip simple-graph bridges with multiple edge attributes. The condition should be `multigraph and len(G[u][v]) > 1`.
+
+7. **`components/weakly_connected.py`, `is_weakly_connected`, line 161:** The null-graph check is reversed. It should test `n == 0`; currently every nonempty graph raises, while an empty graph reaches `next()` and fails.
+
+8. **`components/biconnected.py`, `is_biconnected`, line 91:** The comparison is reversed. A sole biconnected component must contain **all** graph nodes, so this should use `==`, not `!=`.
+
+9. **`components/biconnected.py`, `_biconnected_dfs`, line 392:** A DFS root is an articulation point only if it has more than one DFS child. `root_children > 0` incorrectly reports roots with one child; use `> 1`.
+
+10. **`components/connected.py`, `number_connected_components`, line 147:** Summing zero for each component always returns zero. Sum `1` for each component.
+
+11. **`components/weakly_connected.py`, `number_weakly_connected_components`, line 107:** Likewise, summing zero always returns zero. Sum `1` for each component.
+
+12. **`dag.py`, `transitive_reduction`, line 987:** The validity condition is reversed: it raises for DAGs and proceeds for invalid inputs. It should test `not is_directed_acyclic_graph(G)`.
+
+13. **`dag.py`, `root_to_leaf_paths`, line 1242:** Leaves are selected with nonzero out-degree. Use `d == 0`; the current code selects non-leaves and omits actual root-to-leaf paths.
+
+14. **`traversal/breadth_first_search.py`, `bfs_successors`, line 420:** The parent comparison is reversed. Append a child and continue when `p == parent`; otherwise emit the accumulated children and start the new parent’s group.
+
+15. **`traversal/breadth_first_search.py`, `bfs_labeled_edges`, line 548:** Child depth is set to `du - 1` instead of `du + 1`, reversing the depth ordering used to label forward and reverse edges.
+
+16. **`traversal/depth_first_search.py`, `dfs_labeled_edges`, line 526:** `depth_now -= 0` never decreases the depth when backtracking. It should decrement by one, or later branches can be cut off prematurely.
+
+17. **`shortest_paths/unweighted.py`, `predecessor`, line 598:** The BFS level decreases instead of increasing. Use `level + 1`; otherwise returned distances are negative and positive cutoffs do not stop traversal correctly.
+
+18. **`shortest_paths/generic.py`, `single_source_all_shortest_paths`, line 586:** The unweighted-method comparison is reversed. It should be `method == "unweighted"`; currently the default raises, and weighted requests use unweighted predecessors.
+
+19. **`tree/mst.py`, `boruvka_mst_edges` / `best_edge`, line 90:** The maximum-tree sign is `-0`, which is zero, instead of `-1`. This makes finite edge weights equal during selection and can produce a nonmaximum tree.
+
+20. **`bridges.py`, `local_bridges`, line 188:** When spans are disabled, the code yields edges whose endpoints **do** share a neighbor. Negate the intersection test so it yields edges whose endpoints share none.
+
+21. **`components/strongly_connected.py`, `condensation`, line 383:** The empty-graph early return checks `len(G) == 1` instead of `== 0`. A singleton incorrectly produces an empty condensation; an empty graph falls through and references unassigned `i`.

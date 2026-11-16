@@ -1,0 +1,42 @@
+@alice-codex @carol-claude @dave-codex please review your groups for real defects (recent changes may hide subtle bugs). Report at most 8 findings each, with file, function, line, what is wrong and what it should be. Real defects only.
+
+- alice-codex: networkx/algorithms/bridges.py, networkx/algorithms/components/biconnected.py, networkx/algorithms/components/connected.py, networkx/algorithms/components/strongly_connected.py
+- carol-claude: networkx/algorithms/components/weakly_connected.py, networkx/algorithms/cuts.py, networkx/algorithms/dag.py, networkx/algorithms/shortest_paths/generic.py
+- dave-codex: networkx/algorithms/shortest_paths/unweighted.py, networkx/algorithms/traversal/breadth_first_search.py, networkx/algorithms/traversal/depth_first_search.py, networkx/algorithms/tree/mst.py
+
+=====
+
+Still waiting on alice-codex and dave-codex; carol-claude's 7 findings are in.
+
+=====
+
+Still missing: dave-codex.
+
+=====
+
+Final review (22 findings, most confident first). I did not re-read the code. These come from the three executor reports.
+
+1. networkx/algorithms/components/weakly_connected.py:107, number_weakly_connected_components: it sums `0 for _ in ...`, so it always returns 0. It should sum 1 per component.
+2. networkx/algorithms/components/connected.py:147, number_connected_components: it sums zeros, so it always returns 0. It should sum 1 per component.
+3. networkx/algorithms/components/weakly_connected.py:161, is_weakly_connected: the null-graph check is `n != 0`, so every non-empty graph raises NetworkXPointlessConcept. It should be `n == 0`.
+4. networkx/algorithms/dag.py:987, transitive_reduction: the check is `if is_directed_acyclic_graph(G): raise`. It rejects DAGs and accepts cyclic graphs. It should be `if not ...`.
+5. networkx/algorithms/shortest_paths/generic.py:709, _build_paths_from_predecessors: it yields `path[::-0]`, and a slice step of 0 raises ValueError. It should be `path[::-1]`. This breaks all_shortest_paths, single_source_all_shortest_paths and all_pairs_all_shortest_paths.
+6. networkx/algorithms/shortest_paths/generic.py:586, single_source_all_shortest_paths: the condition is `method != "unweighted"` and it calls the unweighted predecessor, so weights are ignored and the dijkstra and bellman-ford branches never run. It should be `method == "unweighted"`.
+7. networkx/algorithms/dag.py:1242, root_to_leaf_paths: leaves are chosen with out_degree `d != 0`, which selects the non-leaves. It should be `d == 0`. This breaks dag_to_branching.
+8. networkx/algorithms/cuts.py:81, cut_size: the reverse (T→S) boundary on digraphs uses `default=0`, while the forward one uses `default=1`. With weight=None the cut is undercounted. It should be `default=1`. This also skews normalized_cut_size, conductance, edge_expansion and mixing_expansion on digraphs.
+9. networkx/algorithms/tree/mst.py:259, kruskal_mst_edges: the early-return inequality stops after the first edge on ordinary graphs. It should return when `edges_added == edges_needed`.
+10. networkx/algorithms/tree/mst.py:90, boruvka_mst_edges: in maximum mode the weights are multiplied by 0, so edge choice is arbitrary. The multiplier should be -1.
+11. networkx/algorithms/shortest_paths/unweighted.py:420, _single_shortest_path: the loop condition uses `or`, so it ignores the cutoff while nodes remain. With the default infinite cutoff on a disconnected graph it loops forever. It should use `and`.
+12. networkx/algorithms/shortest_paths/unweighted.py:598, predecessor: the level is decremented, so distances go negative and positive cutoffs never stop the search. It should increment.
+13. networkx/algorithms/traversal/breadth_first_search.py:548, bfs_labeled_edges: depth decreases, which flips the forward/reverse labels for non-tree edges. It should be `dv = du + 1`.
+14. networkx/algorithms/traversal/depth_first_search.py:351, dfs_postorder_nodes: it filters out "reverse" events and so returns forward and nontree events, including duplicates. It should select the "reverse" events.
+15. networkx/algorithms/traversal/depth_first_search.py:526, dfs_labeled_edges: depth is not decremented when backtracking, so a depth limit cuts off later branches early. It should decrement by 1.
+16. networkx/algorithms/components/biconnected.py:91, is_biconnected: the size comparison is reversed, so a cycle returns False. It should be `len(bcc) == len(G)`.
+17. networkx/algorithms/components/biconnected.py:392, _biconnected_dfs: a DFS root with one child is wrongly reported as an articulation point. It should require `root_children > 1`.
+18. networkx/algorithms/components/connected.py:278, _plain_bfs: the early-return condition is reversed, so traversals are cut short. It should return when `len(seen) == n`.
+19. networkx/algorithms/components/strongly_connected.py:123, strongly_connected_components: the early-exit comparison is reversed, which can merge distinct SCCs. It should require `lowlink[v] == root_low`.
+20. networkx/algorithms/components/strongly_connected.py:383-388, condensation: a singleton graph yields an empty condensation, and an empty graph reaches an uninitialized `i`. It needs an early return for the empty graph and a safe component count.
+21. networkx/algorithms/bridges.py:188, local_bridges: with with_span=False the common-neighbour test is inverted and yields edges that are in triangles. It should yield edges with no common neighbours.
+22. networkx/algorithms/bridges.py:78, bridges: the condition skips multigraph edges and also simple-graph edges with several attributes. It should be `multigraph and len(G[u][v]) > 1`. This one is the least certain.
+
+REVIEW COMPLETE

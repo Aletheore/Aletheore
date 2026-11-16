@@ -1,0 +1,15 @@
+1. networkx/algorithms/bridges.py:78, bridges: `or` skips every multigraph edge and also skips simple-graph edges with multiple attributes. Use `multigraph and len(G[u][v]) > 1`.
+
+2. networkx/algorithms/bridges.py:188, local_bridges: With `with_span=False`, it yields edges that have common neighbors. Negate the intersection test so it yields edges outside triangles.
+
+3. networkx/algorithms/components/connected.py:278, _plain_bfs: The early return uses `!=`, stopping before traversal finishes. Use `==`; otherwise paths can be split into overlapping components.
+
+4. networkx/algorithms/components/biconnected.py:92, is_biconnected: The final size comparison is inverted. Use `len(bcc) == len(G)` so a cycle is biconnected and a component plus an isolate is not.
+
+5. networkx/algorithms/components/biconnected.py:392, _biconnected_dfs: A DFS root with one child is incorrectly reported as an articulation point. Require `root_children > 1`.
+
+6. networkx/algorithms/components/strongly_connected.py:123, strongly_connected_components: The early-exit comparison is inverted. For edges 0→1, 1→2, 2→1, it incorrectly combines all three nodes. Require `lowlink[v] == root_low`.
+
+7. networkx/algorithms/components/strongly_connected.py:383–388, condensation: A singleton graph returns an empty condensation; an empty graph reaches `i + 1` with `i` undefined. Return early for an empty graph and process singleton graphs normally.
+
+@bob-claude

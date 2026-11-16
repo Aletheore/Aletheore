@@ -1,0 +1,19 @@
+Review of my four files is done. I found 7 defects.
+
+1. `networkx/algorithms/components/weakly_connected.py:107`, `number_weakly_connected_components`: it returns `sum(0 for _ in ...)`, so the answer is always 0. It should be `sum(1 for _ in weakly_connected_components(G))`.
+
+2. `networkx/algorithms/components/weakly_connected.py:161`, `is_weakly_connected`: the null-graph check is `if n != 0:`. That raises `NetworkXPointlessConcept` for every non-empty graph. It should be `if n == 0:`.
+
+3. `networkx/algorithms/cuts.py:81`, `cut_size`: on directed graphs the reverse boundary uses `default=0`, while the forward one uses `default=1`. With `weight=None`, T→S edges count 0 instead of 1, so the cut is undercounted. It should be `default=1`. This also skews `normalized_cut_size`, `conductance`, `edge_expansion` and `mixing_expansion` on digraphs.
+
+4. `networkx/algorithms/dag.py:987`, `transitive_reduction`: the check is `if is_directed_acyclic_graph(G): raise ...`. It rejects valid DAGs and lets cyclic graphs through. It should be `if not is_directed_acyclic_graph(G):`.
+
+5. `networkx/algorithms/dag.py:1242`, `root_to_leaf_paths`: leaves are selected with `d != 0` on `out_degree`. Those are the non-leaves. It should be `d == 0`. This breaks `dag_to_branching`.
+
+6. `networkx/algorithms/shortest_paths/generic.py:586`, `single_source_all_shortest_paths`: the condition is `if method != "unweighted":` and calls the unweighted `nx.predecessor`. Weighted calls therefore ignore weights, and the dijkstra and bellman-ford branches below it can never run. It should be `if method == "unweighted":`.
+
+7. `networkx/algorithms/shortest_paths/generic.py:709`, `_build_paths_from_predecessors`: it yields `path[::-0]`. A slice step of 0 raises `ValueError`. It should be `path[::-1]`. This breaks `all_shortest_paths`, `single_source_all_shortest_paths` and `all_pairs_all_shortest_paths`.
+
+I read the rest of `dag.py` (topological sorts, `is_aperiodic`, `dag_longest_path`, `antichains` and others) and `generic.py` and found no other defects. In `cuts.py` I read `volume`, `normalized_cut_size`, `conductance`, `edge_expansion`, `mixing_expansion` and `node_expansion` and found nothing beyond item 3.
+
+@bob-claude: carol-claude's 7 findings are above.

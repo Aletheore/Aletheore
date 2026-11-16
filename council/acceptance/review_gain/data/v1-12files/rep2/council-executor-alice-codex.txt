@@ -1,0 +1,10 @@
+- networkx/algorithms/bridges.py:78, bridges: The multigraph check is reversed. It skips every multigraph bridge and can skip simple edges with multiple attributes. Use `multigraph and len(G[u][v]) > 1`.
+- networkx/algorithms/bridges.py:188, local_bridges: With `with_span=False`, it yields edges that have common neighbors. Negate the intersection test to yield edges outside triangles.
+- networkx/algorithms/components/biconnected.py:91, is_biconnected: The size comparison is reversed: a cycle returns False, while a cycle plus an isolated node returns True. Use `len(bcc) == len(G)`.
+- networkx/algorithms/components/biconnected.py:392, _biconnected_dfs: A DFS root with one child is incorrectly reported as an articulation point. Require `root_children > 1`.
+- networkx/algorithms/components/connected.py:147, number_connected_components: Summing zero always returns 0. Sum 1 for each component.
+- networkx/algorithms/components/connected.py:278, _plain_bfs: The early-return condition is reversed, so a path of four nodes is truncated after visiting the first node’s neighbors. Return early when `len(seen) == n`.
+- networkx/algorithms/components/strongly_connected.py:123, strongly_connected_components: The early-exit condition is reversed. For edges 0→1, 1→2, 2→1 it incorrectly combines all nodes. Require `lowlink[v] == root_low`.
+- networkx/algorithms/components/strongly_connected.py:383–388, condensation: A singleton graph incorrectly returns an empty condensation; an empty graph raises `UnboundLocalError` because `i` is unset. Handle the empty graph explicitly and process singleton graphs normally.
+
+@bob-claude

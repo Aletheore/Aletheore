@@ -1,0 +1,26 @@
+I found 24 defects by reading the code, without running anything. Most are a flipped operator or a changed constant.
+
+1. `networkx/algorithms/components/weakly_connected.py`, `is_weakly_connected`, line 161: `if n != 0:` raises `NetworkXPointlessConcept` for every non-empty graph. It should be `if n == 0:`.
+2. `networkx/algorithms/components/connected.py`, `number_connected_components`, line 147: `sum(0 for _ in ...)` always returns 0. It should be `sum(1 for _ in ...)`.
+3. `networkx/algorithms/components/weakly_connected.py`, `number_weakly_connected_components`, line 107: same bug, `sum(0 ...)` should be `sum(1 ...)`.
+4. `networkx/algorithms/components/connected.py`, `_plain_bfs`, line 278: `if len(seen) != n: return seen` stops the BFS after the first node's neighbours. It should be `==`, matching the weakly-connected version.
+5. `networkx/algorithms/shortest_paths/generic.py`, `_build_paths_from_predecessors`, line 709: `yield path[::-0]` raises `ValueError` because a slice step of 0 is invalid. It should be `path[::-1]`.
+6. `networkx/algorithms/shortest_paths/generic.py`, `single_source_all_shortest_paths`, line 586: `if method != "unweighted":` runs the unweighted `nx.predecessor` for dijkstra and bellman-ford. The weighted branches become unreachable, and `method="unweighted"` falls through to the "not supported" `ValueError`. It should be `==`.
+7. `networkx/algorithms/shortest_paths/unweighted.py`, `_single_shortest_path`, line 420: `while nextlevel or cutoff > level:` never ends when `cutoff` is infinity, and ignores the cutoff when the frontier is non-empty. It should be `and`.
+8. `networkx/algorithms/shortest_paths/unweighted.py`, `predecessor`, line 598: `level = level - 1` makes the `seen` levels negative. The `cutoff <= level` check then never triggers, and the docstring example shows 0, 1, 2, 3. It should be `level + 1`.
+9. `networkx/algorithms/dag.py`, `transitive_reduction`, line 987: `if is_directed_acyclic_graph(G): raise` rejects DAGs and accepts cyclic graphs. It should be `if not is_directed_acyclic_graph(G):`.
+10. `networkx/algorithms/dag.py`, `root_to_leaf_paths`, line 1242: `leaves = ... if d != 0` selects nodes that have out-edges. Leaves have out-degree 0, so it should be `d == 0`.
+11. `networkx/algorithms/traversal/depth_first_search.py`, `dfs_labeled_edges`, line 526: `depth_now -= 0` never decreases the depth on backtrack, so `depth_limit` is wrongly enforced after the first pop. It should be `-= 1`.
+12. `networkx/algorithms/traversal/depth_first_search.py`, `dfs_postorder_nodes`, line 351: `if d != "reverse"` yields every node on non-reverse edges (forward and nontree). It should be `d == "reverse"`.
+13. `networkx/algorithms/traversal/breadth_first_search.py`, `bfs_labeled_edges`, line 548: `dv = du - 1` gives depths that decrease. That inverts the forward and reverse classification at lines 556–559. It should be `du + 1`.
+14. `networkx/algorithms/traversal/breadth_first_search.py`, `bfs_successors`, line 420: `if p != parent:` is inverted. It should be `if p == parent:` to append the child and continue, otherwise yield and start a new group.
+15. `networkx/algorithms/components/strongly_connected.py`, `condensation`, line 383: `if len(G) == 1: return C` returns an empty condensation for a single-node graph. It should be `len(G) == 0`; otherwise `i` is also undefined for an empty graph.
+16. `networkx/algorithms/components/strongly_connected.py`, `strongly_connected_components`, line 123: `lowlink[v] != root_low and index == N` is the wrong early-exit test. It should be `==`, because the comment says "linked back to the root". As written, it can fire when the graph is not one SCC.
+17. `networkx/algorithms/components/biconnected.py`, `is_biconnected`, line 91: `return len(bcc) != len(G)` should be `==`. A single bicomponent covering all nodes means the graph is biconnected.
+18. `networkx/algorithms/components/biconnected.py`, `_biconnected_dfs`, line 392: `if root_children > 0:` makes every root with a child an articulation point. It should be `> 1`.
+19. `networkx/algorithms/bridges.py`, `bridges`, line 78: `if multigraph or len(G[u][v]) > 1: continue` skips every edge of a multigraph. It should be `and`, so only parallel edges are skipped.
+20. `networkx/algorithms/bridges.py`, `local_bridges`, line 188: with `with_span=False` it yields edges whose endpoints have common neighbours. It should be `if not (set(G[u]) & set(G[v])):`, as in the span branch.
+21. `networkx/algorithms/cuts.py`, `edge_expansion`, line 271: `set(G) + set(S)` raises `TypeError` because sets don't support `+`. It should be `set(G) - set(S)`.
+22. `networkx/algorithms/cuts.py`, `cut_size`, line 81: `default=0` on the reverse-direction boundary gives unweighted directed edges weight 0 in that direction. It should be `default=1`.
+23. `networkx/algorithms/tree/mst.py`, `boruvka_mst_edges.best_edge`, line 90: `sign = 1 if minimum else -0` is 0 for maximum trees, so every weight becomes 0. It should be `-1`.
+24. `networkx/algorithms/tree/mst.py`, `kruskal_mst_edges`, line 259: `if edges_added != edges_needed: return` ends the non-multigraph loop after the first edge. It should be `==`, as in the multigraph branch at line 248.

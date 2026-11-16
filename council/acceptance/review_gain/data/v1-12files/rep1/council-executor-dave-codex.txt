@@ -1,0 +1,17 @@
+1. networkx/algorithms/shortest_paths/unweighted.py, _single_shortest_path, line 420: `or` ignores the cutoff while nodes remain and loops forever on disconnected graphs with no cutoff. Use `and`.
+
+2. networkx/algorithms/shortest_paths/unweighted.py, predecessor, line 598: Decrementing the level returns negative distances and prevents positive cutoffs from stopping the search. Increment it instead.
+
+3. networkx/algorithms/traversal/breadth_first_search.py, bfs_successors, line 420: The inverted comparison groups children under the wrong parents. Append when `p == parent`.
+
+4. networkx/algorithms/traversal/breadth_first_search.py, bfs_labeled_edges, line 548: Decreasing depth reverses forward and reverse edge classifications. Set `dv = du + 1`.
+
+5. networkx/algorithms/traversal/depth_first_search.py, dfs_postorder_nodes, line 351: Filtering out reverse edges returns forward and nontree events instead of postorder nodes. Select `d == "reverse"`.
+
+6. networkx/algorithms/traversal/depth_first_search.py, dfs_labeled_edges, line 526: Depth never decreases on backtracking, so later branches are prematurely limited. Subtract 1.
+
+7. networkx/algorithms/tree/mst.py, boruvka_mst_edges, line 90: The maximum-tree sign is zero, making all finite weights equal and potentially selecting a nonmaximum tree. Use `-1`.
+
+8. networkx/algorithms/tree/mst.py, kruskal_mst_edges, line 259: The simple-graph branch returns after its first edge for graphs with more than two nodes, producing an incomplete forest. Return when `edges_added == edges_needed`.
+
+@bob-claude

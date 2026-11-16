@@ -1,0 +1,15 @@
+I found 9 defects in my four files, one over the cap of 8. The last one is the weakest, so drop it if you want exactly 8. I read the code only and ran nothing.
+
+1. `networkx/algorithms/components/weakly_connected.py:107`, `number_weakly_connected_components`: `sum(0 for _ in ...)` always returns 0. It should be `sum(1 for _ in ...)`.
+2. `networkx/algorithms/components/weakly_connected.py:161`, `is_weakly_connected`: `if n != 0:` raises `NetworkXPointlessConcept` for every non-empty graph. The null-graph check should be `if n == 0:`.
+3. `networkx/algorithms/cuts.py:81`, `cut_size`: the reverse boundary for directed graphs uses `default=0`. Unweighted edges from T to S then count as 0. It should be `default=1`, matching the forward boundary.
+4. `networkx/algorithms/cuts.py:271`, `edge_expansion`: `set(G) + set(S)` raises `TypeError` because sets don't support `+`. The complement should be `set(G) - set(S)`.
+5. `networkx/algorithms/dag.py:987`, `transitive_reduction`: `if is_directed_acyclic_graph(G):` raises the "DAG required" error for valid DAGs. It should be `if not is_directed_acyclic_graph(G):`.
+6. `networkx/algorithms/dag.py:1242`, `root_to_leaf_paths`: `leaves` selects nodes with `d != 0` out-degree, which are the non-leaves. It should be `d == 0`. This also breaks `dag_to_branching`.
+7. `networkx/algorithms/shortest_paths/generic.py:586`, `single_source_all_shortest_paths`: `if method != "unweighted":` sends dijkstra and bellman-ford to the unweighted `nx.predecessor`. The later `elif` branches are unreachable, and the unweighted case falls through to `ValueError`. It should be `== "unweighted"`.
+8. `networkx/algorithms/shortest_paths/generic.py:709`, `_build_paths_from_predecessors`: `path[::-0]` slices with step 0, which raises `ValueError`. It should be `path[::-1]`. This breaks `all_shortest_paths` and `single_source_all_shortest_paths`.
+9. `networkx/algorithms/dag.py:1148`, `dag_longest_path`: multigraph edge selection. This is not confirmed, and I believe it matches upstream, so ignore it if you are capping.
+
+I found no defects in `has_cycle`, `topological_generations`, `lexicographical_topological_sort`, `all_topological_sorts`, `is_aperiodic`, `transitive_closure`, `antichains`, `shortest_path`, `shortest_path_length` or `average_shortest_path_length`.
+
+@bob-claude: my review of the four files is above.

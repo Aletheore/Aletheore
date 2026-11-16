@@ -1,0 +1,27 @@
+Final review (all three executors reported; I did not re-read the code myself):
+
+1. networkx/algorithms/components/weakly_connected.py, is_weakly_connected, line 161: `if n != 0:` raises NetworkXPointlessConcept for every non-empty graph. It should be `if n == 0:`.
+2. networkx/algorithms/components/weakly_connected.py, number_weakly_connected_components, line 107: `sum(0 for _ in ...)` always returns 0. It should be `sum(1 for _ in ...)`.
+3. networkx/algorithms/dag.py, transitive_reduction, line 987: `if is_directed_acyclic_graph(G):` raises for DAGs and lets cyclic graphs through. It should be `if not is_directed_acyclic_graph(G):`.
+4. networkx/algorithms/dag.py, root_to_leaf_paths, line 1242: `d != 0` selects non-leaves. It should be `d == 0`. This also breaks dag_to_branching.
+5. networkx/algorithms/shortest_paths/generic.py, _build_paths_from_predecessors, line 709: `path[::-0]` raises ValueError because a slice step can't be 0. It should be `path[::-1]`. Every all_shortest_paths call that finds a path is affected.
+6. networkx/algorithms/shortest_paths/generic.py, single_source_all_shortest_paths, line 586: `method != "unweighted"` is inverted. It should be `==`. As written, dijkstra and bellman-ford never run.
+7. networkx/algorithms/cuts.py, edge_expansion, line 271: `set(G) + set(S)` raises TypeError. It should be `set(G) - set(S)`.
+8. networkx/algorithms/cuts.py, cut_size, line 81: the T→S `edge_boundary` call uses `default=0`. Unweighted directed edges from T to S count as 0. It should be `default=1`, matching line 79.
+9. networkx/algorithms/components/strongly_connected.py, strongly_connected_components, line 123: the early-exit lowlink comparison is inverted. For edges 0→1, 1→2, 2→1 it merges all three nodes. It should be `lowlink[v] == root_low`.
+10. networkx/algorithms/components/strongly_connected.py, condensation, lines 383–388: a singleton graph gives an empty condensation, and an empty graph reaches `i + 1` with `i` undefined. Return early for an empty graph and process singletons normally.
+11. networkx/algorithms/components/biconnected.py, is_biconnected, line 92: the final size comparison is inverted. It should be `len(bcc) == len(G)`.
+12. networkx/algorithms/components/biconnected.py, _biconnected_dfs, line 392: a DFS root with one child is reported as an articulation point. It should require `root_children > 1`.
+13. networkx/algorithms/components/connected.py, _plain_bfs, line 278: the early return uses `!=` and stops before traversal finishes. It should be `==`.
+14. networkx/algorithms/bridges.py, bridges, line 78: the `or` skips every multigraph edge and also skips simple-graph edges with multiple attributes. It should be `multigraph and len(G[u][v]) > 1`.
+15. networkx/algorithms/bridges.py, local_bridges, line 188: with `with_span=False` it yields edges that have common neighbors. The intersection test should be negated so it yields edges outside triangles.
+16. networkx/algorithms/shortest_paths/unweighted.py, _single_shortest_path, line 420: `or` ignores the cutoff while nodes remain and loops forever on disconnected graphs with no cutoff. It should be `and`.
+17. networkx/algorithms/shortest_paths/unweighted.py, predecessor, line 598: the level is decremented, which gives negative distances and keeps positive cutoffs from stopping the search. It should be incremented.
+18. networkx/algorithms/traversal/breadth_first_search.py, bfs_successors, line 420: the inverted comparison groups children under the wrong parents. It should append when `p == parent`.
+19. networkx/algorithms/traversal/breadth_first_search.py, bfs_labeled_edges, line 548: depth is decreased, which swaps the forward and reverse classifications. It should be `dv = du + 1`.
+20. networkx/algorithms/traversal/depth_first_search.py, dfs_postorder_nodes, line 351: the filter returns forward and nontree events instead of postorder nodes. It should select `d == "reverse"`.
+21. networkx/algorithms/traversal/depth_first_search.py, dfs_labeled_edges, line 526: depth never decreases on backtracking, so later branches are limited too early. It should subtract 1 when backtracking.
+22. networkx/algorithms/tree/mst.py, boruvka_mst_edges, line 90: the maximum-tree sign is 0, so all finite weights compare equal and the tree may not be maximum. It should be `-1`.
+23. networkx/algorithms/tree/mst.py, kruskal_mst_edges, line 259: the simple-graph branch returns after its first edge on graphs with more than two nodes. It should return only when `edges_added == edges_needed`.
+
+REVIEW COMPLETE

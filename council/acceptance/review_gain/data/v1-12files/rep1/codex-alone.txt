@@ -1,0 +1,47 @@
+1. [networkx/algorithms/shortest_paths/generic.py:709](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/shortest_paths/generic.py:709) — `_build_paths_from_predecessors`: `path[::-0]` raises `ValueError` because the slice step is zero. Use `path[::-1]` to yield paths in source-to-target order.
+
+2. [networkx/algorithms/shortest_paths/unweighted.py:420](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/shortest_paths/unweighted.py:420) — `_single_shortest_path`: `or` makes the search ignore the cutoff while a frontier exists and loop forever with the default infinite cutoff when not all graph nodes are reachable. Use `and`.
+
+3. [networkx/algorithms/components/connected.py:278](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/components/connected.py:278) — `_plain_bfs`: The early-return condition is inverted. Return when `len(seen) == n`; otherwise searches can stop before visiting the full component, corrupting connectivity results.
+
+4. [networkx/algorithms/components/weakly_connected.py:161](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/components/weakly_connected.py:161) — `is_weakly_connected`: The null-graph check is inverted. Use `n == 0`; currently every nonempty graph raises, while an empty graph reaches `next()` on an empty iterator.
+
+5. [networkx/algorithms/dag.py:987](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/dag.py:987) — `transitive_reduction`: The DAG check is inverted. Raise when `not is_directed_acyclic_graph(G)`; currently valid DAGs are rejected.
+
+6. [networkx/algorithms/components/biconnected.py:91](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/components/biconnected.py:91) — `is_biconnected`: The sole component must cover all nodes. Use `len(bcc) == len(G)`; the current comparison reverses the answer in this case.
+
+7. [networkx/algorithms/components/biconnected.py:392](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/components/biconnected.py:392) — `_biconnected_dfs`: A DFS root is an articulation point only if it has more than one DFS child. Use `root_children > 1`; `> 0` incorrectly reports roots with one child.
+
+8. [networkx/algorithms/components/connected.py:147](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/components/connected.py:147) — `number_connected_components`: Summing zero per component always returns zero. Sum `1` per component.
+
+9. [networkx/algorithms/components/weakly_connected.py:107](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/components/weakly_connected.py:107) — `number_weakly_connected_components`: Likewise, sum `1` per component; the current sum always returns zero.
+
+10. [networkx/algorithms/components/strongly_connected.py:383](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/components/strongly_connected.py:383) — `condensation`: The early return should check `len(G) == 0`. It currently returns an empty condensation for a one-node graph, and an empty graph instead reaches an unbound `i`.
+
+11. [networkx/algorithms/bridges.py:78](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/bridges.py:78) — `bridges`: Use `multigraph and len(G[u][v]) > 1`. The current `or` discards every multigraph bridge and can discard a simple-graph bridge merely because it has multiple attributes.
+
+12. [networkx/algorithms/bridges.py:188](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/bridges.py:188) — `local_bridges`: With `with_span=False`, the condition yields edges that *do* have a common neighbor. Negate it, as in the span-producing branch.
+
+13. [networkx/algorithms/cuts.py:271](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/cuts.py:271) — `edge_expansion`: Sets do not support `+`, so omitting `T` raises `TypeError`. Use `set(G) - set(S)` for the complementary set.
+
+14. [networkx/algorithms/cuts.py:81](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/cuts.py:81) — `cut_size`: Reverse-direction edges with no requested weight attribute receive default weight `0`, whereas forward edges receive `1`. Use `default=1` for both directions.
+
+15. [networkx/algorithms/dag.py:1242](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/dag.py:1242) — `root_to_leaf_paths`: Leaves have out-degree zero. Use `d == 0`; the current condition selects non-leaves and causes `dag_to_branching` to construct the wrong paths.
+
+16. [networkx/algorithms/shortest_paths/generic.py:586](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/shortest_paths/generic.py:586) — `single_source_all_shortest_paths`: Use `method == "unweighted"`. The inverted check rejects unweighted calls and routes weighted calls through unweighted predecessor computation.
+
+17. [networkx/algorithms/shortest_paths/unweighted.py:598](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/shortest_paths/unweighted.py:598) — `predecessor`: BFS levels must increase, so use `level += 1`. Decrementing produces negative distances and prevents positive cutoffs from stopping the search.
+
+18. [networkx/algorithms/traversal/breadth_first_search.py:420](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/traversal/breadth_first_search.py:420) — `bfs_successors`: Children should be accumulated while `p == parent`. The inverted condition yields incorrect parent-to-children groupings.
+
+19. [networkx/algorithms/traversal/breadth_first_search.py:548](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/traversal/breadth_first_search.py:548) — `bfs_labeled_edges`: A newly discovered child has depth `du + 1`, not `du - 1`. Negative depths reverse forward/reverse edge classification.
+
+20. [networkx/algorithms/traversal/depth_first_search.py:351](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/traversal/depth_first_search.py:351) — `dfs_postorder_nodes`: Select edges labeled `"reverse"` with `==`. The current `!=` emits forward and non-tree events instead of postorder nodes.
+
+21. [networkx/algorithms/traversal/depth_first_search.py:526](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/traversal/depth_first_search.py:526) — `dfs_labeled_edges`: Popping a DFS frame must decrement depth by one. `depth_now -= 0` leaves depth inflated, so later branches can be cut off too early.
+
+22. [networkx/algorithms/tree/mst.py:90](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/tree/mst.py:90) — `boruvka_mst_edges`: Use `-1` for maximum spanning trees. `-0` makes all finite edge weights zero, so selection ignores their weights.
+
+23. [networkx/algorithms/tree/mst.py:259](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-codex-875twhw6/repo/networkx/algorithms/tree/mst.py:259) — `kruskal_mst_edges`: The simple-graph branch should return when `edges_added == edges_needed`. The inverted condition usually stops after the first edge, producing an incomplete spanning forest.
+
+These findings are from static reading; I did not run the code.

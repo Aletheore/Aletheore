@@ -1,0 +1,26 @@
+I found 24 defects across the 12 files and reported them through the findings tool. I only read the code and did not run anything. All but one are confirmed by reading; the strongly-connected early-exit finding (#9) is plausible rather than certain.
+
+1. `components/connected.py:147`, `number_connected_components`: `sum(0 ...)` always returns 0. It should be `sum(1 ...)`.
+2. `components/weakly_connected.py:107`, `number_weakly_connected_components`: same `sum(0 ...)` bug.
+3. `components/weakly_connected.py:161`, `is_weakly_connected`: `if n != 0` should be `if n == 0`. As written it raises on every non-empty graph.
+4. `components/connected.py:278`, `_plain_bfs`: `len(seen) != n` should be `== n`, so components are cut short.
+5. `components/biconnected.py:91`, `is_biconnected`: `len(bcc) != len(G)` should be `==`.
+6. `components/biconnected.py:392`, `_biconnected_dfs`: `root_children > 0` should be `> 1`, as the comment says.
+7. `bridges.py:78`, `bridges`: `multigraph or len(G[u][v]) > 1` should use `and`.
+8. `bridges.py:188`, `local_bridges` with `with_span=False`: the condition is missing a `not`.
+9. `components/strongly_connected.py:123`, `strongly_connected_components`: the early-exit test `lowlink[v] != root_low` should be `==`.
+10. `components/strongly_connected.py:383`, `condensation`: `len(G) == 1` should be `len(G) == 0`.
+11. `cuts.py:271`, `edge_expansion`: `set(G) + set(S)` should be `-`.
+12. `cuts.py:81`, `cut_size`: the reverse-direction boundary uses `default=0` and should use `default=1`.
+13. `dag.py:987`, `transitive_reduction`: the DAG check is inverted. It should be `if not is_directed_acyclic_graph(G)`.
+14. `dag.py:1242`, `root_to_leaf_paths`: leaves are chosen with `d != 0` and should be `d == 0`.
+15. `shortest_paths/unweighted.py:420`, `_single_shortest_path`: `nextlevel or cutoff > level` should use `and`. With the default cutoff it can loop forever on disconnected graphs.
+16. `shortest_paths/unweighted.py:598`, `predecessor`: `level - 1` should be `level + 1`.
+17. `shortest_paths/generic.py:586`, `single_source_all_shortest_paths`: `method != "unweighted"` should be `==`.
+18. `shortest_paths/generic.py:709`, `_build_paths_from_predecessors`: `path[::-0]` should be `path[::-1]`. A slice step of 0 raises `ValueError`.
+19. `traversal/breadth_first_search.py:420`, `bfs_successors`: `p != parent` should be `p == parent`.
+20. `traversal/breadth_first_search.py:548`, `bfs_labeled_edges`: `du - 1` should be `du + 1`.
+21. `traversal/depth_first_search.py:351`, `dfs_postorder_nodes`: `d != "reverse"` should be `d == "reverse"`.
+22. `traversal/depth_first_search.py:526`, `dfs_labeled_edges`: `depth_now -= 0` should be `-= 1`.
+23. `tree/mst.py:90`, `boruvka_mst_edges`: `-0` should be `-1` for the maximum tree.
+24. `tree/mst.py:259`, `kruskal_mst_edges` non-multigraph branch: `edges_added != edges_needed` should be `==`.

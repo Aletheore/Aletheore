@@ -1,0 +1,38 @@
+1. [dag.py:987](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-split-db0ii3jk/repo0/networkx/algorithms/dag.py:987) — `transitive_reduction` raises an error for every DAG and proceeds for cyclic graphs. The condition should be `if not is_directed_acyclic_graph(G):`.
+
+2. [biconnected.py:91](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-split-db0ii3jk/repo0/networkx/algorithms/components/biconnected.py:91) — `is_biconnected` returns `False` when the sole bicomponent covers the graph and `True` when it does not. Use `len(bcc) == len(G)`.
+
+3. [biconnected.py:392](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-split-db0ii3jk/repo0/networkx/algorithms/components/biconnected.py:392) — `_biconnected_dfs` reports a DFS root with one child as an articulation point. A root is an articulation point only when it has more than one DFS child, so the condition should be `root_children > 1`.
+
+4. [dag.py:1242](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-split-db0ii3jk/repo0/networkx/algorithms/dag.py:1242) — `root_to_leaf_paths` selects nodes with nonzero out-degree as leaves, omitting actual leaves. Use `d == 0`. This also makes `dag_to_branching` construct incorrect branchings.
+
+5. [cuts.py:271](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-split-db0ii3jk/repo0/networkx/algorithms/cuts.py:271) — `edge_expansion` raises `TypeError` whenever `T` is omitted because sets do not support `+`. The complement should be `set(G) - set(S)`.
+
+6. [cuts.py:81](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-split-db0ii3jk/repo0/networkx/algorithms/cuts.py:81) — `cut_size` assigns a default weight of zero to reverse-direction edges missing the requested weight attribute, while the documented default is one. Use `default=1` for that boundary as well.
+
+7. [cuts.py:358](/var/folders/p2/4x5y18hs4qs_8m7135gh3l600000gn/T/gain-split-db0ii3jk/repo0/networkx/algorithms/cuts.py:358) — `node_expansion` counts neighbors inside `S`, although its docstring specifies the node boundary, which excludes `S`. Compute the boundary with `nx.node_boundary(G, S)` or subtract `S` from the neighborhood.
+
+1. `networkx/algorithms/components/connected.py`, `_plain_bfs`, line 278: the early exit is inverted. It should be `if len(seen) == n: return seen`. As written, the BFS returns after expanding the first node whenever not every node has been seen yet. That makes `connected_components`, `node_connected_component` and `is_connected` return truncated components.
+2. `networkx/algorithms/components/connected.py`, `number_connected_components`, line 147: `sum(0 for _ in ...)` always returns 0. It should be `sum(1 for _ in connected_components(G))`.
+3. `networkx/algorithms/tree/mst.py`, `kruskal_mst_edges`, line 259: `if edges_added != edges_needed: return` stops after the first edge. It should be `==`, which matches the multigraph branch at line 248.
+4. `networkx/algorithms/tree/mst.py`, `boruvka_mst_edges.best_edge`, line 90: `sign = 1 if minimum else -0` evaluates to 0 for the maximum case. Every weight becomes 0, so maximum spanning trees are wrong. It should be `-1`.
+5. `networkx/algorithms/traversal/breadth_first_search.py`, `bfs_labeled_edges`, line 548: `dv = du - 1` should be `du + 1`. Depth decreases along tree edges, so the labels come out wrong. Forward edges are reported as reverse, and level edges are mislabelled.
+6. `networkx/algorithms/traversal/breadth_first_search.py`, `bfs_successors`, line 420: the condition is flipped. It should be `if p == parent:`, so that children of the same parent are collected together. As written, the grouping is wrong and the first entry comes out empty.
+7. `networkx/algorithms/bridges.py`, `local_bridges`, line 188: the `with_span=False` branch yields edges that do share a common neighbor. It should be `if not (set(G[u]) & set(G[v])):`, as in the span branch at line 193.
+8. `networkx/algorithms/bridges.py`, `bridges`, line 78: `if multigraph or len(G[u][v]) > 1` skips every bridge when `G` is a multigraph. It should be `and`, so that only parallel multi-edges are skipped.
+
+1. [generic.py:709](networkx/algorithms/shortest_paths/generic.py#L709) — `_build_paths_from_predecessors`: `path[::-0]` raises `ValueError` because a slice step cannot be zero. It should be `path[::-1]` to yield the path in source-to-target order.
+
+2. [unweighted.py:420](networkx/algorithms/shortest_paths/unweighted.py#L420) — `_single_shortest_path`: The loop uses `or` where it needs `and`. With the default infinite cutoff, a search that exhausts its reachable nodes before visiting the entire graph never terminates. It also ignores finite cutoffs while nodes remain in the frontier.
+
+3. [strongly_connected.py:123](networkx/algorithms/components/strongly_connected.py#L123) — `strongly_connected_components`: The early-exit condition uses `!= root_low`; it should use `== root_low`. As written, a path from a root into a separate cycle can cause the function to incorrectly yield all nodes as one component.
+
+4. [generic.py:586](networkx/algorithms/shortest_paths/generic.py#L586) — `single_source_all_shortest_paths`: The condition should be `method == "unweighted"`. Currently, unweighted calls reach the unsupported-method error, while weighted calls use unweighted predecessors instead of the requested algorithm.
+
+5. [weakly_connected.py:161](networkx/algorithms/components/weakly_connected.py#L161) — `is_weakly_connected`: The null-graph check is flipped. It should raise when `n == 0`; currently it raises for every nonempty graph and fails with `StopIteration` for an empty one.
+
+6. [depth_first_search.py:351](networkx/algorithms/traversal/depth_first_search.py#L351) — `dfs_postorder_nodes`: The filter uses `d != "reverse"`; it should use `d == "reverse"`. The current code excludes postorder events and returns nodes from other event types, often with duplicates.
+
+7. [unweighted.py:598](networkx/algorithms/shortest_paths/unweighted.py#L598) — `predecessor`: The BFS level is decremented instead of incremented. It should be `level += 1`; the current code reports negative distances and prevents positive cutoffs from stopping the traversal.
+
+8. [weakly_connected.py:107](networkx/algorithms/components/weakly_connected.py#L107) — `number_weakly_connected_components`: Summing `0` for each component always returns zero. It should sum `1` for each component.
