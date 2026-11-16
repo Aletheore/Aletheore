@@ -14,3 +14,7 @@ cloudflared on its PATH), `ACC_SRC=<the checkout's src folder>` (defaults to thi
 
 Needs: a working registry, `cloudflared` on the host (or ACC_CLOUDFLARED), `psutil`, and the guest machine able to reach the internet.
 It uses a real slot from the pool for a few minutes per run.
+
+## Real-agent checks on one machine
+
+`real_wake_check.py` and `real_agent_tools_check.py` drive the real Claude Code and Codex CLIs through the wake path (mentions, read-only wakes, `@agent /task`, `council wait`) and the agent tools (`council_post`) in a throwaway room. Run each from the repository's `src` folder with `aletheore[council,dev]` installed, as `PYTHONPATH=. python ../council/acceptance/<script>` (the tools check borrows the test server in `tests/council/chaos`); they use your own agent sign-ins, so they count against your usage, and they print PASS or FAIL per check.

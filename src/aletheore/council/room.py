@@ -20,7 +20,7 @@ import tempfile
 
 from aletheore.council.bundle_store import BundleStore
 from aletheore.council.bundle_transport import TransportError, create_bundle, ensure_integration_branch, import_bundle
-from aletheore.council.state import Area, load_state
+from aletheore.council.state import FINAL_TASK_STATUS, Area, load_state
 from aletheore.council.store import RoomStore, read_all
 from aletheore.council.worktrees import (
     GitError, MergeResult, _git, branch_changed_files, changed_files, commit_all, create_worktree, files_outside_area, integration_branch,
@@ -145,6 +145,35 @@ class Room:
                     **({"sync_integration": True} if sync_integration else {})},
                    self.host, thread=task_id)
         return task_id
+
+    def cancel_task(self, task_id: str, reason: str = "", replaced_by: str = "") -> None:
+        """Host only: stop a task that has not finished, for example because its owner's machine is gone. Its owner's worker will not run it."""
+        task = load_state(self.store, self.room_id).tasks[task_id]  # KeyError if unknown
+        if task.status in FINAL_TASK_STATUS:
+            raise ValueError(f"{task_id} is already {task.status}")
+        self._post(EventType.TASK, f"{task_id}:cancelled",
+                   {"op": "cancelled", "task_id": task_id, "area": task.area, "note": clip_text(reason, 300),
+                    **({"replaced_by": replaced_by} if replaced_by else {})}, self.host, thread=task_id)
+
+    def reassign_task(self, task_id: str, new_area: str) -> str:
+        """Host only: hand an unfinished task to another area. The new request carries the same instruction; the old task is cancelled and points at it.
+        Returns the new task id."""
+        state = load_state(self.store, self.room_id)
+        old = state.tasks[task_id]  # KeyError if unknown
+        state.areas[new_area]       # KeyError if the area is unknown
+        if old.status in FINAL_TASK_STATUS:
+            raise ValueError(f"{task_id} is already {old.status}")
+        if new_area == old.area:
+            raise ValueError(f"{task_id} already belongs to {new_area}")
+        req = next((e for e in read_all(self.store, self.room_id) if e.type is EventType.TASK and e.body.get("task_id") == task_id
+                    and e.body.get("op") in ("request", "assign")), None)
+        if req is None:
+            raise KeyError(f"no request found for {task_id}")
+        n = 1 + sum(1 for t in state.tasks if t.startswith(f"{task_id}-re"))
+        new_id = self.request_task(new_area, str(req.body.get("instruction", "")), task_id=f"{task_id}-re{n}",
+                                   attachments=req.body.get("attachments") or None, sync_integration=bool(req.body.get("sync_integration")))
+        self.cancel_task(task_id, f"handed to {new_area}", replaced_by=new_id)  # after the new request exists, so a plan never sees a gap
+        return new_id
 
     def execute_task(self, task_id: str, area_name: str, instruction: str, runner: WorkerRunner, timeout_s: int = WORKER_TIMEOUT_S,
                      images: tuple[Path, ...] = (), notes: str = "") -> None:

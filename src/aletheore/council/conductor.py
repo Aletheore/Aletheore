@@ -14,7 +14,7 @@ import json
 from aletheore.council.dispatcher import Dispatcher, parse_plan
 from aletheore.council.mcp_tools import _frame
 from aletheore.council.protocol import EventDraft, EventType, clip_text
-from aletheore.council.state import load_state
+from aletheore.council.state import load_state, task_settled
 from aletheore.council.store import read_all
 from aletheore.council.worktrees import _git, integration_branch
 
@@ -135,8 +135,7 @@ class Conductor:
             return False
         for i, item in enumerate(plan.tasks, 1):
             if item.get("kind", "task") == "task":
-                t = state.tasks.get(f"{plan.plan_id}-{i}")
-                if t is None or t.status not in _FINAL_TASK:
+                if not task_settled(state, f"{plan.plan_id}-{i}"):  # a task handed to another area is unfinished until its replacement is
                     return False
             elif not self._debate_over(f"{plan.plan_id}-d{i}", state, events):
                 return False
@@ -153,7 +152,7 @@ class Conductor:
         v = state.verdicts.get(str(decision.body.get("verdict_id")))
         if v is not None and v.status == "applied":
             rework = state.tasks.get(f"rework-{v.verdict_id}")
-            return rework is None or rework.status in _FINAL_TASK  # the loser's agent updates its files before the round is over
+            return rework is None or task_settled(state, rework.task_id)  # the loser's agent updates its files before the round is over
         if v is None or not v.winning_branch or v.status == "rejected":
             return True
         return any(e.body.get("subtype") == "apply_blocked" and e.body.get("verdict_id") == v.verdict_id for e in events)

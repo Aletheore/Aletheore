@@ -9,7 +9,7 @@ The host is passed in by callers that can ask the server/store (`load_state`); w
 event can never make the room unreadable.
 
 Event body conventions:
-  task:      {"op": "request"|"assign"|"started"|"finished"|"failed"|"blocked", "task_id", "area"?, "branch"?, "files"?}
+  task:      {"op": "request"|"assign"|"started"|"finished"|"failed"|"blocked"|"cancelled" (host only; "replaced_by"?), "task_id", "area"?, "branch"?, "files"?}
   decision:  {"verdict_id", "decision", "affected_area", "winning_branch"?}
   system:    {"subtype": "room_created", "host"} {"subtype": "area_defined", "name", "globs", "owner", "agent_id"}
              {"subtype": "verdict_approved"|"verdict_rejected"|"verdict_applied", "verdict_id"}
@@ -40,6 +40,7 @@ class TaskState:
     branch: str | None = None
     blocked_files: list[str] = field(default_factory=list)
     acknowledged: bool = False
+    replaced_by: str = ""  # a cancelled task the host handed to another area: the id of the task that took its place
 
 
 @dataclass
@@ -82,6 +83,7 @@ class RoomState:
     goal_thread: str = ""
 
 
+FINAL_TASK_STATUS = ("done", "failed", "blocked", "cancelled")  # nothing more will happen to a task in one of these
 _TASK_STATUS = {"started": "running", "finished": "done", "failed": "failed", "blocked": "blocked"}
 _VERDICT_STATUS = {"verdict_approved": "approved", "verdict_rejected": "rejected", "verdict_applied": "applied"}
 
@@ -159,11 +161,16 @@ def _apply(state: RoomState, e: Event, host_fixed: bool) -> None:
         op, tid = b.get("op"), b.get("task_id")
         if op in ("assign", "request") and is_host:
             state.tasks[_s(tid)] = TaskState(tid, _s(b.get("area")))
+        elif op == "cancelled" and is_host:
+            task = state.tasks.get(_s(tid))
+            if task is not None and task.status not in FINAL_TASK_STATUS:
+                task.status = "cancelled"
+                task.replaced_by = _s(b.get("replaced_by"))
         elif op in _TASK_STATUS:
             task = state.tasks.get(_s(tid))
             area = state.areas.get(task.area) if task else None
-            if task is None or area is None or sender != area.owner_participant:
-                return
+            if task is None or area is None or sender != area.owner_participant or task.status == "cancelled":
+                return  # a cancelled task stays cancelled, whatever its old owner reports late
             task.status = _TASK_STATUS[op]
             if isinstance(b.get("branch"), str) and b["branch"]:
                 task.branch = b["branch"]
@@ -259,3 +266,13 @@ def load_state(store, room_id: str) -> RoomState:
     from aletheore.council.snapshots import load_state_fast
 
     return load_state_fast(store, room_id)
+
+
+def task_settled(state: "RoomState", task_id: str, _depth: int = 0) -> bool:
+    """Is this task over? A cancelled task that was handed to another area is over only when its replacement is."""
+    t = state.tasks.get(task_id)
+    if t is None or t.status not in FINAL_TASK_STATUS:
+        return False
+    if t.status == "cancelled" and t.replaced_by and _depth < 20:
+        return task_settled(state, t.replaced_by, _depth + 1)
+    return True
