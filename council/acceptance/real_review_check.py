@@ -214,6 +214,7 @@ def job(agent, text):
 job(PLAN_ID, f"You are the planner of a code review. When asked to review a file, do NOT review it yourself first. Send the executor, {EXEC_ID}, one message that "
              f"mentions @{EXEC_ID} and says which file to read and the three or four specific kinds of defect to look for. When the executor answers, write the final "
              "review yourself: a numbered list of the defects that are really there, with line numbers, and the last line must be exactly: REVIEW COMPLETE. "
+             "Only write REVIEW COMPLETE once the executor has answered; if you could not reach the executor, say so and do not write it. "
              "The final review must not mention anyone with an @." + PLANNER_EXTRA[PROJECT])
 job(EXEC_ID, f"You are the executor of a code review. Read the file you are asked about, check what you are asked to check, and answer with a numbered list of concrete "
              f"defects with line numbers (say 'none' if there are none). End your answer with one line that mentions @{PLAN_ID} so the planner sees it." + EXECUTOR_EXTRA[PROJECT])
@@ -230,12 +231,22 @@ store.append(EventDraft(RID, "human:1", "room", EventType.QUESTION, "alice", Non
 
 
 def finished():
-    return any(e.sender_agent == PLAN_ID and "REVIEW COMPLETE" in str(e.body.get("text", "")) for e in events())
+    """The planner wrote the completion line AFTER the executor had answered (a planner that could not reach the executor and wrote it anyway does not count)."""
+    ev = events()
+    executor_seq = min((e.seq for e in ev if e.sender_agent == EXEC_ID and e.body.get("wake_for")), default=None)
+    return executor_seq is not None and any(e.sender_agent == PLAN_ID and e.seq > executor_seq and "REVIEW COMPLETE" in str(e.body.get("text", "")) for e in ev)
 
 
+IDLE_STOP_S = 120   # nobody has said anything for this long and no review: the chain is over (stuck), do not wait out the clock
+last_count, last_change = 0, time.time()
 while time.time() - started < MAX_SECONDS and not finished():
     alice.run_once()
     bob.run_once()
+    n = len(events())
+    if n != last_count:
+        last_count, last_change = n, time.time()
+    elif time.time() - last_change > IDLE_STOP_S:
+        break
     time.sleep(0.5)
 elapsed = time.time() - started
 ev = events()
@@ -243,7 +254,7 @@ people = [e for e in ev if e.type is EventType.QUESTION and e.sender_agent is No
 claims = [e for e in ev if e.body.get("subtype") == "wake_claimed"]
 planner_wakes, executor_wakes = [e for e in claims if e.sender_agent == PLAN_ID], [e for e in claims if e.sender_agent == EXEC_ID]
 notices = [e for e in ev if e.body.get("subtype") in ("wake_skipped", "wake_failed", "worker_error")]
-final = next((e for e in reversed(ev) if e.sender_agent == PLAN_ID and "REVIEW COMPLETE" in str(e.body.get("text", ""))), None)
+final = next((e for e in reversed(ev) if e.sender_agent == PLAN_ID and "REVIEW COMPLETE" in str(e.body.get("text", ""))), None) if finished() else None
 final_text = str(final.body["text"]) if final else ""
 pipeline = score(final_text)
 
