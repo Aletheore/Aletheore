@@ -5088,6 +5088,10 @@ def _extract_module(
         for target in go_resolve.same_package_targets(repo_path, path):
             if target != rel_path and target not in resolved_imports:
                 resolved_imports.append(target)
+        resolved_imports = [
+            target for target in resolved_imports
+            if not go_resolve.mutually_exclusive_platforms(rel_path, target)
+        ]
         # Files only built under some tags/platforms are alternatives (all variants are linked): mark them.
         if go_resolve.ENABLED:
             # An edge out of a conditional file exists only when that file is built, so it is inferred too.
