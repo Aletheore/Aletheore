@@ -2358,6 +2358,170 @@ def _extract_axum_routes(root: Node, source: bytes, rel_path: str) -> list[dict]
     return entries
 
 
+_ACTIX_ATTRIBUTE_ROUTE = re.compile(
+    r'#\[\s*(get|post|put|delete|patch|head)\s*\(\s*"([^"]*)"[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?async\s+fn\s+(\w+)'
+)
+_ACTIX_METHODS = {"get", "post", "put", "delete", "patch", "head"}
+
+
+def _actix_text(node: Node, source: bytes) -> str:
+    return source[node.start_byte : node.end_byte].decode(errors="replace")
+
+
+def _actix_unroll(node: Node, source: bytes) -> tuple[Node | None, list[tuple[str, Node]]]:
+    """Split ``base.a(x).b(y)`` into (base, [("a", args), ("b", args)])."""
+    calls: list[tuple[str, Node]] = []
+    cur = node
+    while cur is not None and cur.type == "call_expression":
+        func = cur.child_by_field_name("function")
+        args = cur.child_by_field_name("arguments")
+        if func is not None and func.type == "field_expression" and args is not None:
+            field = func.child_by_field_name("field")
+            if field is None:
+                return None, []
+            calls.append((_actix_text(field, source), args))
+            cur = func.child_by_field_name("value")
+        else:
+            break
+    calls.reverse()
+    return cur, calls
+
+
+def _actix_callee(node: Node, source: bytes) -> str:
+    """``web::scope(..)`` -> ``scope``; plain ``get()`` -> ``get``."""
+    func = node.child_by_field_name("function") if node.type == "call_expression" else None
+    if func is None:
+        return ""
+    return _actix_text(func, source).split("::")[-1].strip()
+
+
+def _actix_route_method(node: Node, source: bytes) -> tuple[str | None, str]:
+    """Evaluate ``get().to(handler)`` / ``web::post().to(h)``."""
+    base, calls = _actix_unroll(node, source)
+    if base is None or base.type != "call_expression":
+        return None, "unknown"
+    name = _actix_callee(base, source)
+    method = name.upper() if name in _ACTIX_METHODS else None
+    handler = "unknown"
+    for field, args in calls:
+        if field == "to" and args.named_children:
+            handler = _actix_text(args.named_children[0], source)
+    return method, handler
+
+
+def _actix_join(prefix: str, path: str) -> str:
+    joined = (prefix.rstrip("/") + "/" + path.lstrip("/")) if path else prefix
+    return joined or "/"
+
+
+def _extract_actix_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    entries: list[dict] = []
+    covered: list[tuple[int, int]] = []
+
+    def emit(method: str | None, path: str, handler: str, node: Node) -> None:
+        entries.append(
+            {
+                "method": method,
+                "path": path,
+                "framework": "actix",
+                "file": rel_path,
+                "line": node.start_point[0] + 1,
+                "handler": handler,
+                "unresolved": method is None,
+                "note": None,
+            }
+        )
+
+    service_prefixes: dict[str, list[str]] = {}  # handler fn name -> prefixes it is registered under (known chains only)
+    app_variables = set(re.findall(r"\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=]+)?=\s*(?:actix_web::)?App::new\s*\(", source.decode(errors="replace")))
+
+    def evaluate(node: Node, prefix: str, depth: int = 0, known: bool | None = None) -> None:
+        if depth > 20:
+            return
+        base, calls = _actix_unroll(node, source)
+        if base is None:
+            return
+        if known is None:
+            # a chain rooted at a call (`App::new()`, `web::scope(..)`) has a known prefix; one rooted at a variable
+            # (`cfg` in a `configure` function) may sit under any scope
+            known = base.type == "call_expression" or (
+                base.type == "identifier" and _actix_text(base, source) in app_variables  # `let app = App::new(); app.service(..)`
+            )
+        resource: str | None = None
+        if base.type == "call_expression":
+            name = _actix_callee(base, source)
+            bargs = base.child_by_field_name("arguments")
+            first = bargs.named_children[0] if bargs and bargs.named_children else None
+            lit = (
+                _rust_string_literal_text(first, source)
+                if first is not None and first.type == "string_literal"
+                else None
+            )
+            if name == "scope" and lit is not None:
+                prefix = _actix_join(prefix, lit)
+            elif name == "resource" and lit is not None:
+                resource = _actix_join(prefix, lit)
+        for field, args in calls:
+            named = args.named_children
+            if field == "route" and resource is None and len(named) >= 2:
+                if named[0].type == "string_literal":
+                    path = _actix_join(prefix, _rust_string_literal_text(named[0], source))
+                    method, handler = _actix_route_method(named[1], source)
+                    emit(method, path, handler, named[1])
+            elif field == "route" and resource is not None and named:
+                method, handler = _actix_route_method(named[0], source)
+                emit(method, resource, handler, named[0])
+            elif field == "to" and resource is not None and named:
+                emit(None, resource, _actix_text(named[0], source), named[0])
+            elif field in ("service", "configure") and named:
+                for arg in named:
+                    if arg.type == "call_expression":
+                        evaluate(arg, prefix, depth + 1, known)
+                    elif arg.type in ("identifier", "scoped_identifier") and field == "service" and known:
+                        prefixes = service_prefixes.setdefault(_actix_text(arg, source).split("::")[-1], [])
+                        if prefix not in prefixes:
+                            prefixes.append(prefix)
+
+    text = source.decode(errors="replace")
+    attribute_matches = list(_ACTIX_ATTRIBUTE_ROUTE.finditer(text))
+
+    for n in _walk_tree(root):
+        if n.type != "call_expression" or any(a <= n.start_byte and n.end_byte <= b for a, b in covered):
+            continue
+        func = n.child_by_field_name("function")
+        if func is None or func.type != "field_expression":
+            base_name = _actix_callee(n, source)
+            if base_name not in {"scope", "resource"}:
+                continue
+        else:
+            _, calls = _actix_unroll(n, source)
+            if not any(f in {"route", "service"} for f, _ in calls):
+                continue
+        # Only evaluate outermost chains rooted at scope/resource or at a
+        # configure-style parameter; nested ones are reached recursively.
+        evaluate(n, "")
+        covered.append((n.start_byte, n.end_byte))
+
+    for m in attribute_matches:
+        line = text.count("\n", 0, m.start()) + 1
+        prefixes = service_prefixes.get(m.group(3))
+        for prefix in prefixes or [None]:
+            entries.append(
+                {
+                    "method": m.group(1).upper(),
+                    "path": _actix_join(prefix, m.group(2)) if prefix is not None else (m.group(2) or "/"),
+                    "framework": "actix",
+                    "file": rel_path,
+                    "line": line,
+                    "handler": m.group(3),
+                    "unresolved": False,
+                    "note": None if prefix is not None else "attribute route: a surrounding web::scope prefix is not applied",
+                }
+            )
+    return entries
+
+
+
 def _java_string_literal_text(node: Node, source: bytes) -> str:
     content = next((c for c in node.children if c.type == "string_fragment"), None)
     if content is None:
@@ -4916,7 +5080,10 @@ def map_api_endpoints(
             if source is None:
                 continue
             tree = parsers["rs"].parse(source)
-            endpoints.extend(_extract_axum_routes(tree.root_node, source, rel_path))
+            if b"actix_web" in source:
+                endpoints.extend(_extract_actix_routes(tree.root_node, source, rel_path))
+            else:
+                endpoints.extend(_extract_axum_routes(tree.root_node, source, rel_path))
             if b"rocket" in source or rel_path in rocket_prelude_files:
                 endpoints.extend(_extract_rocket_routes(source, rel_path, rocket_mounts))
             if b"warp::" in source:
