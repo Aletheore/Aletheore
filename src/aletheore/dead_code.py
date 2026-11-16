@@ -1,3 +1,4 @@
+import json
 import re
 import tomllib
 import xml.etree.ElementTree as ET
@@ -1602,6 +1603,110 @@ def _package_import_names(package: str) -> set[str]:
     return names
 
 
+_TOOL_CONFIG_NAMES = (
+    "Makefile", "makefile", "justfile", "tox.ini", "noxfile.py", "setup.cfg", "pyproject.toml",
+    "Taskfile.yml", "Dockerfile", ".pre-commit-config.yaml", "Gemfile", "lefthook.yml",
+    "conf.py", "mkdocs.yml", "mkdocs.yaml", "book.toml", "docusaurus.config.js",
+)
+_TOOL_CONFIG_SUFFIXES = (
+    ".config.js", ".config.cjs", ".config.mjs", ".config.ts", ".config.mts", ".config.cts", ".config.json",
+)
+# vitest.config.build.ts, jest.config.base.js: a tool config split into variants
+_TOOL_CONFIG_VARIANT = re.compile(r"^[\w-]+\.config\.[\w.-]+\.(?:js|cjs|mjs|ts|mts|cts|json)$")
+# root files named after the tool they configure: vitest.root.mjs, rollup.browser.js, eslint.shared.mjs
+_TOOL_NAMED_FILE = re.compile(
+    r"^(?:vitest|jest|vite|rollup|webpack|babel|eslint|postcss|tailwind|playwright|cypress|karma|tsup|esbuild|"
+    r"prettier|stylelint|commitlint|release|lint-staged)(?:[.-][\w.-]*)?\.(?:js|cjs|mjs|ts|mts|cts|json|ya?ml)$"
+)
+# config folders whose files name tools and plugins, and stylesheet folders that `@import` / `@plugin` packages
+_CONFIG_FOLDERS = (".circleci", ".changeset", ".vscode", ".husky", ".storybook", ".config", ".gitlab")
+_STYLE_FOLDERS = ("", "src", "app", "styles", "src/styles", "src/app")
+_STYLE_SUFFIXES = (".css", ".scss", ".less", ".sass")
+# repository helper scripts: extensionless or shell files directly under these folders
+_SCRIPT_FOLDERS = ("scripts", "script", "bin", "tools", "ci", ".ci")
+_SCRIPT_SUFFIXES = ("", ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd")
+_COMPILED_REQUIREMENTS_MARKERS = ("pip-compile", "uv pip compile", "\n    # via", "# via ")
+
+
+def _is_compiled_requirements(directory: Path) -> bool:
+    """A requirements.txt written by pip-compile / uv pins the whole resolved tree, so most
+    of its lines are transitive packages that no source file imports by design."""
+    try:
+        text = (directory / "requirements.txt").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return any(marker in text for marker in _COMPILED_REQUIREMENTS_MARKERS)
+
+
+def _tool_usage_text(directory: Path, repo_path: Path | None = None) -> str:
+    """Text of the files where a tool-only package is named without being imported: build and
+    CI configuration, tool config files, and the non-dependency fields of package.json."""
+    chunks: list[str] = []
+    candidates: list[Path] = []
+    entries: list[Path] = []
+    # A nested manifest is built and linted with the repository root's tooling too.
+    for folder in ([directory, repo_path] if repo_path is not None and repo_path != directory else [directory]):
+        try:
+            entries.extend(entry for entry in folder.iterdir() if entry.is_file())
+        except OSError:
+            continue
+    for entry in entries:
+        name = entry.name
+        if name in _TOOL_CONFIG_NAMES or name.endswith(_TOOL_CONFIG_SUFFIXES) or _TOOL_CONFIG_VARIANT.match(name) \
+                or _TOOL_NAMED_FILE.match(name):
+            candidates.append(entry)
+        elif name.startswith(".") and ("rc" in name or name.endswith((".json", ".yml", ".yaml", ".js", ".cjs"))):
+            candidates.append(entry)
+        elif name.startswith("tsconfig") and name.endswith(".json"):
+            candidates.append(entry)
+    for folder in ([directory, repo_path] if repo_path is not None and repo_path != directory else [directory]):
+        for config_folder in _CONFIG_FOLDERS:
+            try:
+                candidates.extend(sorted(e for e in (folder / config_folder).iterdir() if e.is_file())[:40])
+            except OSError:
+                continue
+        for style_folder in _STYLE_FOLDERS:
+            try:
+                candidates.extend(
+                    sorted(e for e in (folder / style_folder).iterdir() if e.is_file() and e.suffix in _STYLE_SUFFIXES)[:20]
+                )
+            except OSError:
+                continue
+        for script_folder in _SCRIPT_FOLDERS:
+            try:
+                candidates.extend(
+                    sorted(e for e in (folder / script_folder).iterdir() if e.is_file() and e.suffix in _SCRIPT_SUFFIXES)[:40]
+                )
+            except OSError:
+                continue
+    for folder in ([directory, repo_path] if repo_path is not None and repo_path != directory else [directory]):
+        workflows = folder / ".github" / "workflows"
+        if workflows.is_dir():
+            candidates.extend(sorted(workflows.glob("*.y*ml"))[:40])
+    for entry in candidates:
+        try:
+            chunks.append(entry.read_text(encoding="utf-8", errors="ignore")[:200_000])
+        except OSError:
+            continue
+    package_json = directory / "package.json"
+    if package_json.is_file():
+        try:
+            data = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict):
+            for key in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies",
+                        "resolutions", "overrides"):
+                data.pop(key, None)
+            chunks.append(json.dumps(data))
+    return "\n".join(chunks)
+
+
+def _named_in_tool_config(package: str, text: str) -> bool:
+    names = {package, package.split("/")[-1]} if package.startswith("@") else {package}
+    return any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", text) for name in names)
+
+
 def find_dead_code(
     repo_path: Path,
     modules: list[dict],
@@ -1773,11 +1878,26 @@ def find_dead_code(
                 declared += parse(directory)
             except OSError:
                 continue
+        compiled = _is_compiled_requirements(directory)
+        if compiled:
+            # Only names the project itself declares (pyproject) can be judged.
+            try:
+                pyproject_text = (directory / "pyproject.toml").read_text(encoding="utf-8", errors="ignore").lower()
+            except OSError:
+                pyproject_text = ""
+            declared = [
+                d for d in declared
+                if d[2] != "PyPI" or d[0].lower() in pyproject_text
+            ]
         if not declared:
             continue
+        tool_text = _tool_usage_text(directory, repo_path)
+        # A folder named requirements/ (or reqs, deps) is a dependency list for the whole repository, not a
+        # package with its own sources.
+        pins_only_folder = rel_dir != "." and directory.name.lower() in {"requirements", "reqs", "deps"}
         scoped = (
             modules
-            if rel_dir == "."
+            if rel_dir == "." or pins_only_folder
             else [m for m in modules if m["path"].startswith(rel_dir + "/")]
         )
         if rel_dir != "." and not scoped:
@@ -1794,6 +1914,14 @@ def find_dead_code(
             # Static import-name matching is intentionally conservative. Some packages expose
             # different import roots than their package names; known common aliases live above.
             if imported_roots.isdisjoint(_package_import_names(name)):
+                # Types packages are consumed by the compiler, and tools such as
+                # linters, bundlers and test runners are named in config, never imported.
+                if (
+                    name.startswith("@types/")
+                    or _named_in_tool_config(name, tool_text)
+                    or (name in ("typescript", "tsx", "ts-node") and (any(m["path"].endswith((".ts", ".tsx")) for m in scoped)))
+                ):
+                    continue
                 key = (ecosystem, name, rel_dir)
                 if key not in seen_unused:
                     seen_unused.add(key)
