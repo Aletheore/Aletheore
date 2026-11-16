@@ -642,7 +642,8 @@ def test_check_dependency_licenses_checks_dependencies_concurrently_not_serially
         elapsed = time.monotonic() - start
 
     assert result["checked"] is True
-    assert elapsed < 1.0, f"took {elapsed:.2f}s - lookups are not running concurrently"
+    # a serial run takes >= 3.0s; the limit leaves headroom for a busy CI runner (macOS 3.14 took 1.10s against 1.0)
+    assert elapsed < 2.0, f"took {elapsed:.2f}s - lookups are not running concurrently"
 
 
 def test_check_dependency_licenses_on_progress_not_called_with_no_pins(tmp_path):
