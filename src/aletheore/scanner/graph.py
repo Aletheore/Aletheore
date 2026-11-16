@@ -2265,11 +2265,56 @@ def _java_source_root_for(file_path: Path, package: str | None) -> Path | None:
     return root
 
 
+@lru_cache(maxsize=16384)
+def _dir_names_at(path: str, stamp: int) -> frozenset[str]:
+    try:
+        return frozenset(os.listdir(path))
+    except OSError:
+        return frozenset()
+
+
+def _dir_names(directory: Path) -> frozenset[str]:
+    """The entry names of a directory, as spelled on disk. Cached per directory modification time, so an edit to the
+    directory (a file added, renamed or removed) is seen on the next call."""
+    try:
+        stamp = os.stat(directory).st_mtime_ns
+    except OSError:
+        return frozenset()
+    return _dir_names_at(str(directory), stamp)
+
+
+def _exact_case_file(root: Path, parts: list[str]) -> Path | None:
+    """`root/parts...` when that file exists spelled exactly so. A case-insensitive filesystem (macOS, Windows) answers
+    yes for `a.java` when the file is `A.java`; the resolvers must not, or the graph would differ from the one a
+    case-sensitive filesystem gives and name a path that is not any scanned file."""
+    current = root
+    for index, part in enumerate(parts):
+        if not part or "\x00" in part:
+            return None
+        if part not in _dir_names(current):
+            return None
+        current = current / part
+        if index == len(parts) - 1:
+            return current if current.is_file() else None
+    return None
+
+
+def _exact_case_dir(root: Path, parts: list[str]) -> Path | None:
+    """The directory `root/parts...`, only when it exists spelled exactly so (see _exact_case_file)."""
+    current = root
+    for part in parts:
+        if not part or "\x00" in part:
+            return None
+        if part not in _dir_names(current):
+            return None
+        current = current / part
+    return current if current.is_dir() else None
+
+
 def _java_class_file(root: Path, segments: list[str]) -> Path | None:
     if not segments:
         return None
-    candidate = root.joinpath(*segments[:-1], f"{segments[-1]}.java")
-    return candidate if candidate.is_file() else None
+    return _exact_case_file(root, [*segments[:-1], f"{segments[-1]}.java"])
 
 
 def _path_closeness(a: Path, b: Path) -> int:
@@ -2353,7 +2398,7 @@ def _resolve_java_import(
         # the same "import the whole package" fan-out Go's package-level
         # imports need.
         matching_roots = _nearest_first(
-            importer, [root for root in source_roots if root.joinpath(*segments).is_dir()], coverage
+            importer, [root for root in source_roots if _exact_case_dir(root, segments) is not None], coverage
         )
         if not matching_roots:
             # `import a.b.Outer.*;` names the nested types of a class, not a package directory.
@@ -4919,6 +4964,8 @@ def _resolve_js_import(
     js_workspaces: dict[str, str] | None = None,
     ts_aliases: list[dict] | None = None,
 ) -> str | None:
+    if "\x00" in spec:
+        return None  # not a path any filesystem can name; resolving it would raise and abort the whole scan
     if not spec.startswith("."):
         # tsconfig `paths` / `baseUrl` win over a same-named package, as in TypeScript.
         if ts_aliases and not spec.startswith("/"):
