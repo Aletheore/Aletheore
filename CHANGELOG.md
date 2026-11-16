@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Added: Kotlin links the file that declares each member a file resolves through declared types (inherited properties, `a.b.c` chains), marked inferred (macro F1 on the Kotlin benchmark 0.915 to 0.923).
 - Added: Swift links nested types (`extension Logger { struct MetadataProvider }`) when a file writes `Logger.MetadataProvider` or uses the plain name inside `Logger` (macro F1 on the Swift benchmark 0.832 to 0.843).
 
 - Fixed: the license-lookup concurrency test no longer fails on slow CI runners (test-only; the limit is 2.0s, serial would be at least 3.0s).

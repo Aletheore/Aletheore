@@ -27,6 +27,7 @@ from tree_sitter import Language, Node, Parser, Tree
 
 from aletheore.safe_io import read_text_lenient
 from aletheore.repo_config import is_ignored
+from aletheore.scanner.kotlin_members import MemberResolver, collect_classes, member_files
 from aletheore.scanner.detect import IGNORED_DIRS, _nested_git_roots, git_visible_paths, is_ignored_dir_name, visible_key
 
 PY_LANGUAGE = Language(tspython.language())
@@ -7097,6 +7098,9 @@ def _add_kotlin_name_edges(repo_path: Path, modules: list[dict]) -> None:
     facts: dict[str, dict] = {}
     index: dict[tuple[str, str], set[str]] = {}
     value_index: dict[tuple[str, str], set[str]] = {}
+    parsed: dict[str, tuple[Node, bytes]] = {}
+    kotlin_classes: dict[str, dict[str, object]] = {}
+    class_table: dict[str, object] = {}
     for module in kotlin_modules:
         rel = module["path"]
         try:
@@ -7106,11 +7110,18 @@ def _add_kotlin_name_edges(repo_path: Path, modules: list[dict]) -> None:
             data = file_path.read_bytes()
         except OSError:
             continue
-        facts[rel] = _kotlin_type_facts(parser.parse(data).root_node, data)
+        tree_root = parser.parse(data).root_node
+        parsed[rel] = (tree_root, data)
+        facts[rel] = _kotlin_type_facts(tree_root, data)
+        for cls in collect_classes(tree_root, data, rel):
+            kotlin_classes.setdefault(rel, {}).setdefault(cls.name, cls)
+            class_table[cls.name] = None if cls.name in class_table else cls  # the same name in two places: unresolvable
         for name in facts[rel]["top"]:
             index.setdefault((facts[rel]["package"], name), set()).add(rel)
         for name in facts[rel]["top_values"]:
             value_index.setdefault((facts[rel]["package"], name), set()).add(rel)
+
+    resolver = MemberResolver(class_table)  # type: ignore[arg-type]
 
     def platform_owners(key: tuple[str, str], name: str, owners: set[str]) -> set[str]:
         """Kotlin Multiplatform: a name declared `expect` in a common source set and `actual` in platform ones. A
@@ -7176,9 +7187,18 @@ def _add_kotlin_name_edges(repo_path: Path, modules: list[dict]) -> None:
                 if facts[dest]["platform"].get(name) == "actual" and dest not in present:
                     present.add(dest)
                     module.setdefault("imports", []).append(dest)
+        # Members this file resolves through declared types (a property of an inherited class, `a.b.c` chains): the
+        # file that declares each one. Only the declared types in the source are followed, so these are guesses.
+        confidence = module.setdefault("import_confidence", {})
+        tree_data = parsed.get(rel)
+        if tree_data is not None:
+            for dest in sorted(member_files(tree_data[0], tree_data[1], rel, kotlin_classes.get(rel, {}), resolver)):
+                if dest not in present:
+                    present.add(dest)
+                    module.setdefault("imports", []).append(dest)
+                    confidence[dest] = "inferred"
         # Top-level functions and properties: named by an explicit import (exact), or used unqualified from the same
         # package / a wildcard-imported one (a guess: only a syntax tree, so a local of the same name is possible).
-        confidence = module.setdefault("import_confidence", {})
         explicit_values = {}
         for dotted, wildcard, alias in entry["imports"]:
             if wildcard or "." not in dotted:
