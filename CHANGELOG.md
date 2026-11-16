@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Added: Rails `resources` / `resource` expand to their routes (honouring only/except/param/path/controller), nested resources, member/collection blocks and `on:`, and `scope :api` composes. On the RealWorld Rails app, 0 of the spec's 19 routes were found; now 17, and three live controllers are no longer reported as dead code. `devise_for` adds the Devise sign-in, sign-out and registration routes (with a note that the model's Devise modules decide which exist), taking that app to 19 of 19.
 - Added: NestJS `@Controller` / `@Get` / `@Post` ... routes are mapped, composed with the controller path and `app.setGlobalPrefix()`. On the RealWorld NestJS app, 0 of the spec's 19 routes were found; now all 19.
 - Added: Django `include()` prefixes are composed across files, `url()` and regex routes are read as templates, DRF `router.register()` expands to list/detail routes through `include(router.urls)`, and `View.as_view()` / `@api_view` routes report their real HTTP methods instead of ANY. On the RealWorld Django app, 0 of the spec's 19 routes were found; now 18.
 - Fixed: Spring `@RequestMapping` class prefixes are composed with method mappings, a bare `@GetMapping`/`@PostMapping` is the class route (it used to be skipped), and `path =`, path arrays and `RequestMethod` arrays are read. On the RealWorld Spring Boot app, 0 of the spec's 19 routes were found; now all 19.

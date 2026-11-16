@@ -1227,23 +1227,18 @@ def test_extract_rails_root_route():
     ]
 
 
-def test_extract_rails_resources_is_unresolved():
+def test_extract_rails_resources_expands_to_its_standard_routes():
     root, source = parse_ruby("resources :items\n")
 
     entries = _extract_rails_routes(root, source, "config/routes.rb")
 
-    assert entries == [
-        {
-            "method": None,
-            "path": "items",
-            "framework": "rails",
-            "file": "config/routes.rb",
-            "line": 1,
-            "handler": "resources(...)",
-            "unresolved": True,
-            "note": None,
-        }
-    ]
+    got = {(e["method"], e["path"], e["handler"]) for e in entries}
+    assert got == {
+        ("GET", "items", "items#index"), ("POST", "items", "items#create"), ("GET", "items/new", "items#new"),
+        ("GET", "items/:id", "items#show"), ("GET", "items/:id/edit", "items#edit"),
+        ("PATCH", "items/:id", "items#update"), ("PUT", "items/:id", "items#update"), ("DELETE", "items/:id", "items#destroy"),
+    }
+    assert all(e["unresolved"] is False for e in entries)
 
 
 def test_extract_rails_resources_controller_override():
@@ -1270,30 +1265,13 @@ def test_extract_rails_ignores_unrelated_calls():
 
 
 def test_extract_rails_resources_inside_namespace_gets_module_prefix():
-    # Real gap found via a real Discourse scan: a `resources :badges`
-    # nested in `namespace :admin do ... end` previously recorded resource
-    # name "badges" - identical to an unrelated top-level `resources
-    # :badges` elsewhere in the same routes.rb, which made dead_code.py's
-    # resolver correctly refuse to guess between the two real controllers
-    # and leave both flagged dead code.
-    root, source = parse_ruby(
-        "namespace :admin do\n  resources :badges\nend\n"
-    )
+    # the controller handler carries the namespace's module (Admin::BadgesController), the URL carries /admin
+    root, source = parse_ruby("namespace :admin do\n  resources :badges\nend\n")
 
     entries = _extract_rails_routes(root, source, "config/routes.rb")
 
-    assert entries == [
-        {
-            "method": None,
-            "path": "admin/badges",
-            "framework": "rails",
-            "file": "config/routes.rb",
-            "line": 2,
-            "handler": "resources(...)",
-            "unresolved": True,
-            "note": None,
-        }
-    ]
+    assert {e["handler"] for e in entries} >= {"admin/badges#index", "admin/badges#show"}
+    assert {e["path"] for e in entries} >= {"admin/badges", "admin/badges/:id"}
 
 
 def test_extract_rails_to_route_inside_namespace_gets_module_prefix():
@@ -1307,9 +1285,6 @@ def test_extract_rails_to_route_inside_namespace_gets_module_prefix():
 
 
 def test_extract_rails_nested_namespace_and_scope_module_compose_in_order():
-    # Arbitrary nesting depth (namespace inside scope inside namespace, ...)
-    # falls out of the upward-walk design for free - no separate stack
-    # needed, just each enclosing do_block's owning call checked in turn.
     root, source = parse_ruby(
         'namespace :admin do\n'
         '  scope module: "extra" do\n'
@@ -1320,36 +1295,29 @@ def test_extract_rails_nested_namespace_and_scope_module_compose_in_order():
 
     entries = _extract_rails_routes(root, source, "config/routes.rb")
 
-    assert entries[0]["path"] == "admin/extra/widgets"
+    assert entries[0]["handler"] == "admin/extra/widgets#index"
 
 
 def test_extract_rails_bare_scope_does_not_add_a_module_prefix():
-    # A bare `scope "/logs" do ... end` (or `scope path: "..." do`) changes
-    # only the URL, never the controller module - confirmed on Discourse's
-    # own routes.rb, where this form outnumbers `namespace` 20 to 3 and
-    # none of those 20 renamespace their contents' controllers. Must NOT
-    # be treated the same as `namespace`/`scope module:`.
+    # A bare `scope "/logs" do ... end` changes only the URL, never the controller module
     root, source = parse_ruby(
         'scope "/logs" do\n  resources :items\nend\n'
     )
 
     entries = _extract_rails_routes(root, source, "config/routes.rb")
 
-    assert entries[0]["path"] == "items"
+    assert entries[0]["handler"] == "items#index"
+    assert entries[0]["path"] == "logs/items"
 
 
 def test_extract_rails_scope_module_symbol_value_gets_module_prefix():
-    # Flash Review finding on #666: `scope module: :admin do` (a symbol
-    # value) is equally valid Rails syntax alongside `module: "admin"` (a
-    # string) - only the string form was handled, so this variant silently
-    # produced no module prefix at all.
     root, source = parse_ruby(
         "scope module: :admin do\n  resources :badges\nend\n"
     )
 
     entries = _extract_rails_routes(root, source, "config/routes.rb")
 
-    assert entries[0]["path"] == "admin/badges"
+    assert entries[0]["handler"] == "admin/badges#index"
 
 
 def test_extract_rails_namespace_composes_the_url_prefix_too():
@@ -1977,6 +1945,109 @@ def test_map_api_endpoints_extracts_kotlin_ktor_routes(tmp_path):
 
     paths = {e["path"] for e in result["endpoints"]}
     assert "/kt" in paths
+
+
+
+def test_extract_rails_resources_only_except_and_param():
+    root, source = parse_ruby(
+        "resources :tags, only: [:index]\n"
+        "resources :articles, param: :slug, except: [:edit, :new]\n"
+    )
+
+    got = {(e["method"], e["path"]) for e in _extract_rails_routes(root, source, "config/routes.rb")}
+
+    assert ("GET", "tags") in got and ("POST", "tags") not in got
+    assert ("GET", "articles/:slug") in got and ("GET", "articles/new") not in got and ("GET", "articles/:slug/edit") not in got
+
+
+def test_extract_rails_singular_resource_and_nested_resources_inside_a_scope():
+    root, source = parse_ruby(
+        "scope :api do\n"
+        "  resource :user, only: [:show, :update]\n"
+        "  resources :articles, param: :slug do\n"
+        "    resource :favorite, only: [:create, :destroy]\n"
+        "    resources :comments, only: [:index, :destroy]\n"
+        "  end\n"
+        "end\n"
+    )
+
+    got = {(e["method"], e["path"], e["handler"]) for e in _extract_rails_routes(root, source, "config/routes.rb")}
+
+    assert ("GET", "api/user", "users#show") in got and ("PATCH", "api/user", "users#update") in got
+    assert ("POST", "api/articles/:article_slug/favorite", "favorites#create") in got
+    assert ("DELETE", "api/articles/:article_slug/favorite", "favorites#destroy") in got
+    assert ("GET", "api/articles/:article_slug/comments", "comments#index") in got
+    assert ("DELETE", "api/articles/:article_slug/comments/:id", "comments#destroy") in got
+
+
+def test_extract_rails_member_collection_and_on_routes_in_a_resource_block():
+    root, source = parse_ruby(
+        "resources :articles, param: :slug do\n"
+        "  get :feed, on: :collection\n"
+        "  member do\n    post :publish\n  end\n"
+        "  collection do\n    get :search\n  end\n"
+        "  get :preview\n"
+        "end\n"
+    )
+
+    got = {(e["method"], e["path"], e["handler"]) for e in _extract_rails_routes(root, source, "config/routes.rb")}
+
+    assert ("GET", "articles/feed", "articles#feed") in got
+    assert ("POST", "articles/:slug/publish", "articles#publish") in got
+    assert ("GET", "articles/search", "articles#search") in got
+    assert ("GET", "articles/:article_slug/preview", "articles#preview") in got
+
+
+def test_extract_rails_resources_with_a_non_literal_only_list_stays_unresolved():
+    root, source = parse_ruby("resources :items, only: ACTIONS\n")
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert len(entries) == 1 and entries[0]["unresolved"] is True and entries[0]["handler"] == "resources(...)"
+
+
+def test_extract_rails_singular_resource_with_a_non_literal_only_list_stays_unresolved():
+    root, source = parse_ruby("resource :profile, only: ACTIONS\n")
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert len(entries) == 1 and entries[0]["unresolved"] is True
+
+
+def test_rails_singularizer_handles_common_plurals():
+    from aletheore.endpoints import _rails_singular
+
+    assert [_rails_singular(w) for w in ("articles", "categories", "addresses", "statuses", "boxes", "branches", "people")] == [
+        "article", "category", "address", "status", "box", "branch", "person"]
+
+
+def test_extract_rails_only_wins_over_except_and_a_slash_string_is_not_an_action_and_singular_plurals():
+    from aletheore.endpoints import _rails_plural
+
+    root, source = parse_ruby("resources :posts, only: [:index], except: [:index]\nresources :users do\n  get '/health'\nend\n")
+    got = {(e["method"], e["path"]) for e in _extract_rails_routes(root, source, "config/routes.rb")}
+    assert ("GET", "posts") in got                       # only: wins, except: is ignored
+    assert not any("health" in path for _m, path in got)  # a URL, not an action
+    assert [_rails_plural(w) for w in ("profile", "person", "status", "category", "box")] == ["profiles", "people", "statuses", "categories", "boxes"]
+
+
+def test_rails_devise_for_expands_session_and_registration_routes(tmp_path):
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "routes.rb").write_text(
+        "Rails.application.routes.draw do\n"
+        "  scope :api do\n"
+        "    devise_for :users, controllers: { sessions: :sessions },\n"
+        "                       path_names: { sign_in: :login }\n"
+        "  end\n"
+        "end\n"
+    )
+    found = {
+        (e["method"], e["path"], e["handler"], e["note"] is not None)
+        for e in map_api_endpoints(tmp_path)["endpoints"]
+    }
+    assert ("POST", "api/users/login", "sessions#create", True) in found
+    assert ("POST", "api/users", "devise/registrations#create", True) in found
+    assert ("DELETE", "api/users/sign_out", "sessions#destroy", True) in found
 
 
 def _parse_ts(code: str):
