@@ -1013,3 +1013,33 @@ def test_kubernetes_detection_skips_yaml_that_cannot_be_a_manifest(tmp_path):
     (tmp_path / "binding.yaml").write_text("title: Some devicetree binding\nproperties:\n  compatible: {}\n")
     (tmp_path / "broken.yaml").write_text("this: [is not: valid yaml\n")
     assert detect_infrastructure(tmp_path)["kubernetes_manifests"] == ["deploy.yaml"]
+
+
+def _scanned_paths(repo):
+    from aletheore.scanner.detect import _iter_source_files
+
+    return sorted(p.relative_to(repo).as_posix() for p in _iter_source_files(repo))
+
+
+def test_a_build_directory_inside_a_source_tree_is_source_not_build_output(tmp_path):
+    # org.apache.commons.io.build is a Java package under src/main/java
+    (tmp_path / "src/main/java/org/x/build").mkdir(parents=True)
+    (tmp_path / "src/main/java/org/x/build/AbstractOrigin.java").write_text("package org.x.build;\npublic class AbstractOrigin {}\n")
+    (tmp_path / "src/main/java/org/x/Main.java").write_text("package org.x;\npublic class Main {}\n")
+    assert "src/main/java/org/x/build/AbstractOrigin.java" in _scanned_paths(tmp_path)
+
+
+def test_a_top_level_build_output_directory_is_still_skipped(tmp_path):
+    (tmp_path / "build/generated").mkdir(parents=True)
+    (tmp_path / "build/generated/Gen.java").write_text("class Gen {}\n")
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist/bundle.js").write_text("var a = 1;\n")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    assert _scanned_paths(tmp_path) == ["app.py"]
+
+
+def test_node_modules_is_skipped_even_inside_a_source_tree(tmp_path):
+    (tmp_path / "src/node_modules/pkg").mkdir(parents=True)
+    (tmp_path / "src/node_modules/pkg/index.js").write_text("module.exports = 1\n")
+    (tmp_path / "src/a.js").write_text("var a = 1;\n")
+    assert _scanned_paths(tmp_path) == ["src/a.js"]

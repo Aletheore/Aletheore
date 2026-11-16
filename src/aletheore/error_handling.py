@@ -393,6 +393,8 @@ def _swift(root: Node, rel: str, classes: list, raises: list, handlers: list) ->
         elif node.type == "control_transfer_statement" and any(c.type == "throw_keyword" for c in node.children):
             raised = next((c for c in node.named_children if c.type != "throw_keyword"), None)
             _add_raise(raises, rel, node, _type_of(raised) if raised is not None else "(re-raise)")
+        elif node.type == "try_operator" and _text(node) == "try?":
+            _add_handler(handlers, rel, node, [])  # `try?` turns a thrown error into nil: the error is handled here
         elif node.type == "catch_block":
             pattern = next((c for c in node.named_children if c.type == "pattern"), None)
             user_type = next((c for c in (pattern.named_children if pattern is not None else []) if c.type == "user_type"), None)
@@ -447,6 +449,51 @@ def _go(root: Node, rel: str, classes: list, raises: list, handlers: list) -> No
 _RUST_PANIC_MACROS = {"panic", "unreachable", "todo", "unimplemented", "bail", "ensure"}
 
 
+_RUST_ERROR_COMBINATORS = {"map_err", "or_else"}
+
+
+def _rust_err_patterns(node: Node) -> list[str] | None:
+    """The error types matched by `Err(...)` patterns directly in a `match` (its arms) or `let` condition, or None
+    when there is no `Err(...)` pattern. `Err(AppError::NotFound)` names AppError; `Err(e)` / `Err(_)` is `(any)`."""
+    found: list[str] = []
+    seen_err = False
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if n.type in ("match_expression", "if_expression", "while_expression", "closure_expression", "function_item") and n is not node:
+            continue  # a nested match / block has its own handler record
+        if n.type == "tuple_struct_pattern":
+            head = n.children[0] if n.children else None
+            if head is not None and head.type == "identifier" and _text(head) == "Err":
+                seen_err = True
+                inner = next((c for c in n.children[1:] if c.is_named), None)
+                name = "(any)"
+                if inner is not None:
+                    label = _text(inner.child_by_field_name("type") or inner)
+                    first = label.split("::")[0].split("(")[0].strip()
+                    if "::" in label and re.match(r"^[A-Z]\w*$", first):
+                        name = first
+                    elif inner.type == "identifier" and re.match(r"^[A-Z]\w*$", label):
+                        name = label
+                if name not in found:
+                    found.append(name)
+                continue
+        stack.extend(n.children)
+    return (found or ["(any)"]) if seen_err else None
+
+
+def _rust_combinator_receives_error(field: Node | None, args: Node | None) -> bool:
+    """`map_err` always acts on an error. `or_else` is `Result::or_else` (the closure takes the error) or
+    `Option::or_else` (a closure with no parameter that supplies a fallback): only the first is error handling."""
+    if field is None or _text(field) != "or_else":
+        return True
+    first = args.named_children[0] if args is not None and args.named_children else None
+    if first is None or first.type != "closure_expression":
+        return True  # a function path such as `.or_else(recover)` takes the error
+    params = first.child_by_field_name("parameters")
+    return params is not None and any(c.type != "|" for c in params.children)  # `|_|` counts: the error is ignored, not absent
+
+
 def _rust(root: Node, rel: str, classes: list, raises: list, handlers: list) -> None:
     for node in _walk(root):
         if node.type in ("struct_item", "enum_item"):
@@ -480,6 +527,30 @@ def _rust(root: Node, rel: str, classes: list, raises: list, handlers: list) -> 
                 _add_raise(raises, rel, node, _last(label) if re.match(r"^[A-Za-z_][\w:]*$", label) else "(expression)")
             elif callee is not None and _last(_text(callee)) == "catch_unwind":
                 _add_handler(handlers, rel, node, [])
+            elif callee is not None and (
+                (callee.type == "field_expression" and _text(callee.child_by_field_name("field")) in _RUST_ERROR_COMBINATORS
+                    and _rust_combinator_receives_error(callee.child_by_field_name("field"), args))
+                or (callee.type == "scoped_identifier" and _last(_text(callee)) in _RUST_ERROR_COMBINATORS
+                    and _text(callee).rsplit("::", 1)[0].split("::")[-1] in ("Result", "Option"))
+            ):
+                # g().map_err(..) / .or_else(..), or the fully qualified Result::map_err(g(), ..): the error is acted on here
+                _add_handler(handlers, rel, node, [])
+        elif node.type == "match_expression":
+            caught = _rust_err_patterns(node)
+            if caught is not None:
+                _add_handler(handlers, rel, node, caught)
+        elif node.type == "let_declaration" and node.child_by_field_name("alternative") is not None:
+            # `let Ok(x) = f() else { .. }`: the else block runs when the call failed
+            pattern = node.child_by_field_name("pattern")
+            if pattern is not None and pattern.type == "tuple_struct_pattern" and pattern.children \
+                    and _text(pattern.children[0]) == "Ok":
+                _add_handler(handlers, rel, node, ["(any)"])
+            elif _rust_err_patterns(node) is not None:
+                _add_handler(handlers, rel, node, _rust_err_patterns(node))
+        elif node.type == "let_condition":
+            caught = _rust_err_patterns(node)  # `if let Err(e) = ..` / `while let Err(..) = ..`
+            if caught is not None:
+                _add_handler(handlers, rel, node, caught)
 
 
 _EXTRACTORS = {
