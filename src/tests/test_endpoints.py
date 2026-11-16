@@ -1979,6 +1979,113 @@ def test_map_api_endpoints_extracts_kotlin_ktor_routes(tmp_path):
     assert "/kt" in paths
 
 
+def _django_repo(tmp_path, files):
+    from aletheore.endpoints import map_api_endpoints
+
+    for rel, body in files.items():
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body)
+    return {(e["method"], e["path"]) for e in map_api_endpoints(tmp_path)["endpoints"]}
+
+
+def test_django_include_prefix_is_composed_across_files_and_url_is_read(tmp_path):
+    got = _django_repo(tmp_path, {
+        "proj/urls.py": "from django.conf.urls import include, url\nurlpatterns = [url(r'^api/', include('shop.urls'))]\n",
+        "shop/__init__.py": "",
+        "shop/urls.py": "from django.conf.urls import url\nfrom . import views\nurlpatterns = [url(r'^items/(?P<pk>\\d+)/?$', views.item)]\n",
+        "shop/views.py": "def item(request, pk):\n    pass\n",
+    })
+    assert ("ANY", "/api/items/<pk>") in got
+    assert not any(path == "api/" for _m, path in got)  # the include itself is replaced by its routes
+
+
+def test_django_nested_includes_and_path_prefixes_compose(tmp_path):
+    got = _django_repo(tmp_path, {
+        "proj/urls.py": "from django.urls import include, path\nurlpatterns = [path('v1/', include('api.urls'))]\n",
+        "api/__init__.py": "",
+        "api/urls.py": "from django.urls import include, path\nurlpatterns = [path('shop/', include('api.shop.urls'))]\n",
+        "api/shop/__init__.py": "",
+        "api/shop/urls.py": "from django.urls import path\nfrom . import views\nurlpatterns = [path('items/<int:id>/', views.item)]\n",
+        "api/shop/views.py": "def item(request, id):\n    pass\n",
+    })
+    assert ("ANY", "/v1/shop/items/<int:id>/") in got
+
+
+def test_django_include_of_a_module_outside_the_repository_stays_unresolved(tmp_path):
+    from aletheore.endpoints import map_api_endpoints
+
+    (tmp_path / "proj").mkdir()
+    (tmp_path / "proj/urls.py").write_text("from django.urls import include, path\nurlpatterns = [path('admin/', include('django.contrib.admin.urls'))]\n")
+    entry = map_api_endpoints(tmp_path)["endpoints"][0]
+
+    assert entry["unresolved"] is True and "not in the repository" in entry["note"]
+
+
+def test_drf_router_registration_expands_through_include_router_urls(tmp_path):
+    got = _django_repo(tmp_path, {
+        "proj/urls.py": (
+            "from django.conf.urls import include, url\nfrom rest_framework.routers import DefaultRouter\nfrom .views import PostViewSet, TagViewSet\n"
+            "router = DefaultRouter(trailing_slash=False)\nrouter.register(r'posts', PostViewSet)\nrouter.register(r'tags', TagViewSet)\n"
+            "urlpatterns = [url(r'^api/', include(router.urls))]\n"),
+        "proj/views.py": (
+            "from rest_framework import viewsets, mixins\n"
+            "class PostViewSet(viewsets.ModelViewSet):\n    pass\n"
+            "class TagViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):\n    pass\n"),
+    })
+    assert {("GET", "/api/posts"), ("POST", "/api/posts"), ("GET", "/api/posts/<pk>"), ("PUT", "/api/posts/<pk>"),
+            ("PATCH", "/api/posts/<pk>"), ("DELETE", "/api/posts/<pk>")} <= got
+    assert ("GET", "/api/tags") in got and ("POST", "/api/tags") not in got
+
+
+def test_drf_router_with_a_viewset_from_outside_the_repo_is_unresolved_not_guessed(tmp_path):
+    from aletheore.endpoints import map_api_endpoints
+
+    for rel, body in {
+        "urls.py": ("from rest_framework.routers import DefaultRouter\nfrom thirdparty import ThingViewSet\nfrom django.urls import include, path\n"
+                    "router = DefaultRouter()\nrouter.register('things', ThingViewSet)\nurlpatterns = [path('', include(router.urls))]\n"),
+    }.items():
+        (tmp_path / rel).write_text(body)
+    entries = map_api_endpoints(tmp_path)["endpoints"]
+
+    assert len(entries) == 1 and entries[0]["unresolved"] is True and entries[0]["method"] == "ANY"
+
+
+def test_django_as_view_methods_come_from_the_class_generics_and_function_decorators(tmp_path):
+    got = _django_repo(tmp_path, {
+        "urls.py": (
+            "from django.urls import path\nfrom . import views\nurlpatterns = [\n"
+            "    path('a/', views.AView.as_view()),\n    path('b/', views.BView.as_view()),\n"
+            "    path('c/', views.func_view),\n    path('d/', views.DView.as_view({'get': 'list', 'post': 'create'})),\n]\n"),
+        "views.py": (
+            "from rest_framework import generics\nfrom rest_framework.decorators import api_view\n"
+            "class AView(APIView):\n    def get(self, request): pass\n    def delete(self, request): pass\n"
+            "class BView(generics.ListCreateAPIView):\n    pass\n"
+            "@api_view(['GET', 'POST'])\ndef func_view(request): pass\n"),
+    })
+    assert {("GET", "a/"), ("DELETE", "a/"), ("GET", "b/"), ("POST", "b/"), ("GET", "c/"), ("POST", "c/"), ("GET", "d/"), ("POST", "d/")} <= got
+    assert ("ANY", "a/") not in got
+
+
+def test_django_regex_routes_become_templates():
+    from aletheore.endpoints import _django_regex_to_route
+
+    assert _django_regex_to_route(r"^articles/(?P<slug>[-\w]+)/favorite/?$") == "articles/<slug>/favorite"
+    assert _django_regex_to_route(r"^tags/?$") == "tags"
+    assert _django_regex_to_route(r"^files/(\d+)/$") == "files/<arg>/"
+    assert _django_regex_to_route("users/<int:id>/") == "users/<int:id>/"
+
+
+def test_django_regex_templates_drop_group_quantifiers_and_handle_non_capturing_groups():
+    from aletheore.endpoints import _django_regex_to_route
+
+    assert _django_regex_to_route(r"^articles/(?P<slug>[-\w]+)+/$") == "articles/<slug>/"
+    assert _django_regex_to_route(r"^y/(?P<year>[0-9]{4})/$") == "y/<year>/"
+    assert _django_regex_to_route(r"^items/(\d+)?/$") == "items/<arg>/"
+    assert _django_regex_to_route(r"^docs(?:/(?P<page>\w+))?/$") == "docs/"
+    assert _django_regex_to_route(r"^(?:v1|v2)/ping$") == "v1|v2/ping"
+
+
 def test_extract_spring_request_mapping_method_given_as_a_statically_imported_constant():
     root, source = parse_java('public class C {\n    @RequestMapping(path = "/users", method = POST)\n    public void f() { }\n}\n')
 
