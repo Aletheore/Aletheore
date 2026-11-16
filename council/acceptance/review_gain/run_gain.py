@@ -60,9 +60,9 @@ def clone(dest):
     return dest
 
 
-def empty_mcp(d):
-    p = Path(d) / "mcp.json"
-    p.write_text('{"mcpServers": {}}')
+def empty_mcp(d, name="mcp.json"):
+    p = Path(d) / name
+    p.write_text('{"mcpServers": {}}')   # one file per caller: three threads writing and reading one file raced (an empty file was read mid-write)
     return p
 
 
@@ -83,7 +83,7 @@ def run_split():
     def one(i):
         wt = clone(base / f"repo{i}")
         runner = EXECUTORS[i][2]()
-        r = runner.run(TASK.format(cap=CAP_EXECUTOR, files="\n".join(f"- {f}" for f in g[i])), wt, empty_mcp(base), {}, TURN_TIMEOUT, read_only=True)
+        r = runner.run(TASK.format(cap=CAP_EXECUTOR, files="\n".join(f"- {f}" for f in g[i])), wt, empty_mcp(base, f"mcp{i}.json"), {}, TURN_TIMEOUT, read_only=True)
         return r.final_text, r.ok, round(time.time() - t0)
 
     with ThreadPoolExecutor(3) as ex:
