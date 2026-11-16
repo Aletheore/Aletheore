@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: the license-lookup concurrency test no longer fails on slow CI runners (test-only; the limit is 2.0s, serial would be at least 3.0s).
+
 - Fixed: the unused-dependency check no longer reports tools that are named in a script, CI workflow or config file (`eslint`, `vitest`, `playwright`, `sphinx` and similar), `@types/*` packages, `typescript` in a TypeScript project, or the transitive pins in a pip-compile `requirements.txt`. On 32 Python and TypeScript repositories it reported 519 unused packages before and 154 after; most of the removed ones were build, test and docs tooling that is never imported.
 - Added: Actix routes are composed through nested `web::scope` prefixes and `web::resource` registrations, and `#[get("/x")]` style attribute routes are found (without a surrounding scope prefix, which is noted). On the RealWorld Actix app, 0 of the spec's 19 routes matched; now all 19.
 - Added: Gin routes registered through a function that takes a `*gin.RouterGroup` are composed with the group the caller passes (across files and through nested registration functions). On the RealWorld Gin app, 0 of the spec's 19 routes matched; now all 19.
