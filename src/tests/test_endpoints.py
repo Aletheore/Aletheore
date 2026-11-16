@@ -1131,7 +1131,7 @@ def test_extract_spring_request_mapping_without_method_is_any():
     assert entries[0]["method"] == "ANY"
 
 
-def test_extract_spring_class_level_prefix_produces_a_note():
+def test_extract_spring_class_level_prefix_is_composed_with_the_method_path():
     root, source = parse_java(
         '@RequestMapping("/api/users")\n'
         "public class UserController {\n"
@@ -1142,10 +1142,51 @@ def test_extract_spring_class_level_prefix_produces_a_note():
 
     entries = _extract_spring_boot_routes(root, source, "UserController.java")
 
-    assert entries[0]["path"] == "/{id}"
-    assert entries[0]["note"] == (
-        "class-level @RequestMapping prefix present, not composed into this path"
+    assert entries[0]["path"] == "/api/users/{id}"
+    assert entries[0]["note"] is None
+
+
+def test_extract_spring_bare_mapping_annotation_is_the_class_route():
+    root, source = parse_java(
+        '@RestController\n@RequestMapping(path = "/articles")\n'
+        "public class ArticlesApi {\n"
+        "    @PostMapping\n    public void create() { }\n"
+        '    @GetMapping(path = "feed")\n    public void feed() { }\n'
+        '    @GetMapping(value = "{slug}")\n    public void one() { }\n'
+        "}\n"
     )
+
+    got = {(e["method"], e["path"]) for e in _extract_spring_boot_routes(root, source, "A.java")}
+
+    assert got == {("POST", "/articles"), ("GET", "/articles/feed"), ("GET", "/articles/{slug}")}
+
+
+def test_extract_spring_request_mapping_method_arrays_and_path_arrays_expand():
+    root, source = parse_java(
+        "public class C {\n"
+        '    @RequestMapping(value = {"/a", "/b"}, method = {RequestMethod.GET, RequestMethod.POST})\n'
+        "    public void both() { }\n"
+        "}\n"
+    )
+
+    got = {(e["method"], e["path"]) for e in _extract_spring_boot_routes(root, source, "C.java")}
+
+    assert got == {("GET", "/a"), ("POST", "/a"), ("GET", "/b"), ("POST", "/b")}
+
+
+def test_extract_spring_constant_paths_are_not_guessed():
+    root, source = parse_java(
+        '@RequestMapping(Paths.BASE)\n'
+        "public class C {\n"
+        '    @GetMapping("/x")\n    public void a() { }\n'
+        "    @GetMapping(Paths.ONE)\n    public void b() { }\n"
+        "}\n"
+    )
+
+    entries = _extract_spring_boot_routes(root, source, "C.java")
+
+    assert [e["path"] for e in entries] == ["/x"]
+    assert "not a string literal" in entries[0]["note"]
 
 
 def test_extract_rails_get_route():
@@ -1186,23 +1227,18 @@ def test_extract_rails_root_route():
     ]
 
 
-def test_extract_rails_resources_is_unresolved():
+def test_extract_rails_resources_expands_to_its_standard_routes():
     root, source = parse_ruby("resources :items\n")
 
     entries = _extract_rails_routes(root, source, "config/routes.rb")
 
-    assert entries == [
-        {
-            "method": None,
-            "path": "items",
-            "framework": "rails",
-            "file": "config/routes.rb",
-            "line": 1,
-            "handler": "resources(...)",
-            "unresolved": True,
-            "note": None,
-        }
-    ]
+    got = {(e["method"], e["path"], e["handler"]) for e in entries}
+    assert got == {
+        ("GET", "items", "items#index"), ("POST", "items", "items#create"), ("GET", "items/new", "items#new"),
+        ("GET", "items/:id", "items#show"), ("GET", "items/:id/edit", "items#edit"),
+        ("PATCH", "items/:id", "items#update"), ("PUT", "items/:id", "items#update"), ("DELETE", "items/:id", "items#destroy"),
+    }
+    assert all(e["unresolved"] is False for e in entries)
 
 
 def test_extract_rails_resources_controller_override():
@@ -1229,30 +1265,13 @@ def test_extract_rails_ignores_unrelated_calls():
 
 
 def test_extract_rails_resources_inside_namespace_gets_module_prefix():
-    # Real gap found via a real Discourse scan: a `resources :badges`
-    # nested in `namespace :admin do ... end` previously recorded resource
-    # name "badges" - identical to an unrelated top-level `resources
-    # :badges` elsewhere in the same routes.rb, which made dead_code.py's
-    # resolver correctly refuse to guess between the two real controllers
-    # and leave both flagged dead code.
-    root, source = parse_ruby(
-        "namespace :admin do\n  resources :badges\nend\n"
-    )
+    # the controller handler carries the namespace's module (Admin::BadgesController), the URL carries /admin
+    root, source = parse_ruby("namespace :admin do\n  resources :badges\nend\n")
 
     entries = _extract_rails_routes(root, source, "config/routes.rb")
 
-    assert entries == [
-        {
-            "method": None,
-            "path": "admin/badges",
-            "framework": "rails",
-            "file": "config/routes.rb",
-            "line": 2,
-            "handler": "resources(...)",
-            "unresolved": True,
-            "note": None,
-        }
-    ]
+    assert {e["handler"] for e in entries} >= {"admin/badges#index", "admin/badges#show"}
+    assert {e["path"] for e in entries} >= {"admin/badges", "admin/badges/:id"}
 
 
 def test_extract_rails_to_route_inside_namespace_gets_module_prefix():
@@ -1266,9 +1285,6 @@ def test_extract_rails_to_route_inside_namespace_gets_module_prefix():
 
 
 def test_extract_rails_nested_namespace_and_scope_module_compose_in_order():
-    # Arbitrary nesting depth (namespace inside scope inside namespace, ...)
-    # falls out of the upward-walk design for free - no separate stack
-    # needed, just each enclosing do_block's owning call checked in turn.
     root, source = parse_ruby(
         'namespace :admin do\n'
         '  scope module: "extra" do\n'
@@ -1279,36 +1295,29 @@ def test_extract_rails_nested_namespace_and_scope_module_compose_in_order():
 
     entries = _extract_rails_routes(root, source, "config/routes.rb")
 
-    assert entries[0]["path"] == "admin/extra/widgets"
+    assert entries[0]["handler"] == "admin/extra/widgets#index"
 
 
 def test_extract_rails_bare_scope_does_not_add_a_module_prefix():
-    # A bare `scope "/logs" do ... end` (or `scope path: "..." do`) changes
-    # only the URL, never the controller module - confirmed on Discourse's
-    # own routes.rb, where this form outnumbers `namespace` 20 to 3 and
-    # none of those 20 renamespace their contents' controllers. Must NOT
-    # be treated the same as `namespace`/`scope module:`.
+    # A bare `scope "/logs" do ... end` changes only the URL, never the controller module
     root, source = parse_ruby(
         'scope "/logs" do\n  resources :items\nend\n'
     )
 
     entries = _extract_rails_routes(root, source, "config/routes.rb")
 
-    assert entries[0]["path"] == "items"
+    assert entries[0]["handler"] == "items#index"
+    assert entries[0]["path"] == "logs/items"
 
 
 def test_extract_rails_scope_module_symbol_value_gets_module_prefix():
-    # Flash Review finding on #666: `scope module: :admin do` (a symbol
-    # value) is equally valid Rails syntax alongside `module: "admin"` (a
-    # string) - only the string form was handled, so this variant silently
-    # produced no module prefix at all.
     root, source = parse_ruby(
         "scope module: :admin do\n  resources :badges\nend\n"
     )
 
     entries = _extract_rails_routes(root, source, "config/routes.rb")
 
-    assert entries[0]["path"] == "admin/badges"
+    assert entries[0]["handler"] == "admin/badges#index"
 
 
 def test_extract_rails_namespace_composes_the_url_prefix_too():
@@ -1466,7 +1475,7 @@ def test_extract_laravel_match_route_multiple_methods():
     assert all(e["path"] == "/search" for e in entries)
 
 
-def test_extract_laravel_route_inside_group_gets_a_note():
+def test_extract_laravel_route_group_prefix_is_composed():
     root, source = parse_php(
         "<?php\n"
         "Route::group(['prefix' => 'admin'], function () {\n"
@@ -1477,10 +1486,47 @@ def test_extract_laravel_route_inside_group_gets_a_note():
     entries = _extract_laravel_routes(root, source, "routes/web.php")
 
     assert len(entries) == 1
-    assert entries[0]["path"] == "/dashboard"
-    assert entries[0]["note"] == (
-        "declared inside a Route::group() prefix, not composed into this path"
+    assert entries[0]["path"] == "/admin/dashboard"
+    assert entries[0]["note"] is None
+
+
+def test_extract_laravel_chained_prefix_group_and_nested_groups_compose_outermost_first():
+    root, source = parse_php(
+        "<?php\n"
+        "Route::prefix('v1')->middleware('auth')->group(function () {\n"
+        "    Route::group(['prefix' => 'admin'], function () {\n"
+        "        Route::get('stats', 'StatsController@show');\n"
+        "    });\n"
+        "});\n"
     )
+
+    assert [e["path"] for e in _extract_laravel_routes(root, source, "routes/web.php")] == ["/v1/admin/stats"]
+
+
+def test_extract_laravel_non_literal_group_prefix_is_noted_not_guessed():
+    root, source = parse_php(
+        "<?php\nRoute::prefix($version)->group(function () {\n    Route::get('ping', 'P@ping');\n});\n"
+    )
+
+    entry = _extract_laravel_routes(root, source, "routes/web.php")[0]
+
+    assert entry["path"] == "/ping"
+    assert "not a string literal" in entry["note"]
+
+
+def test_extract_laravel_routes_in_api_php_get_the_default_api_prefix():
+    root, source = parse_php("<?php\nRoute::get('users/login', 'AuthController@login');\n")
+
+    entry = _extract_laravel_routes(root, source, "routes/api.php")[0]
+
+    assert entry["path"] == "/api/users/login"
+    assert "default /api prefix" in entry["note"]
+
+
+def test_extract_laravel_relative_uri_gets_a_leading_slash():
+    root, source = parse_php("<?php\nRoute::get('users', 'U@index');\n")
+
+    assert _extract_laravel_routes(root, source, "routes/web.php")[0]["path"] == "/users"
 
 
 def test_extract_laravel_inline_closure_handler():
@@ -1507,66 +1553,75 @@ def test_extract_laravel_legacy_string_handler():
     assert entries[0]["handler"] == "UserController@index"
 
 
-def test_extract_laravel_route_resource_class_reference():
-    # Real gap found via audit: Route::resource()/apiResource() - Laravel's
-    # direct equivalent of Rails' `resources`, generating all 7 RESTful
-    # actions for a controller - was completely unextracted before. Unlike
-    # Rails, the controller is always an explicit ::class reference here,
-    # never inferred from the resource name by convention.
-    root, source = parse_php(
-        "<?php\nRoute::resource('users', UserController::class);\n"
-    )
+def test_extract_laravel_route_resource_expands_to_its_standard_routes():
+    root, source = parse_php("<?php\nRoute::resource('users', UserController::class);\n")
 
     entries = _extract_laravel_routes(root, source, "routes/web.php")
 
-    assert entries == [
-        {
-            "method": None,
-            "path": "users",
-            "framework": "laravel",
-            "file": "routes/web.php",
-            "line": 2,
-            "handler": "UserController",
-            "unresolved": True,
-            "note": None,
-        }
+    got = {(e["method"], e["path"], e["handler"]) for e in entries}
+    assert got == {
+        ("GET", "/users", "UserController@index"), ("GET", "/users/create", "UserController@create"),
+        ("POST", "/users", "UserController@store"), ("GET", "/users/{user}", "UserController@show"),
+        ("GET", "/users/{user}/edit", "UserController@edit"), ("PUT", "/users/{user}", "UserController@update"),
+        ("PATCH", "/users/{user}", "UserController@update"), ("DELETE", "/users/{user}", "UserController@destroy"),
+    }
+    assert all(not e["unresolved"] for e in entries)
+
+
+def test_extract_laravel_api_resource_has_no_create_or_edit():
+    root, source = parse_php("<?php\nRoute::apiResource('posts', PostController::class);\n")
+
+    paths = {(e["method"], e["path"]) for e in _extract_laravel_routes(root, source, "routes/web.php")}
+
+    assert ("GET", "/posts/create") not in paths and ("GET", "/posts/{post}/edit") not in paths
+    assert ("GET", "/posts") in paths and ("DELETE", "/posts/{post}") in paths
+
+
+def test_extract_laravel_resource_only_and_except_as_options_or_chained():
+    root, source = parse_php(
+        "<?php\n"
+        "Route::resource('a', AC::class, ['only' => ['index', 'show']]);\n"
+        "Route::resource('b', BC::class, ['except' => ['create', 'edit']]);\n"
+        "Route::apiResource('c', CC::class)->only(['index']);\n"
+        "Route::apiResource('d', DC::class)->except(['destroy']);\n"
+    )
+
+    entries = _extract_laravel_routes(root, source, "routes/web.php")
+    by = lambda h: {e["handler"].split("@")[1] for e in entries if e["handler"].startswith(h)}
+
+    assert by("AC") == {"index", "show"}
+    assert by("BC") == {"index", "store", "show", "update", "destroy"}
+    assert by("CC") == {"index"}
+    assert by("DC") == {"index", "store", "show", "update"}
+
+
+def test_extract_laravel_nested_resource_names_its_parameter_after_the_last_segment():
+    root, source = parse_php(
+        "<?php\nRoute::resource('articles/{article}/comments', CommentController::class, ['only' => ['destroy']]);\n"
+    )
+
+    assert [e["path"] for e in _extract_laravel_routes(root, source, "routes/web.php")] == [
+        "/articles/{article}/comments/{comment}"
     ]
 
 
-def test_extract_laravel_api_resource_class_reference():
+def test_extract_laravel_resource_with_a_non_literal_only_list_stays_unresolved():
+    root, source = parse_php("<?php\nRoute::resource('x', XC::class, ['only' => $actions]);\n")
+
+    entry = _extract_laravel_routes(root, source, "routes/web.php")[0]
+
+    assert entry["unresolved"] is True and entry["method"] is None and entry["handler"] == "XC"
+
+
+def test_extract_laravel_resource_legacy_string_and_namespaced_controllers_keep_their_names():
     root, source = parse_php(
-        "<?php\nRoute::apiResource('posts', PostController::class);\n"
+        "<?php\nRoute::resource('items', 'ItemController', ['only' => ['index']]);\n"
+        "Route::resource('admin/users', Admin\\UserController::class, ['only' => ['index']]);\n"
     )
 
-    entries = _extract_laravel_routes(root, source, "routes/web.php")
+    handlers = {e["handler"] for e in _extract_laravel_routes(root, source, "routes/web.php")}
 
-    assert entries[0]["handler"] == "PostController"
-
-
-def test_extract_laravel_resource_legacy_string_controller():
-    # The pre-::class form is also valid for Route::resource(), same as
-    # the plain-verb methods above.
-    root, source = parse_php(
-        "<?php\nRoute::resource('items', 'ItemController');\n"
-    )
-
-    entries = _extract_laravel_routes(root, source, "routes/web.php")
-
-    assert entries[0]["handler"] == "ItemController"
-
-
-def test_extract_laravel_resource_namespaced_class_reference():
-    # A namespaced ::class reference (Admin\UserController::class) keeps
-    # its full qualified name, not just the bare class - dead_code.py's
-    # resolver needs the namespace segments to disambiguate a nested
-    # controller from an unrelated same-named top-level one.
-    root, source = parse_php(
-        "<?php\nRoute::resource('admin/users', Admin\\UserController::class);\n"
-    )
-
-    entries = _extract_laravel_routes(root, source, "routes/web.php")
-
-    assert entries[0]["handler"] == "Admin\\UserController"
+    assert handlers == {"ItemController@index", "Admin\\UserController@index"}
 
 
 def test_extract_aspnet_httpget_attribute():
@@ -1593,7 +1648,7 @@ def test_extract_aspnet_httpget_attribute():
     ]
 
 
-def test_extract_aspnet_class_level_route_template_produces_a_note():
+def test_extract_aspnet_class_level_route_template_is_composed_with_the_method_template():
     root, source = parse_csharp(
         '[Route("api/[controller]")]\n'
         "public class UsersController {\n"
@@ -1604,9 +1659,72 @@ def test_extract_aspnet_class_level_route_template_produces_a_note():
 
     entries = _extract_aspnet_attribute_routes(root, source, "UsersController.cs")
 
-    assert entries[0]["note"] == (
-        "class-level [Route] template present, not composed into this path"
+    assert entries[0]["path"] == "/api/Users/{id}"
+    assert entries[0]["note"] is None
+
+
+def test_extract_aspnet_bare_http_attribute_is_the_class_route():
+    root, source = parse_csharp(
+        '[Route("api/articles")]\n'
+        "public class ArticlesController {\n"
+        "    [HttpGet]\n"
+        "    public void List() { }\n"
+        "    [HttpPost]\n"
+        "    public void Create() { }\n"
+        "}\n"
     )
+
+    got = {(e["method"], e["path"]) for e in _extract_aspnet_attribute_routes(root, source, "A.cs")}
+
+    assert got == {("GET", "/api/articles"), ("POST", "/api/articles")}
+
+
+def test_extract_aspnet_absolute_method_template_replaces_the_class_template():
+    root, source = parse_csharp(
+        '[Route("api/users")]\n'
+        "public class UsersController {\n"
+        '    [HttpGet("~/health")]\n'
+        "    public void Health() { }\n"
+        '    [HttpGet("/ping")]\n'
+        "    public void Ping() { }\n"
+        "}\n"
+    )
+
+    got = {e["path"] for e in _extract_aspnet_attribute_routes(root, source, "U.cs")}
+
+    assert got == {"/health", "/ping"}
+
+
+def test_extract_aspnet_action_token_and_method_level_route():
+    root, source = parse_csharp(
+        '[Route("api/[controller]/[action]")]\n'
+        "public class ToolsController {\n"
+        "    [HttpPost]\n"
+        "    public void Run() { }\n"
+        '    [Route("legacy")]\n'
+        "    public void Old() { }\n"
+        "}\n"
+    )
+
+    got = {(e["method"], e["path"]) for e in _extract_aspnet_attribute_routes(root, source, "T.cs")}
+
+    assert ("POST", "/api/Tools/Run") in got
+    assert ("ANY", "/api/Tools/[action]/legacy".replace("[action]", "Old")) in got
+
+
+def test_extract_aspnet_non_literal_class_route_is_noted_not_guessed():
+    root, source = parse_csharp(
+        "[Route(Constants.Base)]\n"
+        "public class UsersController {\n"
+        '    [HttpGet("{id}")]\n'
+        "    public void Get() { }\n"
+        "}\n"
+    )
+
+    entry = _extract_aspnet_attribute_routes(root, source, "U.cs")[0]
+
+    assert entry["path"] == "{id}"
+    assert "not a string literal" in entry["note"]
 
 
 def test_extract_aspnet_ignores_non_http_attributes():
@@ -1655,9 +1773,8 @@ def test_extract_aspnet_class_level_route_found_when_stacked_after_apicontroller
 
     entries = _extract_aspnet_attribute_routes(root, source, "UsersController.cs")
 
-    assert entries[0]["note"] == (
-        "class-level [Route] template present, not composed into this path"
-    )
+    assert entries[0]["path"] == "/api/Users/{id}"
+    assert entries[0]["note"] is None
 
 
 def test_extract_aspnet_minimal_mapget():
@@ -1828,6 +1945,350 @@ def test_map_api_endpoints_extracts_kotlin_ktor_routes(tmp_path):
 
     paths = {e["path"] for e in result["endpoints"]}
     assert "/kt" in paths
+
+
+
+def test_extract_rails_resources_only_except_and_param():
+    root, source = parse_ruby(
+        "resources :tags, only: [:index]\n"
+        "resources :articles, param: :slug, except: [:edit, :new]\n"
+    )
+
+    got = {(e["method"], e["path"]) for e in _extract_rails_routes(root, source, "config/routes.rb")}
+
+    assert ("GET", "tags") in got and ("POST", "tags") not in got
+    assert ("GET", "articles/:slug") in got and ("GET", "articles/new") not in got and ("GET", "articles/:slug/edit") not in got
+
+
+def test_extract_rails_singular_resource_and_nested_resources_inside_a_scope():
+    root, source = parse_ruby(
+        "scope :api do\n"
+        "  resource :user, only: [:show, :update]\n"
+        "  resources :articles, param: :slug do\n"
+        "    resource :favorite, only: [:create, :destroy]\n"
+        "    resources :comments, only: [:index, :destroy]\n"
+        "  end\n"
+        "end\n"
+    )
+
+    got = {(e["method"], e["path"], e["handler"]) for e in _extract_rails_routes(root, source, "config/routes.rb")}
+
+    assert ("GET", "api/user", "users#show") in got and ("PATCH", "api/user", "users#update") in got
+    assert ("POST", "api/articles/:article_slug/favorite", "favorites#create") in got
+    assert ("DELETE", "api/articles/:article_slug/favorite", "favorites#destroy") in got
+    assert ("GET", "api/articles/:article_slug/comments", "comments#index") in got
+    assert ("DELETE", "api/articles/:article_slug/comments/:id", "comments#destroy") in got
+
+
+def test_extract_rails_member_collection_and_on_routes_in_a_resource_block():
+    root, source = parse_ruby(
+        "resources :articles, param: :slug do\n"
+        "  get :feed, on: :collection\n"
+        "  member do\n    post :publish\n  end\n"
+        "  collection do\n    get :search\n  end\n"
+        "  get :preview\n"
+        "end\n"
+    )
+
+    got = {(e["method"], e["path"], e["handler"]) for e in _extract_rails_routes(root, source, "config/routes.rb")}
+
+    assert ("GET", "articles/feed", "articles#feed") in got
+    assert ("POST", "articles/:slug/publish", "articles#publish") in got
+    assert ("GET", "articles/search", "articles#search") in got
+    assert ("GET", "articles/:article_slug/preview", "articles#preview") in got
+
+
+def test_extract_rails_resources_with_a_non_literal_only_list_stays_unresolved():
+    root, source = parse_ruby("resources :items, only: ACTIONS\n")
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert len(entries) == 1 and entries[0]["unresolved"] is True and entries[0]["handler"] == "resources(...)"
+
+
+def test_extract_rails_singular_resource_with_a_non_literal_only_list_stays_unresolved():
+    root, source = parse_ruby("resource :profile, only: ACTIONS\n")
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert len(entries) == 1 and entries[0]["unresolved"] is True
+
+
+def test_rails_singularizer_handles_common_plurals():
+    from aletheore.endpoints import _rails_singular
+
+    assert [_rails_singular(w) for w in ("articles", "categories", "addresses", "statuses", "boxes", "branches", "people")] == [
+        "article", "category", "address", "status", "box", "branch", "person"]
+
+
+def test_extract_rails_only_wins_over_except_and_a_slash_string_is_not_an_action_and_singular_plurals():
+    from aletheore.endpoints import _rails_plural
+
+    root, source = parse_ruby("resources :posts, only: [:index], except: [:index]\nresources :users do\n  get '/health'\nend\n")
+    got = {(e["method"], e["path"]) for e in _extract_rails_routes(root, source, "config/routes.rb")}
+    assert ("GET", "posts") in got                       # only: wins, except: is ignored
+    assert not any("health" in path for _m, path in got)  # a URL, not an action
+    assert [_rails_plural(w) for w in ("profile", "person", "status", "category", "box")] == ["profiles", "people", "statuses", "categories", "boxes"]
+
+
+def test_rails_devise_for_expands_session_and_registration_routes(tmp_path):
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "routes.rb").write_text(
+        "Rails.application.routes.draw do\n"
+        "  scope :api do\n"
+        "    devise_for :users, controllers: { sessions: :sessions },\n"
+        "                       path_names: { sign_in: :login }\n"
+        "  end\n"
+        "end\n"
+    )
+    found = {
+        (e["method"], e["path"], e["handler"], e["note"] is not None)
+        for e in map_api_endpoints(tmp_path)["endpoints"]
+    }
+    assert ("POST", "api/users/login", "sessions#create", True) in found
+    assert ("POST", "api/users", "devise/registrations#create", True) in found
+    assert ("DELETE", "api/users/sign_out", "sessions#destroy", True) in found
+
+
+def _parse_ts(code: str):
+    from aletheore.endpoints import TS_LANGUAGE
+
+    parser = Parser()
+    parser.language = TS_LANGUAGE
+    return parser.parse(code.encode()).root_node, code.encode()
+
+
+def test_extract_nestjs_controller_and_method_decorators_compose():
+    from aletheore.endpoints import _extract_nestjs_routes
+
+    root, source = _parse_ts(
+        "@Controller('articles')\n"
+        "export class ArticleController {\n"
+        "  @Get()\n  findAll() {}\n"
+        "  @Get(':slug')\n  find(@Param('slug') slug: string) {}\n"
+        "  @Post()\n  create() {}\n"
+        "  @Delete(':slug/comments/:id')\n  remove() {}\n"
+        "}\n"
+    )
+
+    got = {(e["method"], e["path"], e["handler"]) for e in _extract_nestjs_routes(root, source, "a.controller.ts")}
+
+    assert got == {("GET", "/articles", "findAll"), ("GET", "/articles/:slug", "find"), ("POST", "/articles", "create"),
+                   ("DELETE", "/articles/:slug/comments/:id", "remove")}
+
+
+def test_extract_nestjs_object_form_controller_array_paths_and_all():
+    from aletheore.endpoints import _extract_nestjs_routes
+
+    root, source = _parse_ts(
+        "@Controller({ path: 'users', version: '1' })\n"
+        "class UsersController {\n  @Get(['a', 'b'])\n  two() {}\n  @All('x')\n  any() {}\n}\n"
+    )
+
+    got = {(e["method"], e["path"]) for e in _extract_nestjs_routes(root, source, "u.ts")}
+
+    assert got == {("GET", "/users/a"), ("GET", "/users/b"), ("ANY", "/users/x")}
+
+
+def test_extract_nestjs_non_literal_controller_path_is_noted_and_non_controllers_ignored():
+    from aletheore.endpoints import _extract_nestjs_routes
+
+    root, source = _parse_ts(
+        "@Controller(BASE)\nclass A {\n  @Get('x')\n  x() {}\n}\n"
+        "class NotAController {\n  @Get('y')\n  y() {}\n}\n"
+    )
+
+    entries = _extract_nestjs_routes(root, source, "a.ts")
+
+    assert [e["path"] for e in entries] == ["/x"] and "not a string literal" in entries[0]["note"]
+
+
+def test_map_api_endpoints_composes_nestjs_set_global_prefix(tmp_path):
+    from aletheore.endpoints import map_api_endpoints
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/main.ts").write_text("async function bootstrap() { app.setGlobalPrefix('api'); }\n")
+    (tmp_path / "src/tags.controller.ts").write_text("@Controller('tags')\nexport class TagsController {\n  @Get()\n  all() {}\n}\n")
+
+    paths = {e["path"] for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "nestjs"}
+
+    assert paths == {"/api/tags"}
+
+
+def test_extract_nestjs_route_under_a_non_literal_controller_path_is_flagged_unresolved():
+    from aletheore.endpoints import _extract_nestjs_routes
+
+    root, source = _parse_ts("@Controller(BASE)\nclass A {\n  @Get('x')\n  x() {}\n}\n")
+
+    assert _extract_nestjs_routes(root, source, "a.ts")[0]["unresolved"] is True
+
+
+def test_nest_global_prefix_is_ignored_inside_comments(tmp_path):
+    from aletheore.endpoints import map_api_endpoints
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/main.ts").write_text("// do not call setGlobalPrefix('v2') here\nasync function bootstrap() {}\n")
+    (tmp_path / "src/t.controller.ts").write_text("@Controller('tags')\nexport class T {\n  @Get()\n  all() {}\n}\n")
+    assert {e["path"] for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "nestjs"} == {"/tags"}
+
+
+def _django_repo(tmp_path, files):
+    from aletheore.endpoints import map_api_endpoints
+
+    for rel, body in files.items():
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body)
+    return {(e["method"], e["path"]) for e in map_api_endpoints(tmp_path)["endpoints"]}
+
+
+def test_django_include_prefix_is_composed_across_files_and_url_is_read(tmp_path):
+    got = _django_repo(tmp_path, {
+        "proj/urls.py": "from django.conf.urls import include, url\nurlpatterns = [url(r'^api/', include('shop.urls'))]\n",
+        "shop/__init__.py": "",
+        "shop/urls.py": "from django.conf.urls import url\nfrom . import views\nurlpatterns = [url(r'^items/(?P<pk>\\d+)/?$', views.item)]\n",
+        "shop/views.py": "def item(request, pk):\n    pass\n",
+    })
+    assert ("ANY", "/api/items/<pk>") in got
+    assert not any(path == "api/" for _m, path in got)  # the include itself is replaced by its routes
+
+
+def test_django_nested_includes_and_path_prefixes_compose(tmp_path):
+    got = _django_repo(tmp_path, {
+        "proj/urls.py": "from django.urls import include, path\nurlpatterns = [path('v1/', include('api.urls'))]\n",
+        "api/__init__.py": "",
+        "api/urls.py": "from django.urls import include, path\nurlpatterns = [path('shop/', include('api.shop.urls'))]\n",
+        "api/shop/__init__.py": "",
+        "api/shop/urls.py": "from django.urls import path\nfrom . import views\nurlpatterns = [path('items/<int:id>/', views.item)]\n",
+        "api/shop/views.py": "def item(request, id):\n    pass\n",
+    })
+    assert ("ANY", "/v1/shop/items/<int:id>/") in got
+
+
+def test_django_include_of_a_module_outside_the_repository_stays_unresolved(tmp_path):
+    from aletheore.endpoints import map_api_endpoints
+
+    (tmp_path / "proj").mkdir()
+    (tmp_path / "proj/urls.py").write_text("from django.urls import include, path\nurlpatterns = [path('admin/', include('django.contrib.admin.urls'))]\n")
+    entry = map_api_endpoints(tmp_path)["endpoints"][0]
+
+    assert entry["unresolved"] is True and "not in the repository" in entry["note"]
+
+
+def test_drf_router_registration_expands_through_include_router_urls(tmp_path):
+    got = _django_repo(tmp_path, {
+        "proj/urls.py": (
+            "from django.conf.urls import include, url\nfrom rest_framework.routers import DefaultRouter\nfrom .views import PostViewSet, TagViewSet\n"
+            "router = DefaultRouter(trailing_slash=False)\nrouter.register(r'posts', PostViewSet)\nrouter.register(r'tags', TagViewSet)\n"
+            "urlpatterns = [url(r'^api/', include(router.urls))]\n"),
+        "proj/views.py": (
+            "from rest_framework import viewsets, mixins\n"
+            "class PostViewSet(viewsets.ModelViewSet):\n    pass\n"
+            "class TagViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):\n    pass\n"),
+    })
+    assert {("GET", "/api/posts"), ("POST", "/api/posts"), ("GET", "/api/posts/<pk>"), ("PUT", "/api/posts/<pk>"),
+            ("PATCH", "/api/posts/<pk>"), ("DELETE", "/api/posts/<pk>")} <= got
+    assert ("GET", "/api/tags") in got and ("POST", "/api/tags") not in got
+
+
+def test_drf_router_with_a_viewset_from_outside_the_repo_is_unresolved_not_guessed(tmp_path):
+    from aletheore.endpoints import map_api_endpoints
+
+    for rel, body in {
+        "urls.py": ("from rest_framework.routers import DefaultRouter\nfrom thirdparty import ThingViewSet\nfrom django.urls import include, path\n"
+                    "router = DefaultRouter()\nrouter.register('things', ThingViewSet)\nurlpatterns = [path('', include(router.urls))]\n"),
+    }.items():
+        (tmp_path / rel).write_text(body)
+    entries = map_api_endpoints(tmp_path)["endpoints"]
+
+    assert len(entries) == 1 and entries[0]["unresolved"] is True and entries[0]["method"] == "ANY"
+
+
+def test_django_as_view_methods_come_from_the_class_generics_and_function_decorators(tmp_path):
+    got = _django_repo(tmp_path, {
+        "urls.py": (
+            "from django.urls import path\nfrom . import views\nurlpatterns = [\n"
+            "    path('a/', views.AView.as_view()),\n    path('b/', views.BView.as_view()),\n"
+            "    path('c/', views.func_view),\n    path('d/', views.DView.as_view({'get': 'list', 'post': 'create'})),\n]\n"),
+        "views.py": (
+            "from rest_framework import generics\nfrom rest_framework.decorators import api_view\n"
+            "class AView(APIView):\n    def get(self, request): pass\n    def delete(self, request): pass\n"
+            "class BView(generics.ListCreateAPIView):\n    pass\n"
+            "@api_view(['GET', 'POST'])\ndef func_view(request): pass\n"),
+    })
+    assert {("GET", "a/"), ("DELETE", "a/"), ("GET", "b/"), ("POST", "b/"), ("GET", "c/"), ("POST", "c/"), ("GET", "d/"), ("POST", "d/")} <= got
+    assert ("ANY", "a/") not in got
+
+
+def test_django_regex_routes_become_templates():
+    from aletheore.endpoints import _django_regex_to_route
+
+    assert _django_regex_to_route(r"^articles/(?P<slug>[-\w]+)/favorite/?$") == "articles/<slug>/favorite"
+    assert _django_regex_to_route(r"^tags/?$") == "tags"
+    assert _django_regex_to_route(r"^files/(\d+)/$") == "files/<arg>/"
+    assert _django_regex_to_route("users/<int:id>/") == "users/<int:id>/"
+
+
+def test_django_regex_templates_drop_group_quantifiers_and_handle_non_capturing_groups():
+    from aletheore.endpoints import _django_regex_to_route
+
+    assert _django_regex_to_route(r"^articles/(?P<slug>[-\w]+)+/$") == "articles/<slug>/"
+    assert _django_regex_to_route(r"^y/(?P<year>[0-9]{4})/$") == "y/<year>/"
+    assert _django_regex_to_route(r"^items/(\d+)?/$") == "items/<arg>/"
+    assert _django_regex_to_route(r"^docs(?:/(?P<page>\w+))?/$") == "docs/"
+    assert _django_regex_to_route(r"^(?:v1|v2)/ping$") == "v1|v2/ping"
+
+
+def test_extract_spring_request_mapping_method_given_as_a_statically_imported_constant():
+    root, source = parse_java('public class C {\n    @RequestMapping(path = "/users", method = POST)\n    public void f() { }\n}\n')
+
+    assert [(e["method"], e["path"]) for e in _extract_spring_boot_routes(root, source, "C.java")] == [("POST", "/users")]
+
+
+def test_extract_spring_route_under_a_constant_class_prefix_is_flagged_unresolved():
+    root, source = parse_java(
+        "@RequestMapping(Paths.BASE)\npublic class C {\n    @GetMapping\n    public void a() { }\n    @GetMapping(\"/x\")\n    public void b() { }\n}\n"
+    )
+
+    entries = _extract_spring_boot_routes(root, source, "C.java")
+
+    assert entries and all(e["unresolved"] is True for e in entries)
+
+
+def test_extract_spring_request_mapping_with_an_unreadable_method_is_unresolved_not_any():
+    root, source = parse_java('public class C {\n    @RequestMapping(path = "/x", method = Consts.VERB)\n    public void a() { }\n}\n')
+    entry = _extract_spring_boot_routes(root, source, "C.java")[0]
+    assert entry["unresolved"] is True and "RequestMethod" in entry["note"]
+
+
+def test_extract_laravel_non_route_group_chain_is_not_a_route_group_and_notes_combine():
+    root, source = parse_php("<?php\n$cache->prefix('x')->group(function () {\n    Route::get('ping', 'P@ping');\n});\n")
+    assert _extract_laravel_routes(root, source, "routes/web.php")[0]["path"] == "/ping"
+    root, source = parse_php("<?php\nRoute::prefix($v)->group(function () {\n    Route::get('ping', 'P@ping');\n});\n")
+    note = _extract_laravel_routes(root, source, "routes/api.php")[0]["note"]
+    assert "not a string literal" in note and "default /api prefix" in note
+
+
+def test_extract_aspnet_route_under_a_non_literal_class_route_is_flagged_unresolved():
+    root, source = parse_csharp(
+        "[Route(Constants.Base)]\npublic class UsersController {\n    [HttpGet(\"{id}\")]\n    public void Get() { }\n}\n"
+    )
+
+    assert _extract_aspnet_attribute_routes(root, source, "U.cs")[0]["unresolved"] is True
+
+
+def test_extract_flask_route_methods_given_as_a_tuple_or_a_set():
+    for literal in ('("POST",)', '{"GET", "POST"}', '["POST"]'):
+        root, source = parse_python(f'@bp.route("/api/users", methods={literal})\ndef users():\n    pass\n')
+        methods = {e["method"] for e in _extract_flask_fastapi_routes(root, source, "views.py")}
+        assert methods == ({"GET", "POST"} if "GET" in literal else {"POST"}), literal
+
+
+def test_swift_route_segments_that_start_with_a_slash_do_not_double_it(tmp_path):
+    # Hummingbird-style `router.get("/users")` goes through the Vapor matcher: no `//users`
+    (tmp_path / "a.swift").write_text('import Hummingbird\nlet router = Router()\nrouter.get("/users") { _, _ in "x" }\nrouter.post("items", "{id}") { _, _ in "y" }\n')
+    got = sorted((e["method"], e["path"]) for e in map_api_endpoints(tmp_path)["endpoints"])
+    assert got == [("GET", "/users"), ("POST", "/items/{id}")]
 
 
 def _gin_repo(tmp_path, files):
