@@ -4322,16 +4322,23 @@ def _csharp_type_reference_targets(
             continue
         if name in shadowing and name not in type_context:
             continue  # binds to an inherited or own member, not to the type of that name
+        use = uses.get(name) if uses is not None else None
+        short_type = False
         if len(name) < _CSHARP_MIN_TYPE_NAME:
-            # only a unique generic extension called with explicit type arguments (see _build_csharp_index)
-            if (
+            # A short name is a type only where the grammar says so (`It.IsAny()`, `Foo<T>`, `new It()`, a declared
+            # type) and nothing in this file declares it as a variable, parameter, member or type parameter.
+            short_type = (
+                scope is not None and use is not None and len(name) >= 2 and not use["declared"]
+                and bool(use["kinds"] & {"static", "generic", "new", "decl"})
+            )
+            # or a unique generic extension called with explicit type arguments (see _build_csharp_index)
+            if not short_type and (
                 scope is None
                 or name not in index["ext_short_generic"]
                 or not re.search(r"\.\s*" + re.escape(name) + r"\s*<[^>()]*>\s*\(", text)
             ):
                 continue
-        owners = type_owners.get(name) if len(name) >= _CSHARP_MIN_TYPE_NAME else None
-        use = uses.get(name) if uses is not None else None
+        owners = type_owners.get(name) if len(name) >= _CSHARP_MIN_TYPE_NAME or short_type else None
         if use is not None and use["kinds"] and use["kinds"] <= {"call"}:
             owners = None  # only ever the called name of `x.Name(...)`: a method group, not a type
         if scope is not None:

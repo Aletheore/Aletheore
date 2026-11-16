@@ -65,3 +65,34 @@ def test_a_name_that_is_also_used_as_a_type_still_links(tmp_path):
         "T.cs": "namespace App;\npublic class T { Setup s; void Run(object x) { x.Setup(1); } }\n",
     }
     assert "Setup.cs" in _imports(tmp_path, files, "T.cs")
+
+
+IT = "namespace App;\npublic static class It { public static int IsAny() => 0; }\n"
+
+
+def test_a_two_letter_type_links_when_used_as_a_qualifier(tmp_path):
+    files = {"It.cs": IT, "T.cs": "namespace App;\npublic class T { int Run() => It.IsAny(); }\n"}
+    assert "It.cs" in _imports(tmp_path, files, "T.cs")
+
+
+def test_a_short_type_links_when_constructed_or_declared(tmp_path):
+    files = {
+        "Id.cs": "namespace App;\npublic class Id { }\n",
+        "A.cs": "namespace App;\npublic class A { object Run() => new Id(); }\n",
+        "B.cs": "namespace App;\npublic class B { Id value; }\n",
+    }
+    assert "Id.cs" in _imports(tmp_path, files, "A.cs")
+    assert "Id.cs" in _imports(tmp_path, files, "B.cs")
+
+
+def test_a_short_name_declared_as_a_variable_is_not_a_type(tmp_path):
+    files = {
+        "It.cs": IT,
+        "T.cs": "namespace App;\npublic class T { int Run(Other It) => It.Value; }\npublic class Other { public int Value; }\n",
+    }
+    assert "It.cs" not in _imports(tmp_path, files, "T.cs")
+
+
+def test_a_short_name_used_only_as_a_plain_word_is_not_a_type(tmp_path):
+    files = {"It.cs": IT, "T.cs": "namespace App;\npublic class T { int Run() { var x = 1; return x; } // It\n}\n"}
+    assert "It.cs" not in _imports(tmp_path, files, "T.cs")
