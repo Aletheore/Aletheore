@@ -31,7 +31,7 @@ from aletheore.council.daemon import WorkerDaemon, run_guarded
 from aletheore.council.dispatcher import Dispatcher, send_ask, send_message, send_task
 from aletheore.council.worker_lock import WorkerAlreadyRunning, WorkerLock
 from aletheore.council.protocol import EventDraft, EventType, ProtocolError, clip_text
-from aletheore.council.wake import MAX_WAKES, WAKE_COOLDOWN_S
+from aletheore.council.wake import MAX_WAKE_DEPTH, MAX_WAKES, WAKE_COOLDOWN_S
 from aletheore.council.waiting import Cursor, wait_for
 from aletheore.council.resume import ResumeStore
 from aletheore.council.remote_store import RemoteRoomStore
@@ -837,6 +837,8 @@ def worker(
     max_steps: int = typer.Option(MAX_STEPS, "--max-steps", help="autonomous rooms: most tasks and debates in total before the room stops"),
     wake_from: list[str] = typer.Option([], "--wake-from", help="besides the host and you, a person whose @mention may wake your agents (repeatable)"),
     max_wakes: int = typer.Option(MAX_WAKES, "--max-wakes", help="most times one of your agents is woken by a mention inside ten minutes"),
+    max_wake_depth: int = typer.Option(MAX_WAKE_DEPTH, "--max-wake-depth", min=1, max=10,
+                                       help="how many agents may answer one another in a row after a person's message (default 2: one agent can hand over to another but not hear back; 4 lets a planner and an executor talk it through)"),
     no_wake: bool = typer.Option(False, "--no-wake", help="do not wake your agents when they are mentioned"),
 ) -> None:
     r = _room(room)
@@ -862,11 +864,11 @@ def worker(
                 return default
 
     daemon = WorkerDaemon(r.store, r, me, _MyRunners(), bundles=bundle_store(r.store), parallel=True, wake_from=set(wake_from),
-                          max_wakes=0 if no_wake else max_wakes, wake_cooldown_s=WAKE_COOLDOWN_S)
+                          max_wakes=0 if no_wake else max_wakes, wake_cooldown_s=WAKE_COOLDOWN_S, max_wake_depth=max_wake_depth)
     console.print(f"Worker for {me} running in room {room} (Ctrl+C to stop)", highlight=False, markup=False)
     if not no_wake:
         others = f", and {', '.join(sorted(set(wake_from)))}" if wake_from else ""
-        console.print(f"Your agents answer when the host or you mention them with @name{others} (at most {max_wakes} wakes per agent per 10 minutes)", highlight=False, markup=False)
+        console.print(f"Your agents answer when the host or you mention them with @name{others} (at most {max_wakes} wakes per agent per 10 minutes, agents answering agents up to {max_wake_depth} deep)", highlight=False, markup=False)
     stop = threading.Event()
     if dispatcher is not None:
         def plan_failed(exc: Exception) -> None:
