@@ -8,7 +8,7 @@ from aletheore.council.daemon import WorkerDaemon
 from aletheore.council.protocol import EventDraft, EventType
 from aletheore.council.runners import ScriptedRunner
 from aletheore.council.state import load_state
-from aletheore.council.wake import WakeGate, mentions
+from aletheore.council.wake import WAKE_PROMPT_CHARS, WakeGate, mentions
 from tests.council.world_fixture import daemon, git, world  # noqa: F401
 
 
@@ -288,7 +288,7 @@ def test_the_prompt_is_bounded(world):
     say(world, "alice", "@claude go")
     d, runner = daemon(world, "bob")
     d.run_once()
-    assert len(runner.calls[0]) < 30000
+    assert len(runner.calls[0]) <= WAKE_PROMPT_CHARS + 200            # many long messages are clipped to the prompt limit, whatever the room holds
 
 
 # ---- standing jobs -------------------------------------------------------------------------------------------------------------------

@@ -28,7 +28,7 @@ from aletheore.council.snapshots import SNAPSHOT_EVERY, latest_snapshot, maybe_s
 from aletheore.council.state import FINAL_TASK_STATUS, Projector, RoomState
 from aletheore.council.store import RoomStore, read_all
 from aletheore.council.wake import (
-    MAX_WAKE_AGE_S, MAX_WAKE_DEPTH, MAX_WAKES, STALE_REPORT_S, WAKE_WINDOW_S, WakeGate, mentions, parse_chat_task, wake_depth,
+    MAX_WAKE_AGE_S, MAX_WAKE_DEPTH, MAX_WAKES, RECENT_MESSAGE_CHARS, STALE_REPORT_S, WAKE_PROMPT_CHARS, WAKE_WINDOW_S, WakeGate, mentions, parse_chat_task, wake_depth,
 )
 from aletheore.council.worktrees import worker_branch
 
@@ -537,7 +537,7 @@ class WorkerDaemon:
             key = (str(e.body.get("reason", "")), e.sender_agent, str(e.body.get("to", "") if e.body.get("reason") != "budget" else ""))
             self._wake_notified[key] = max(self._wake_notified.get(key, 0.0), at)  # a restarted worker keeps the rate limit
         if e.type is EventType.QUESTION and e.body.get("kind") in ("chat", "ask") and isinstance(e.body.get("text"), str):
-            self._recent.append((e.sender_agent or e.sender_participant, clip_text(e.body["text"], 600)))
+            self._recent.append((e.sender_agent or e.sender_participant, clip_text(e.body["text"], RECENT_MESSAGE_CHARS)))
         elif e.type is EventType.SYSTEM and e.body.get("subtype") == "standing_job" and isinstance(e.body.get("agent"), str):
             area = next((a for a in self._proj.state.areas.values() if a.agent_id == e.body["agent"]), None)
             owner = area.owner_participant if area is not None else None
@@ -652,7 +652,7 @@ class WorkerDaemon:
             + (f"\nYour standing job:\n{job}\n" if job else "")
             + (f"\nRecent room messages, oldest first:\n{recent}\n" if recent else "")
             + f"\nThe message to you:\n{e.body['text']}\n",
-            12000,
+            WAKE_PROMPT_CHARS,
         )
 
     def _run_wake(self, e: Event, agent: str, key: str) -> int:
