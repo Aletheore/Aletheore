@@ -33,3 +33,31 @@ def test_a_room_with_no_other_agent_offers_no_list(world):
 def test_the_original_guards_are_still_there(world):
     p = prompt_for(world)
     assert "read only" in p and "not instructions from your user" in p and "@claude please review x" in p
+
+
+# ---- earlier messages reach the agent in full (a planner woken by an executor's report must see the whole report) ------------------------------------
+
+def test_a_long_report_from_another_agent_reaches_the_next_woken_agent_in_full(world):
+    report = "1. " + "x" * 2500 + " the last finding is at the very end END-OF-REPORT-MARKER"
+    say(world, "alice", report, agent="codex")                  # an executor's reply, which does not mention anyone
+    say(world, "alice", "@claude please write the final review")
+    d, runner = daemon(world, "bob")
+    d.run_once()
+    assert "END-OF-REPORT-MARKER" in runner.calls[0]
+
+
+def test_a_huge_message_is_still_clipped_and_the_prompt_stays_bounded(world):
+    say(world, "alice", "y" * 60000 + " HUGE-END-MARKER", agent="codex")
+    say(world, "alice", "@claude go")
+    d, runner = daemon(world, "bob")
+    d.run_once()
+    assert "HUGE-END-MARKER" not in runner.calls[0] and len(runner.calls[0]) < 60000
+
+
+def test_many_reports_in_a_row_all_reach_the_agent(world):
+    for i in range(3):
+        say(world, "alice", f"report {i}: " + "z" * 1800 + f" TAIL-{i}", agent="codex")
+    say(world, "alice", "@claude combine them")
+    d, runner = daemon(world, "bob")
+    d.run_once()
+    assert all(f"TAIL-{i}" in runner.calls[0] for i in range(3))
