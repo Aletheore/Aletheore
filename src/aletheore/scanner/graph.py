@@ -1844,6 +1844,11 @@ def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | Non
         # Names relative to the current module (2018 uniform paths), then a workspace crate named in this
         # package's Cargo.toml (`use serde_core::de::Deserialize`).
         target = _walk_rust_segments(_rust_module_search_dir(repo_path, from_file), segments)
+        # A sibling test/example/bench file is a separate Cargo target, not an implicitly declared module.
+        # Prefer a known crate over that file unless this target declares or aliases the name locally.
+        lib_root = rust_resolve.target_crate_alias(repo_path, from_file, path) if target is not None else None
+        if lib_root is not None:
+            target = _walk_rust_segments(lib_root.parent, rest) or lib_root
         if target is None:
             aliases = rust_resolve.crate_aliases(repo_path, from_file)
             if head in aliases:
@@ -5104,12 +5109,17 @@ def _extract_module(
             extra_paths = rust_resolve.extra_imports(repo_path, path, source.decode(errors="ignore"))
             for use_path in [*raw_imports, *extra_paths]:
                 target = _resolve_rust_path(repo_path, path, use_path)
+                inferred = rust_resolve.target_crate_alias(repo_path, path, use_path) is not None
                 if target is not None and target != rel_path:
                     resolved_imports.append(target)
+                    if inferred:
+                        import_confidence[target] = "inferred"
                 if target is not None:
                     for defining in _rust_reexport_targets(repo_path, path, use_path, target):
                         if defining != rel_path:
                             resolved_imports.append(defining)
+                            if inferred:
+                                import_confidence[defining] = "inferred"
                 for module_file in _rust_module_reexport_targets(repo_path, path, use_path):
                     if module_file != rel_path:
                         resolved_imports.append(module_file)
