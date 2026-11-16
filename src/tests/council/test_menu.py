@@ -35,7 +35,7 @@ def test_council_is_in_the_home_menu_next_to_hallbook():
 
 def test_every_guided_row_is_a_real_council_command():
     council = get_command(app).commands["council"]
-    assert council.commands, "the council extra is needed for these tests"
+    assert council.commands, "Council did not load: its packages are part of every install"
     for key, label, description in cli._COUNCIL_MENU:
         assert key in council.commands, key
         assert label and description
@@ -139,4 +139,4 @@ def test_the_menu_says_how_to_install_the_extra_when_it_is_missing(monkeypatch, 
     monkeypatch.setattr(builtins, "__import__", fake_import)
     paused = []
     cli._council_flow({}, lambda: paused.append(True))
-    assert "aletheore[council]" in "".join(capsys.readouterr().out.split()) and paused == [True]
+    assert "force-reinstall" in "".join(capsys.readouterr().out.split()) and paused == [True]

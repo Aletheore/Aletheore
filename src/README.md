@@ -676,8 +676,9 @@ The setup screen prints the active network plan.
 ### `aletheore council`
 
 A sealed room where people and their coding agents work together. It runs on the host's own machine, and in a sealed room the
-messages, plans and files are encrypted end to end. Council is an optional extra: `pip install 'aletheore[council]'`. Without it,
-`aletheore council` explains how to install it.
+messages, plans and files are encrypted end to end. Council is part of every install (`pip install aletheore`); it used to be
+the `council` extra, and `pip install 'aletheore[council]'` still works. If its packages are missing from a damaged install,
+`aletheore council` says what is missing and how to repair it.
 
 ```text
 aletheore council            # the commands, and the same list through the menu
