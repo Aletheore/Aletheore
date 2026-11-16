@@ -346,6 +346,30 @@ def module_items(file_path: str) -> tuple[frozenset[str], tuple[str, ...]]:
     return declared, tuple(uses)
 
 
+def target_crate_alias(repo_path: Path, from_file: Path, path: str) -> Path | None:
+    """Find a crate hidden by an undeclared sibling Cargo target; the result is inferred."""
+    head, separator, _ = path.partition("::")
+    parent = from_file.parent
+    if not separator or parent.name not in ("tests", "examples", "benches"):
+        return None
+    if not (parent.parent / "Cargo.toml").is_file():
+        return None
+    if not file_exists_exact(parent, head + ".rs") and not (
+        dir_exists_exact(parent, head) and file_exists_exact(parent / head, "mod.rs")
+    ):
+        return None
+    lib_root = crate_aliases(repo_path, from_file).get(head)
+    if lib_root is None or head in module_items(str(from_file))[0]:
+        return None
+    try:
+        cleaned = clean_source(from_file.read_text(encoding="utf-8", errors="ignore"))
+    except OSError:
+        return None
+    if re.search(r"\bas\s+" + re.escape(head) + r"\b", cleaned):
+        return None
+    return lib_root
+
+
 def root_reexports(repo_path: Path, root_file: Path) -> tuple[str, ...]:
     """Flattened `pub use` paths of a crate root file, including those written inside a zero-argument item
     macro the file invokes (`crate_root!();` expanding to `pub use other_crate::{de, ser};`)."""
