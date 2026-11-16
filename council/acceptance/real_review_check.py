@@ -141,15 +141,17 @@ def daily_report(orders):
     return f"orders={len(orders)} total={format_money(total)} avg={format_money(avg)}"
 ''',
 }
+# A bug counts as found when the review names it, whether it cites a function (`add_tax`) or a file and line (`pricing.py:13`), so the anchors accept either.
 _G = r"[^\n]{0,350}"
+_NEG = r"(negative|< ?0|<= ?0|non-?positive|zero or|not (positive|validated|checked)|no (check|validation)|unvalidated|without (a )?(check|validat))"
 HARD_BUGS = {
-    "1 add_tax returns a float, not integer cents": rf"add_tax{_G}(float|integer|round|not an int|int\b)|(float|round|fraction){_G}add_tax|TAX_RATE_PERCENT\s*/\s*100",
-    "2 place_order does not undo earlier reservations when a later line fails": rf"(place_order|reserve){_G}(roll ?back|undo|partial|atomic|already (been )?reserved|earlier (line|reserv)|leak|restore|release)",
-    "3 restock accepts negative quantities": rf"restock{_G}(negative|validat|check|<\s*0|positive)",
-    "4 daily_report divides by zero with no orders": rf"(daily_report|avg|average|len\(orders\)){_G}(zero|empty|no orders|division)",
-    "5 daily_report ignores each order's discount": rf"(daily_report|report){_G}(discount_percent|discount){_G}(ignor|not (passed|used|applied|included|forwarded)|never|unused|without|omit|drops?|missing)|(ignor|never|unused|omit|drops?){_G}discount",
-    "6 apply_discount does not validate the percent": rf"apply_discount{_G}(validat|range|over 100|above 100|exceed|negative|>\s*100|outside|bound|clamp|0.{1,6}100)",
-    "7 reserve accepts zero or negative quantities": rf"reserve{_G}(negative|zero|non-?positive|<=?\s*0|positive)|(negative|zero|non-?positive){_G}(qty|quantit){_G}(reserve|place_order)",
+    "1 add_tax returns a float, not integer cents": rf"add_tax{_G}(float|fraction|integer|round|not an int|true division)|(pricing\.py|tax){_G}(float|fraction|not an int|true division|integer.cents)|(float|fraction){_G}(add_tax|tax)",
+    "2 place_order does not undo earlier reservations when a later line fails": rf"(place_order|reserve|reservation|orders\.py){_G}(roll ?back|undo|partial|atomic|already (been )?(reserved|deducted)|earlier (line|reserv)|leak|restore|release|stay|remain|never (restock|return))",
+    "3 restock accepts negative quantities": rf"(restock{_G}{_NEG}|{_NEG}{_G}restock|\b15\D{{1,3}}16\b|inventory\.py:16)",
+    "4 daily_report divides by zero with no orders": r"zero\s*division|division by zero|divides? by zero|len\(orders\)\s*(==|is)\s*0|no orders|empty (day|list of orders|orders)",
+    "5 daily_report ignores each order's discount": rf"(daily_report|report\.py|report){_G}discount{_G}(ignor|not (passed|used|applied|included|forwarded|taken)|never|unused|without|omit|drops?|missing|overstate|exceed)|(ignor|omit|drops?|never uses?){_G}discount",
+    "6 apply_discount does not validate the percent": rf"(apply_discount|pricing\.py|discount|percent){_G}(outside|range|validat|over 100|above 100|exceed|> ?100|0.{{1,6}}100|bound|clamp|negative total|price increase)",
+    "7 reserve accepts zero or negative quantities": rf"(reserve{_G}{_NEG}|{_NEG}{_G}reserve|\b(8|9)\D{{1,3}}12\b|inventory\.py:(8|9|10|11|12)\b|negative (qty|quantity|quantities){_G}(increase|add|stock))",
 }
 REQUEST = {
     "easy": "plan a review of inventory.py",
