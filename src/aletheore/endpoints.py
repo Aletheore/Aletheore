@@ -1771,6 +1771,157 @@ def _extract_gin_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     return entries
 
 
+_GIN_ROUTER_TYPES = ("RouterGroup", "IRoutes", "IRouter", "Engine")
+
+
+def _gin_registration_functions(root: Node, source: bytes) -> dict[str, dict]:
+    """name -> {"param": parameter name, "start": line, "end": line} for functions that take a gin router group as a
+    parameter (`func ArticlesRegister(router *gin.RouterGroup)`): the routes registered on that parameter are relative
+    to whatever group the caller passes in."""
+    funcs: dict[str, dict] = {}
+    for n in _walk_tree(root):
+        if n.type != "function_declaration":
+            continue
+        name_node = n.child_by_field_name("name")
+        params = n.child_by_field_name("parameters")
+        if name_node is None or params is None:
+            continue
+        for decl in params.named_children:
+            if decl.type != "parameter_declaration":
+                continue
+            type_node = decl.child_by_field_name("type")
+            type_text = source[type_node.start_byte : type_node.end_byte].decode() if type_node is not None else ""
+            if "gin." in type_text and any(t in type_text for t in _GIN_ROUTER_TYPES):
+                ident = next((c for c in decl.named_children if c.type == "identifier"), None)
+                if ident is not None:
+                    funcs[source[name_node.start_byte : name_node.end_byte].decode()] = {
+                        "param": source[ident.start_byte : ident.end_byte].decode(),
+                        "start": n.start_point[0] + 1, "end": n.end_point[0] + 1,
+                    }
+                    break
+    return funcs
+
+
+def _gin_group_argument(node: Node, source: bytes, root: Node, bindings: dict, caller: str | None, caller_param: str | None):
+    """Evaluate the router-group argument of a call to a registration function: (base, prefix) where base is "" or
+    ("param", caller function) when the group derives from the caller's own router parameter, and prefix is the literal
+    URL prefix added on top. None when the expression is not understood."""
+    if node.type == "identifier":
+        name = source[node.start_byte : node.end_byte].decode()
+        if caller_param and name == caller_param:
+            return (("param", caller), "")
+        return ("", _resolve_group_prefix(bindings, node, root, name))
+    if node.type == "call_expression":
+        func = node.child_by_field_name("function")
+        args = node.child_by_field_name("arguments")
+        if func is None or func.type != "selector_expression" or args is None:
+            return None
+        field = func.child_by_field_name("field")
+        operand = func.child_by_field_name("operand")
+        if field is None or operand is None or source[field.start_byte : field.end_byte].decode() != "Group":
+            return None
+        named = args.named_children
+        if not named or named[0].type != "interpreted_string_literal":
+            return None
+        inner = _gin_group_argument(operand, source, root, bindings, caller, caller_param)
+        if inner is None:
+            return None
+        return (inner[0], f"{inner[1].rstrip('/')}/{_go_string_literal_text(named[0], source).strip('/')}")
+    return None
+
+
+def _collect_gin_call_sites(root: Node, source: bytes, rel_path: str, funcs_here: dict[str, dict], bindings: dict) -> list[dict]:
+    """Calls `Fn(group)` / `pkg.Fn(group)` with a group argument we can evaluate; Fn is matched by name later."""
+    sites: list[dict] = []
+    for n in _walk_tree(root):
+        if n.type != "call_expression":
+            continue
+        func = n.child_by_field_name("function")
+        args = n.child_by_field_name("arguments")
+        if func is None or args is None or not args.named_children:
+            continue
+        if func.type == "identifier":
+            callee = source[func.start_byte : func.end_byte].decode()
+        elif func.type == "selector_expression" and func.child_by_field_name("field") is not None:
+            field = func.child_by_field_name("field")
+            callee = source[field.start_byte : field.end_byte].decode()
+        else:
+            continue
+        caller, caller_param = None, None
+        cursor = n.parent
+        while cursor is not None:
+            if cursor.type == "function_declaration":
+                name_node = cursor.child_by_field_name("name")
+                caller = source[name_node.start_byte : name_node.end_byte].decode() if name_node is not None else None
+                caller_param = funcs_here.get(caller or "", {}).get("param")
+                break
+            cursor = cursor.parent
+        value = _gin_group_argument(args.named_children[0], source, root, bindings, caller, caller_param)
+        if value is not None:
+            sites.append({"callee": callee, "file": rel_path, "caller": caller, "value": value})
+    return sites
+
+
+def _gin_registration_prefixes(go_files: list[tuple[str, Node, bytes]]) -> dict[str, list[tuple[int, int, list[str]]]]:
+    """file -> [(first line, last line, URL prefixes)] for registration functions that are called with a group, composed
+    through callers (and across files). A function name declared more than once in the repository is not resolved."""
+    per_file_funcs = {rel: _gin_registration_functions(root, src) for rel, root, src in go_files}
+    owners: dict[str, list[str]] = {}
+    for rel, funcs in per_file_funcs.items():
+        for name in funcs:
+            owners.setdefault(name, []).append(rel)
+    sites: list[dict] = []
+    for rel, root, src in go_files:
+        sites.extend(_collect_gin_call_sites(root, src, rel, per_file_funcs[rel], _gin_group_prefix_bindings(root, src)))
+    by_callee: dict[tuple[str, str], list[dict]] = {}
+    for site in sites:
+        files = owners.get(site["callee"], [])
+        if len(files) == 1:
+            by_callee.setdefault((files[0], site["callee"]), []).append(site)
+
+    def effective(key: tuple[str, str], depth: int = 0) -> list[str] | None:
+        calls = by_callee.get(key)
+        if not calls or depth > 6:
+            return None
+        out: list[str] = []
+        for site in calls:
+            base, prefix = site["value"]
+            if base == "":
+                candidates = [prefix]
+            else:
+                caller_key = (site["file"], base[1])
+                parents = effective(caller_key, depth + 1)
+                if parents is None:
+                    continue  # the caller is itself never called with a group we can see
+                candidates = [f"{p.rstrip('/')}/{prefix.strip('/')}" if prefix.strip("/") else p for p in parents]
+            for candidate in candidates:
+                if candidate not in out:
+                    out.append(candidate)
+        return out or None
+
+    result: dict[str, list[tuple[int, int, list[str]]]] = {}
+    for rel, funcs in per_file_funcs.items():
+        for name, info in funcs.items():
+            prefixes = effective((rel, name))
+            if prefixes:
+                result.setdefault(rel, []).append((info["start"], info["end"], prefixes))
+    return result
+
+
+def _apply_gin_registration_prefixes(entries: list[dict], ranges: list[tuple[int, int, list[str]]]) -> list[dict]:
+    out: list[dict] = []
+    for e in entries:
+        for start, end, prefixes in ranges:
+            if start <= e["line"] <= end:
+                for prefix in prefixes:
+                    joined = f"{prefix.rstrip('/')}/{e['path'].lstrip('/')}" if e["path"] else (prefix or "/")
+                    out.append({**e, "path": joined})
+                break
+        else:
+            out.append(e)
+    return out
+
+
 def _rust_string_literal_text(node: Node, source: bytes) -> str:
     content = next((c for c in node.children if c.type == "string_content"), None)
     if content is None:
@@ -4508,6 +4659,15 @@ def map_api_endpoints(
     # + sort passes over the same tree per scan (same fix as
     # build_module_graph's own four-call version of this).
     source_paths = list(_iter_source_files(repo_path, ignored_paths))
+    gin_registration_prefixes: dict[str, list[tuple[int, int, list[str]]]] = {}
+    go_trees: list[tuple[str, Node, bytes]] = []
+    for path in source_paths:
+        if path.suffix == ".go":
+            data = read_bytes_or_none(path)
+            if data is not None and b"gin." in data:
+                go_trees.append((_rel(repo_path, path), parsers["go"].parse(data).root_node, data))
+    if go_trees:
+        gin_registration_prefixes = _gin_registration_prefixes(go_trees)
     nest_global_prefix = _nest_global_prefix(source_paths)
     cross_file_router_mounts: dict[tuple[str, str], list[str]] = {}
     flask_facts: list[dict] = []
@@ -4748,7 +4908,9 @@ def map_api_endpoints(
             if not go_frameworks or b"http.Handle" in source or b"http.NewServeMux" in source:
                 endpoints.extend(_extract_go_net_http_routes(tree.root_node, source, rel_path))
             if not go_frameworks or b"gin-gonic/gin" in source:
-                endpoints.extend(_extract_gin_routes(tree.root_node, source, rel_path))
+                endpoints.extend(_apply_gin_registration_prefixes(
+                    _extract_gin_routes(tree.root_node, source, rel_path), gin_registration_prefixes.get(rel_path, [])
+                ))
         elif suffix == ".rs":
             source = read_bytes_or_none(path)
             if source is None:

@@ -2289,3 +2289,53 @@ def test_swift_route_segments_that_start_with_a_slash_do_not_double_it(tmp_path)
     (tmp_path / "a.swift").write_text('import Hummingbird\nlet router = Router()\nrouter.get("/users") { _, _ in "x" }\nrouter.post("items", "{id}") { _, _ in "y" }\n')
     got = sorted((e["method"], e["path"]) for e in map_api_endpoints(tmp_path)["endpoints"])
     assert got == [("GET", "/users"), ("POST", "/items/{id}")]
+
+
+def _gin_repo(tmp_path, files):
+    from aletheore.endpoints import map_api_endpoints
+
+    for rel, body in files.items():
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body)
+    return {(e["method"], e["path"]) for e in map_api_endpoints(tmp_path)["endpoints"] if e["framework"] == "gin"}
+
+
+def test_gin_group_passed_to_a_registration_function_in_another_file_composes_the_prefix(tmp_path):
+    got = _gin_repo(tmp_path, {
+        "main.go": 'package main\nimport ("github.com/gin-gonic/gin"; "x/articles")\nfunc main() {\n\tr := gin.Default()\n\tv1 := r.Group("/api")\n\tarticles.Register(v1.Group("/articles"))\n}\n',
+        "articles/routes.go": 'package articles\nimport "github.com/gin-gonic/gin"\nfunc Register(router *gin.RouterGroup) {\n\trouter.GET("/feed", feed)\n\trouter.POST("", create)\n\trouter.PUT("/:slug", update)\n}\n',
+    })
+    assert {("GET", "/api/articles/feed"), ("POST", "/api/articles"), ("PUT", "/api/articles/:slug")} <= got
+    assert ("GET", "/feed") not in got
+
+
+def test_gin_registration_function_called_from_another_registration_function_composes_both(tmp_path):
+    got = _gin_repo(tmp_path, {
+        "main.go": 'package main\nimport "github.com/gin-gonic/gin"\nfunc main() {\n\tr := gin.Default()\n\tRegisterAll(r.Group("/api"))\n}\n',
+        "routes.go": 'package main\nimport "github.com/gin-gonic/gin"\nfunc RegisterAll(router *gin.RouterGroup) {\n\tRegisterUsers(router.Group("/users"))\n}\nfunc RegisterUsers(router *gin.RouterGroup) {\n\trouter.GET("/:id", get)\n}\n',
+    })
+    assert ("GET", "/api/users/:id") in got
+
+
+def test_gin_registration_function_called_twice_gets_both_prefixes(tmp_path):
+    got = _gin_repo(tmp_path, {
+        "main.go": 'package main\nimport "github.com/gin-gonic/gin"\nfunc main() {\n\tr := gin.Default()\n\tRegister(r.Group("/v1"))\n\tRegister(r.Group("/v2"))\n}\nfunc Register(g *gin.RouterGroup) {\n\tg.GET("/ping", ping)\n}\n',
+    })
+    assert {("GET", "/v1/ping"), ("GET", "/v2/ping")} <= got
+
+
+def test_gin_registration_function_never_called_with_a_known_group_keeps_its_relative_paths(tmp_path):
+    got = _gin_repo(tmp_path, {
+        "routes.go": 'package main\nimport "github.com/gin-gonic/gin"\nfunc Register(router *gin.RouterGroup) {\n\trouter.GET("/x", x)\n}\n',
+    })
+    assert got == {("GET", "/x")}
+
+
+def test_gin_function_name_declared_in_two_packages_is_not_resolved(tmp_path):
+    got = _gin_repo(tmp_path, {
+        "main.go": 'package main\nimport "github.com/gin-gonic/gin"\nfunc main() {\n\tr := gin.Default()\n\tRegister(r.Group("/api"))\n}\n',
+        "a/a.go": 'package a\nimport "github.com/gin-gonic/gin"\nfunc Register(g *gin.RouterGroup) {\n\tg.GET("/one", h)\n}\n',
+        "b/b.go": 'package b\nimport "github.com/gin-gonic/gin"\nfunc Register(g *gin.RouterGroup) {\n\tg.GET("/two", h)\n}\n',
+    })
+    assert ("GET", "/api/one") not in got and ("GET", "/api/two") not in got
