@@ -6,6 +6,9 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 ## Unreleased
 
 - Added: C# resolves generic arity (`Mock<T>` is not `Mock`), skips the called name of `x.Name()` as a type, links two- and three-letter types used in an unambiguous type position, and binds extension calls to the overload their receiver's type selects (macro F1 on the C# benchmark 0.880 to 0.902).
+- Added: Kotlin links the file that declares each member a file resolves through declared types (inherited properties, `a.b.c` chains), marked inferred (macro F1 on the Kotlin benchmark 0.915 to 0.923).
+- Added: Swift links nested types (`extension Logger { struct MetadataProvider }`) when a file writes `Logger.MetadataProvider` or uses the plain name inside `Logger` (macro F1 on the Swift benchmark 0.832 to 0.843).
+
 - Fixed: the license-lookup concurrency test no longer fails on slow CI runners (test-only; the limit is 2.0s, serial would be at least 3.0s).
 
 - Fixed: the unused-dependency check no longer reports tools that are named in a script, CI workflow or config file (`eslint`, `vitest`, `playwright`, `sphinx` and similar), `@types/*` packages, `typescript` in a TypeScript project, or the transitive pins in a pip-compile `requirements.txt`. On 32 Python and TypeScript repositories it reported 519 unused packages before and 154 after; most of the removed ones were build, test and docs tooling that is never imported.
