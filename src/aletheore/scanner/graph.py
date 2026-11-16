@@ -27,6 +27,7 @@ from tree_sitter import Language, Node, Parser, Tree
 
 from aletheore.safe_io import read_text_lenient
 from aletheore.repo_config import is_ignored
+from aletheore.scanner.csharp_receivers import ReceiverTypes, definitely_not, normalize_type
 from aletheore.scanner.detect import IGNORED_DIRS, _nested_git_roots, git_visible_paths, is_ignored_dir_name, visible_key
 
 PY_LANGUAGE = Language(tspython.language())
@@ -3714,6 +3715,12 @@ def _csharp_partial_facts(type_node: Node, source: bytes) -> dict:
     return {"nested": sorted(nested), "members": sorted(m for m in members if len(m) >= 5 and m not in _CSHARP_COMMON_MEMBER_NAMES)}
 
 
+_CSHARP_TYPE_KIND = {
+    "class_declaration": "class", "struct_declaration": "struct", "interface_declaration": "interface",
+    "enum_declaration": "enum", "record_declaration": "record", "record_struct_declaration": "record",
+}
+
+
 def _csharp_file_summary(root: Node, source: bytes) -> dict:
     """Namespaces this file declares, its TOP-LEVEL types (name -> namespace; nested types are reachable only
     through their outer type), whether it defines extension methods, and its `global using` namespaces."""
@@ -3728,6 +3735,30 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
     partial: dict[str, dict] = {}  # top-level `partial` type name -> {ns, nested, members}
     nested_partial: set[str] = set()  # "namespace|Outer.Inner" of every nested `partial` type declared in this file
     arity: dict[str, set[int]] = {}  # top-level type name -> generic arities declared (`Mock` is 0, `Mock<T>` is 1)
+    ext_decls: dict[str, list[dict]] = {}  # extension method name -> [{type, recv, tp}]: containing type, receiver type, type parameters
+    type_kinds: dict[str, str] = {}  # top-level type name -> class / struct / interface / enum / record
+
+    def collect_extension_methods(type_node: Node, type_name: str) -> None:
+        body = type_node.child_by_field_name("body")
+        for member in (body.children if body is not None else []):
+            if member.type != "method_declaration":
+                continue
+            method_name = member.child_by_field_name("name")
+            params = member.child_by_field_name("parameters")
+            first = next((prm for prm in (params.children if params is not None else []) if prm.type == "parameter"), None)
+            if method_name is None or first is None or not any(m.type == "modifier" and text(m) == "this" for m in first.children):
+                continue
+            type_children = [child for child in first.children if child.type != "modifier"]
+            recv = type_children[0] if len(type_children) >= 2 else None
+            tparams = member.child_by_field_name("type_parameters")
+            tp_names = [
+                text(next((g for g in tp.children if g.type == "identifier"), tp))
+                for tp in (tparams.children if tparams is not None else []) if tp.type == "type_parameter"
+            ]
+            ext_decls.setdefault(text(method_name), []).append(
+                {"type": type_name, "recv": text(recv) if recv is not None else "", "tp": tp_names,
+                 "ret": text(member.child_by_field_name("returns")) if member.child_by_field_name("returns") is not None else ""}
+            )
 
     def collect_nested_partial(type_node: Node, ns: str, path: str) -> None:
         body = type_node.child_by_field_name("body")
@@ -3738,6 +3769,7 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
             if name_node is None:
                 continue
             inner = f"{path}.{text(name_node)}"
+            type_kinds.setdefault(text(name_node), _CSHARP_TYPE_KIND.get(member.type, "other"))
             if any(m.type == "modifier" and text(m) == "partial" for m in member.children):
                 nested_partial.add(f"{ns}|{inner}")
             collect_nested_partial(member, ns, inner)
@@ -3776,6 +3808,8 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
                         else:
                             partial[type_name] = {"ns": ns, **facts}
                     collect_nested_partial(c, ns, type_name)
+                    collect_extension_methods(c, type_name)
+                    type_kinds.setdefault(type_name, _CSHARP_TYPE_KIND.get(c.type, "other"))
                     type_params = next((child for child in c.children if child.type == "type_parameter_list"), None)
                     arity.setdefault(type_name, set()).add(
                         sum(1 for tp in (type_params.children if type_params is not None else []) if tp.type == "type_parameter")
@@ -3818,6 +3852,8 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
         "partial": partial,
         "nested_partial": sorted(nested_partial),
         "arity": {name: sorted(values) for name, values in arity.items()},
+        "ext_decls": ext_decls,
+        "kinds": type_kinds,
     }
 
 
@@ -4046,11 +4082,50 @@ def _build_csharp_index(repo_path: Path, summaries: dict[Path, dict]) -> dict:
     for path, summary in summaries.items():
         for type_name, facts in summary.get("partial", {}).items():
             partial_owners.setdefault((facts["ns"], type_name), set()).add(path)
+    ext_returns: dict[str, str] = {}
+    ext_return_seen: dict[str, set[str]] = {}
+    for summary in summaries.values():
+        for method, decls in summary.get("ext_decls", {}).items():
+            for decl in decls:
+                ret = normalize_type(decl.get("ret", ""))
+                if ret and ret not in ("void", "var") and ret not in decl.get("tp", ()):
+                    ext_return_seen.setdefault(method, set()).add(ret)
+                else:
+                    ext_return_seen.setdefault(method, set()).add("")  # unknown or generic: no single type
+    for method, rets in ext_return_seen.items():
+        if len(rets) == 1 and "" not in rets:
+            ext_returns[method] = next(iter(rets))
+    kinds: dict[str, str] = {}
+    conflicting: set[str] = set()
+    base_names: dict[str, set[str]] = {}
+    for summary in summaries.values():
+        for type_name, kind in summary.get("kinds", {}).items():
+            if kinds.setdefault(type_name, kind) != kind:
+                conflicting.add(type_name)
+        for type_name, parents in summary.get("bases", {}).items():
+            base_names.setdefault(type_name, set()).update(parents)
+    for type_name in conflicting:
+        kinds.pop(type_name, None)  # the same simple name is a different kind of type in different files: do not guess
+    ancestor_cache: dict[str, set[str]] = {}
+
+    def ancestors(type_name: str) -> set[str]:
+        """Every base type name (transitively, by simple name) a repo type lists."""
+        if type_name in ancestor_cache:
+            return ancestor_cache[type_name]
+        ancestor_cache[type_name] = set()  # a cycle terminates here
+        found: set[str] = set()
+        for parent in base_names.get(type_name, ()):
+            found.add(parent)
+            found |= ancestors(parent)
+        ancestor_cache[type_name] = found
+        return found
+
     return {
         "files": summaries, "project_of": project_of, "visible": visible,
         "global_usings": global_usings, "ext_owners": ext_owners, "ext_short_generic": ext_short_generic,
         "partial_owners": partial_owners,
         "nested_partial_owners": nested_partial_owners,
+        "kinds": kinds, "ancestors": ancestors, "ext_returns": ext_returns,
     }
 
 
@@ -4073,6 +4148,43 @@ def _csharp_visibility_scope(importer: Path, index: dict, usings: list[str] | No
     imported |= index["global_usings"].get(index["project_of"].get(importer), set())
     imported |= index["global_usings"].get(None, set())
     return {"chain": chain, "imported": imported}
+
+
+def _csharp_extension_winners(
+    chosen: list[Path], name: str, use: dict | None, receivers: ReceiverTypes, index: dict
+) -> list[Path]:
+    """Of the files declaring an extension method `name`, those a call `x.name(...)` can bind to.
+
+    The compiler picks one overload per call: those whose `this` type accepts the receiver are applicable, and an
+    overload declared on exactly the receiver's type beats the rest (`"s".Humanize()` binds `Humanize(this string)`,
+    not `Humanize<T>(this IEnumerable<T>)`). The result is the union over the calls in the file. Anything not decided by
+    the grammar (a receiver of unknown type, a name that is also a type or used outside a call) keeps every file."""
+    if use is None or use["kinds"] - {"call"}:
+        return chosen
+    recvs = receivers.calls.get(name)
+    if not recvs or any(r is None for r in recvs):
+        return chosen  # some call has a receiver we cannot type, and it could bind to any of them
+    files = index["files"]
+    decided: list[Path] = []
+    undecided: list[Path] = []
+    for owner in chosen:
+        facts = files.get(owner) or {}
+        if name in facts.get("types", {}) or not facts.get("ext_decls", {}).get(name):
+            undecided.append(owner)  # a type of that name, or overloads we did not see: leave it to the other rules
+        else:
+            decided.append(owner)
+    keep: set[Path] = set(undecided)
+    for recv in recvs:
+        applicable: list[Path] = []
+        exact: list[Path] = []
+        for owner in decided:
+            decls = files[owner]["ext_decls"][name]
+            if any(not definitely_not(recv, d["recv"], set(d.get("tp", ())), index["kinds"], index["ancestors"]) for d in decls):
+                applicable.append(owner)
+            if any(normalize_type(d["recv"]) == normalize_type(recv) for d in decls):
+                exact.append(owner)
+        keep.update(exact or applicable)
+    return [owner for owner in chosen if owner in keep]
 
 
 def _csharp_visible_owners(
@@ -4311,6 +4423,7 @@ def _csharp_type_reference_targets(
                 elif member_used:
                     referenced.append((other, "inferred"))
     uses = _csharp_name_uses(tree_root, source) if scope is not None and tree_root is not None else None
+    receivers: ReceiverTypes | None = None
     shadowing: set[str] = set()
     type_context: set[str] = set()
     if scope is not None and tree_root is not None:
@@ -4324,6 +4437,7 @@ def _csharp_type_reference_targets(
             continue  # binds to an inherited or own member, not to the type of that name
         use = uses.get(name) if uses is not None else None
         short_type = False
+        short_ext = False
         if len(name) < _CSHARP_MIN_TYPE_NAME:
             # A short name is a type only where the grammar says so (`It.IsAny()`, `Foo<T>`, `new It()`, a declared
             # type) and nothing in this file declares it as a variable, parameter, member or type parameter.
@@ -4331,8 +4445,21 @@ def _csharp_type_reference_targets(
                 scope is not None and use is not None and len(name) >= 2 and not use["declared"]
                 and bool(use["kinds"] & {"static", "generic", "new", "decl"})
             )
+            # or an extension method every call of which has a receiver of a known repo type that one overload is declared on
+            # exactly (an instance method of that type with the same name would win, so the edge is only inferred)
+            if not short_type and scope is not None and use is not None and use["kinds"] == {"call"} and index["ext_owners"].get(name):
+                if receivers is None and tree_root is not None:
+                    receivers = ReceiverTypes(tree_root, source, index["kinds"], index["ext_returns"])
+                recvs = receivers.calls.get(name) if receivers is not None else None
+                if recvs and all(r is not None for r in recvs):
+                    typed = {normalize_type(r) for r in recvs}
+                    short_ext = any(
+                        normalize_type(d["recv"]) in typed and normalize_type(d["recv"]) in index["kinds"]
+                        for owner in index["ext_owners"][name]
+                        for d in (index["files"].get(owner) or {}).get("ext_decls", {}).get(name, ())
+                    )
             # or a unique generic extension called with explicit type arguments (see _build_csharp_index)
-            if not short_type and (
+            if not short_type and not short_ext and (
                 scope is None
                 or name not in index["ext_short_generic"]
                 or not re.search(r"\.\s*" + re.escape(name) + r"\s*<[^>()]*>\s*\(", text)
@@ -4351,8 +4478,14 @@ def _csharp_type_reference_targets(
             chosen = _csharp_visible_owners(
                 name, owners, importer, index, scope, text, use["arities"] if use is not None else None
             )
+            if receivers is None and tree_root is not None and any(
+                name in (index["files"].get(o) or {}).get("ext_decls", {}) for o in chosen
+            ):
+                receivers = ReceiverTypes(tree_root, source, index["kinds"], index["ext_returns"])
+            if receivers is not None:
+                chosen = _csharp_extension_winners(chosen, name, use, receivers, index)
             for owner in chosen:
-                referenced.append((owner, len(chosen) > 1))
+                referenced.append((owner, "inferred" if short_ext else len(chosen) > 1))
             if len(referenced) >= _CSHARP_MAX_TYPE_EDGES:
                 break
             continue
@@ -6541,7 +6674,8 @@ def _compute_resolution_signatures(
         ]
     if "csharp" in paths_by_language:
         extras["csharp"] = [
-            {rel(p): [s["ns"], sorted(s["types"].items()), s["ext_methods"], s["ext_generic"], s["global_usings"]]
+            {rel(p): [s["ns"], sorted(s["types"].items()), s["ext_methods"], s["ext_generic"], s["global_usings"],
+                      sorted(s["arity"].items()), sorted(s["ext_decls"].items()), sorted(s["kinds"].items())]
              for p, s in sorted(csharp_summaries.items(), key=lambda kv: rel(kv[0]))},
             sorted((k, rel(v)) for k, v in csharp_prefix_map.items()),
             sorted((rel(p), rel(q) if q else None) for p, q in (csharp_index or {}).get("project_of", {}).items()),
