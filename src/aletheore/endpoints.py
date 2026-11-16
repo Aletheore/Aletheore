@@ -3150,21 +3150,127 @@ def _laravel_resource_controller_class(node: Node | None, source: bytes) -> str 
     return None
 
 
-def _laravel_group_note(call_node: Node, source: bytes) -> str | None:
+_LARAVEL_RESOURCE_ACTIONS = (
+    ("index", ("GET",), ""), ("create", ("GET",), "/create"), ("store", ("POST",), ""),
+    ("show", ("GET",), "/{id}"), ("edit", ("GET",), "/{id}/edit"), ("update", ("PUT", "PATCH"), "/{id}"),
+    ("destroy", ("DELETE",), "/{id}"),
+)
+
+
+def _laravel_array_strings(node: Node | None, source: bytes) -> list[str] | None:
+    """The string elements of a literal PHP array, or None when it is not a plain array of strings."""
+    if node is None or node.type != "array_creation_expression":
+        return None
+    out: list[str] = []
+    for el in node.named_children:
+        if el.type != "array_element_initializer" or not el.named_children or el.named_children[0].type != "string":
+            return None
+        out.append(_php_string_content(el.named_children[0], source))
+    return out
+
+
+def _laravel_array_option(node: Node | None, source: bytes, key: str) -> Node | None:
+    """The value node of `'key' => value` in a literal PHP array, or None."""
+    if node is None or node.type != "array_creation_expression":
+        return None
+    for el in node.named_children:
+        if el.type == "array_element_initializer" and len(el.named_children) == 2:
+            k, v = el.named_children
+            if k.type == "string" and _php_string_content(k, source) == key:
+                return v
+    return None
+
+
+def _laravel_chain_root_is_route(node: Node, source: bytes) -> bool:
+    """True when a fluent `...->group(...)` chain starts at `Route::...` (not some other builder with a `group` method)."""
+    cursor = node
+    while cursor is not None and cursor.type == "member_call_expression":
+        cursor = cursor.child_by_field_name("object")
+    if cursor is None or cursor.type != "scoped_call_expression":
+        return False
+    scope = cursor.child_by_field_name("scope")
+    return scope is not None and source[scope.start_byte:scope.end_byte].decode() == "Route"
+
+
+def _laravel_group_prefixes(call_node: Node, source: bytes) -> tuple[list[str], bool]:
+    """Literal URL prefixes of the Route groups enclosing a route call, outermost first, and whether any enclosing group
+    has a prefix or host that cannot be read statically (`Route::prefix($x)`, `Route::domain(...)`)."""
+    found: list[list[str]] = []
+    uncertain = False
     node = call_node.parent
     while node is not None:
+        prefixes: list[str] = []
         if node.type == "scoped_call_expression":
-            scope = node.child_by_field_name("scope")
+            scope, name = node.child_by_field_name("scope"), node.child_by_field_name("name")
+            if scope is not None and name is not None and source[scope.start_byte:scope.end_byte].decode() == "Route" \
+                    and source[name.start_byte:name.end_byte].decode() == "group":
+                args = node.child_by_field_name("arguments")
+                first = _php_argument_value(args.named_children[0]) if args is not None and args.named_children else None
+                option = _laravel_array_option(first, source, "prefix")
+                if option is not None:
+                    if option.type == "string":
+                        prefixes.append(_php_string_content(option, source))
+                    else:
+                        uncertain = True
+                if _laravel_array_option(first, source, "domain") is not None:
+                    uncertain = True
+        elif node.type == "member_call_expression":
             name = node.child_by_field_name("name")
-            if (
-                scope is not None
-                and source[scope.start_byte : scope.end_byte].decode() == "Route"
-                and name is not None
-                and source[name.start_byte : name.end_byte].decode() == "group"
-            ):
-                return "declared inside a Route::group() prefix, not composed into this path"
+            if name is not None and source[name.start_byte:name.end_byte].decode() == "group" and _laravel_chain_root_is_route(node, source):
+                chain = node.child_by_field_name("object")
+                while chain is not None and chain.type in ("member_call_expression", "scoped_call_expression"):
+                    link = chain.child_by_field_name("name")
+                    link_name = source[link.start_byte:link.end_byte].decode() if link is not None else ""
+                    if link_name in ("prefix", "domain"):
+                        args = chain.child_by_field_name("arguments")
+                        value = _php_argument_value(args.named_children[0]) if args is not None and args.named_children else None
+                        if link_name == "prefix" and value is not None and value.type == "string":
+                            prefixes.append(_php_string_content(value, source))
+                        else:
+                            uncertain = True
+                    chain = chain.child_by_field_name("object") if chain.type == "member_call_expression" else None
+        if prefixes:
+            found.append(prefixes)
         node = node.parent
-    return None
+    return [p for group in reversed(found) for p in group], uncertain
+
+
+def _laravel_resource_selection(call_node: Node, options: Node | None, source: bytes, api: bool) -> list[str] | None:
+    """The resource actions a Route::resource/apiResource call generates, honouring only/except given as the options
+    array or chained on the call; None when only/except is not a literal list."""
+    actions = [a[0] for a in _LARAVEL_RESOURCE_ACTIONS if not (api and a[0] in ("create", "edit"))]
+    only = _laravel_array_option(options, source, "only")
+    except_ = _laravel_array_option(options, source, "except")
+    parent = call_node.parent
+    while parent is not None and parent.type == "member_call_expression":
+        link = parent.child_by_field_name("name")
+        link_name = source[link.start_byte:link.end_byte].decode() if link is not None else ""
+        if link_name in ("only", "except"):
+            args = parent.child_by_field_name("arguments")
+            value = _php_argument_value(args.named_children[0]) if args is not None and args.named_children else None
+            listed = _laravel_array_strings(value, source)
+            if listed is None:
+                return None
+            if link_name == "only":
+                only = value
+            else:
+                except_ = value
+        parent = parent.parent
+    for node, keep in ((only, True), (except_, False)):
+        if node is None:
+            continue
+        listed = _laravel_array_strings(node, source)
+        if listed is None:
+            return None
+        actions = [a for a in actions if (a in listed) == keep]
+    return actions
+
+
+def _laravel_singular(segment: str) -> str:
+    word = segment.strip("{}")
+    if word.endswith("ies"):
+        return word[:-3] + "y"
+    return word[:-1] if word.endswith("s") and not word.endswith("ss") else word
 
 
 _SYMFONY_ROUTE = re.compile(
@@ -3310,102 +3416,71 @@ def _slim_handler_label(raw: str | None) -> str:
 
 def _extract_laravel_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
+    # routes/api.php is mounted under /api by Laravel's default routing (RouteServiceProvider / bootstrap/app.php)
+    api_file = rel_path.replace("\\", "/").split("/")[-2:] == ["routes", "api.php"]
+
+    def compose(call_node: Node, path: str) -> tuple[str, str | None]:
+        prefixes, uncertain = _laravel_group_prefixes(call_node, source)
+        if api_file:
+            prefixes = ["api", *prefixes]
+        parts = [p.strip("/") for p in (*prefixes, path) if p and p.strip("/")]
+        composed = "/" + "/".join(parts)
+        notes = []
+        if uncertain:
+            notes.append("declared inside a Route group whose prefix or domain is not a string literal (the literal parts are composed)")
+        if api_file:
+            notes.append("routes/api.php: assumes Laravel's default /api prefix")
+        return composed, "; ".join(notes) or None
 
     for n in _walk_tree(root):
-        if n.type == "scoped_call_expression":
-            scope = n.child_by_field_name("scope")
-            name = n.child_by_field_name("name")
-            if scope is not None and name is not None:
-                scope_text = source[scope.start_byte : scope.end_byte].decode()
-                method_name = source[name.start_byte : name.end_byte].decode()
-                if scope_text == "Route":
-                    args = n.child_by_field_name("arguments")
-                    arg_values = (
-                        [_php_argument_value(a) for a in args.named_children]
-                        if args is not None
-                        else []
-                    )
-                    line = n.start_point[0] + 1
-                    note = _laravel_group_note(n, source)
+        if n.type != "scoped_call_expression":
+            continue
+        scope = n.child_by_field_name("scope")
+        name = n.child_by_field_name("name")
+        if scope is None or name is None:
+            continue
+        if source[scope.start_byte : scope.end_byte].decode() != "Route":
+            continue
+        method_name = source[name.start_byte : name.end_byte].decode()
+        args = n.child_by_field_name("arguments")
+        arg_values = [_php_argument_value(a) for a in args.named_children] if args is not None else []
+        line = n.start_point[0] + 1
 
-                    if (
-                        method_name in _LARAVEL_ROUTE_METHODS
-                        and arg_values
-                        and arg_values[0] is not None
-                        and arg_values[0].type == "string"
-                    ):
-                        path = _php_string_content(arg_values[0], source)
-                        handler = _laravel_handler_label(
-                            arg_values[1] if len(arg_values) > 1 else None, source
-                        )
-                        method = "ANY" if method_name == "any" else method_name.upper()
-                        entries.append(
-                            {
-                                "method": method,
-                                "path": path,
-                                "framework": "laravel",
-                                "file": rel_path,
-                                "line": line,
-                                "handler": handler,
-                                "unresolved": False,
-                                "note": note,
-                            }
-                        )
-                    elif (
-                        method_name == "match"
-                        and len(arg_values) >= 2
-                        and arg_values[0] is not None
-                        and arg_values[0].type == "array_creation_expression"
-                        and arg_values[1] is not None
-                        and arg_values[1].type == "string"
-                    ):
-                        methods = [
-                            _php_string_content(el.children[0], source).upper()
-                            for el in arg_values[0].named_children
-                            if el.type == "array_element_initializer"
-                            and el.children
-                            and el.children[0].type == "string"
-                        ]
-                        path = _php_string_content(arg_values[1], source)
-                        handler = _laravel_handler_label(
-                            arg_values[2] if len(arg_values) > 2 else None, source
-                        )
-                        for method in methods:
-                            entries.append(
-                                {
-                                    "method": method,
-                                    "path": path,
-                                    "framework": "laravel",
-                                    "file": rel_path,
-                                    "line": line,
-                                    "handler": handler,
-                                    "unresolved": False,
-                                    "note": note,
-                                }
-                            )
-                    elif (
-                        method_name in _LARAVEL_RESOURCE_METHODS
-                        and len(arg_values) >= 2
-                        and arg_values[0] is not None
-                        and arg_values[0].type == "string"
-                    ):
-                        path = _php_string_content(arg_values[0], source)
-                        controller_class = _laravel_resource_controller_class(
-                            arg_values[1], source
-                        )
-                        if controller_class is not None:
-                            entries.append(
-                                {
-                                    "method": None,
-                                    "path": path,
-                                    "framework": "laravel",
-                                    "file": rel_path,
-                                    "line": line,
-                                    "handler": controller_class,
-                                    "unresolved": True,
-                                    "note": note,
-                                }
-                            )
+        def add(method: str | None, path: str, handler: str, unresolved: bool = False) -> None:
+            composed, note = compose(n, path)
+            entries.append({"method": method, "path": composed, "framework": "laravel", "file": rel_path, "line": line,
+                            "handler": handler, "unresolved": unresolved, "note": note})
+
+        if method_name in _LARAVEL_ROUTE_METHODS and arg_values and arg_values[0] is not None and arg_values[0].type == "string":
+            handler = _laravel_handler_label(arg_values[1] if len(arg_values) > 1 else None, source)
+            add("ANY" if method_name == "any" else method_name.upper(), _php_string_content(arg_values[0], source), handler)
+        elif (
+            method_name == "match" and len(arg_values) >= 2 and arg_values[0] is not None
+            and arg_values[0].type == "array_creation_expression" and arg_values[1] is not None and arg_values[1].type == "string"
+        ):
+            methods = [
+                _php_string_content(el.children[0], source).upper()
+                for el in arg_values[0].named_children
+                if el.type == "array_element_initializer" and el.children and el.children[0].type == "string"
+            ]
+            handler = _laravel_handler_label(arg_values[2] if len(arg_values) > 2 else None, source)
+            for method in methods:
+                add(method, _php_string_content(arg_values[1], source), handler)
+        elif method_name in _LARAVEL_RESOURCE_METHODS and len(arg_values) >= 2 and arg_values[0] is not None and arg_values[0].type == "string":
+            base = _php_string_content(arg_values[0], source)
+            controller_class = _laravel_resource_controller_class(arg_values[1], source)
+            if controller_class is None:
+                continue
+            options = arg_values[2] if len(arg_values) > 2 else None
+            actions = _laravel_resource_selection(n, options, source, api=method_name == "apiResource")
+            if actions is None:
+                add(None, base, controller_class, unresolved=True)  # only/except is not a literal list: not guessed
+                continue
+            segment = _laravel_singular(base.rstrip("/").split("/")[-1])
+            for action, methods, suffix in _LARAVEL_RESOURCE_ACTIONS:
+                if action in actions:
+                    for method in methods:
+                        add(method, base.rstrip("/") + suffix.replace("{id}", "{" + segment + "}"), f"{controller_class}@{action}")
     return entries
 
 
