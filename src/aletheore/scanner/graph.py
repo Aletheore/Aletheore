@@ -1704,7 +1704,12 @@ def _rust_reexport_targets(
     item = segments[-1]
     if len(segments) < 2 or item in ("*", "self", "super", "crate"):
         return []
-    parent = _resolve_rust_path(repo_path, from_file, "::".join(segments[:-1]))
+    inferred_root = rust_resolve.target_crate_alias(repo_path, from_file, use_path)
+    parent = (
+        _rel(repo_path, inferred_root)
+        if len(segments) == 2 and inferred_root is not None
+        else _resolve_rust_path(repo_path, from_file, "::".join(segments[:-1]))
+    )
     if parent != target_rel:
         return []  # the last segment is itself a module, nothing to look through
     if len(segments) > 2:
@@ -5123,6 +5128,8 @@ def _extract_module(
                 for module_file in _rust_module_reexport_targets(repo_path, path, use_path):
                     if module_file != rel_path:
                         resolved_imports.append(module_file)
+                        if inferred:
+                            import_confidence[module_file] = "inferred"
     elif language_name == "java":
         raw_imports, functions, classes = _extract_java(tree.root_node, source)
         java_refs = _java_type_references(tree.root_node, source) if java_package_types else None
