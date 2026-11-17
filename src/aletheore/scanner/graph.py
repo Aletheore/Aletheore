@@ -6300,6 +6300,10 @@ def _swift_member_facts(root: Node, source: bytes) -> tuple[set[str], set[str]]:
             for name in (c for c in n.children if c.type == "simple_identifier"):
                 declared.add(text(name))
                 declaration_names.add(name.id)
+        elif t == "value_argument_label":
+            # `Config(dataCache: x)`: the label names a parameter of the callee, it is not a use of a member of that name
+            for name in (c for c in n.children if c.type == "simple_identifier"):
+                declaration_names.add(name.id)
         elif t == "simple_identifier" and n.id not in declaration_names:
             value = text(n)
             if value[:1].islower():
