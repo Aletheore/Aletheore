@@ -5,6 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Added: C# types the receiver of a chained call or property access from the repository's declared members (and a table of well-known .NET methods), so an extension call binds to the overload for that type (macro F1 on the C# benchmark 0.902 to 0.912; humanizer 0.843 to 0.947).
 - Added: the blast-radius result lists `direct_dependents_non_test` when some direct importers are test files, so an agent asking for the source files that import a file does not have to filter them (router arm on the C# benchmark 0.47 to 0.68).
 - Fixed: a Swift call argument label no longer counts as a use of a member with the same name (macro F1 on the Swift benchmark 0.843 to 0.845).
 - Fixed: a JavaScript or TypeScript import specifier containing a NUL byte no longer aborts the whole scan, and Java imports now match class and package names in their exact case, so the graph is the same on macOS, Windows and Linux. Added: a property-based fuzz suite for the graph builder (every language).

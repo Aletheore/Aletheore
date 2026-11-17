@@ -3694,6 +3694,7 @@ _CSHARP_TYPE_DECLS = (
 # start in practice, and a wrong edge is worse than a missing one: it invents a
 # dependency the wiki will then explain.
 _CSHARP_MIN_TYPE_NAME = 4
+_CSHARP_USING_STATIC_RE = re.compile(r"\busing\s+static\b")
 
 # Bounded so one file referencing hundreds of types cannot dominate the graph or
 # the importance ranking. Ordered by first appearance, so what survives the cap
@@ -3783,6 +3784,9 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
     arity: dict[str, set[int]] = {}  # top-level type name -> generic arities declared (`Mock` is 0, `Mock<T>` is 1)
     ext_decls: dict[str, list[dict]] = {}  # extension method name -> [{type, recv, tp}]: containing type, receiver type, type parameters
     type_kinds: dict[str, str] = {}  # top-level type name -> class / struct / interface / enum / record
+    method_returns: dict[str, dict[str, list[str]]] = {}  # top-level type name -> method name -> declared return types
+    members_sig: dict[str, dict[str, str]] = {}  # the same two tables, externally visible members only: what the cache fingerprint sees
+    returns_sig: dict[str, dict[str, list[str]]] = {}
 
     def collect_extension_methods(type_node: Node, type_name: str) -> None:
         body = type_node.child_by_field_name("body")
@@ -3862,6 +3866,11 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
                     )
                     types.setdefault(type_name, ns)
                     members.setdefault(type_name, {}).update(_csharp_value_members(c, source))
+                    for method_name, returned in _csharp_method_returns(c, source).items():
+                        method_returns.setdefault(type_name, {}).setdefault(method_name, []).extend(returned)
+                    members_sig.setdefault(type_name, {}).update(_csharp_value_members(c, source, visible_only=True))
+                    for method_name, returned in _csharp_method_returns(c, source, visible_only=True).items():
+                        returns_sig.setdefault(type_name, {}).setdefault(method_name, []).extend(returned)
                     bases.setdefault(type_name, set()).update(_csharp_base_names(c, source))
             elif c.type == "declaration_list":
                 walk(c.children, ns)
@@ -3894,6 +3903,9 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
         "ext_ns": next(iter(types.values())) if types else "",
         "global_usings": _CSHARP_GLOBAL_USING_RE.findall(decoded),
         "members": members,
+        "method_returns": method_returns,
+        "members_sig": members_sig,
+        "returns_sig": returns_sig,
         "bases": {name: sorted(parents) for name, parents in bases.items()},
         "partial": partial,
         "nested_partial": sorted(nested_partial),
@@ -4010,6 +4022,11 @@ def _csharp_name_uses(root: Node, source: bytes) -> dict[str, dict]:
                 item["declared"] = True
             elif is_call_name(n):
                 item["kinds"].add("call")
+                item["arities"].add(0)
+            elif parent is not None and parent.type == "invocation_expression" and (
+                parent.child_by_field_name("function") is not None and parent.child_by_field_name("function").id == n.id
+            ):
+                item["kinds"].add("plain_call")  # `Name(...)` with no receiver: never an extension call, never a type
                 item["arities"].add(0)
             elif parent is not None and parent.type == "member_access_expression" and (
                 parent.child_by_field_name("expression") is not None and parent.child_by_field_name("expression").id == n.id
@@ -4141,6 +4158,18 @@ def _build_csharp_index(repo_path: Path, summaries: dict[Path, dict]) -> dict:
     for method, rets in ext_return_seen.items():
         if len(rets) == 1 and "" not in rets:
             ext_returns[method] = next(iter(rets))
+    member_types: dict[str, dict[str, str]] = {}  # type -> property/field -> its type; "" when files disagree
+    returned_types: dict[str, dict[str, str]] = {}  # type -> method -> its return type; "" when overloads differ
+    for summary in summaries.values():
+        for type_name, table in summary.get("members", {}).items():
+            merged = member_types.setdefault(type_name, {})
+            for member, declared in table.items():
+                merged[member] = declared if merged.get(member, declared) == declared else ""
+        for type_name, table in summary.get("method_returns", {}).items():
+            merged = returned_types.setdefault(type_name, {})
+            for method, declared_list in table.items():
+                for declared in declared_list:
+                    merged[method] = declared if merged.get(method, declared) == declared else ""
     kinds: dict[str, str] = {}
     conflicting: set[str] = set()
     base_names: dict[str, set[str]] = {}
@@ -4172,6 +4201,7 @@ def _build_csharp_index(repo_path: Path, summaries: dict[Path, dict]) -> dict:
         "partial_owners": partial_owners,
         "nested_partial_owners": nested_partial_owners,
         "kinds": kinds, "ancestors": ancestors, "ext_returns": ext_returns,
+        "member_types": member_types, "returned_types": returned_types,
     }
 
 
@@ -4283,7 +4313,18 @@ def _csharp_simple_type_name(node: Node | None, source: bytes) -> str:
     return ""
 
 
-def _csharp_value_members(type_node: Node, source: bytes) -> dict[str, str]:
+def _csharp_member_visible(member: Node, type_node: Node, source: bytes) -> bool:
+    """Whether another file can observe the member: public, internal or protected, or any member of an interface.
+    A member with no modifier in a class or struct is private."""
+    if type_node.type == "interface_declaration":
+        return True
+    return any(
+        c.type == "modifier" and source[c.start_byte:c.end_byte].decode(errors="ignore") in ("public", "internal", "protected")
+        for c in member.children
+    )
+
+
+def _csharp_value_members(type_node: Node, source: bytes, visible_only: bool = False) -> dict[str, str]:
     """Properties and fields declared directly in a type body: name -> simple name of its declared type ("" unknown).
     Methods are left out: a call never makes a name stand for a type."""
     body = type_node.child_by_field_name("body")
@@ -4291,6 +4332,8 @@ def _csharp_value_members(type_node: Node, source: bytes) -> dict[str, str]:
     if body is None:
         return out
     for member in body.children:
+        if visible_only and member.type in ("property_declaration", "field_declaration") and not _csharp_member_visible(member, type_node, source):
+            continue
         if member.type == "property_declaration":
             name = member.child_by_field_name("name")
             if name is not None:
@@ -4310,6 +4353,33 @@ def _csharp_value_members(type_node: Node, source: bytes) -> dict[str, str]:
                 )
                 if name is not None:
                     out[source[name.start_byte:name.end_byte].decode(errors="ignore")] = declared
+    return out
+
+
+def _csharp_method_returns(type_node: Node, source: bytes, visible_only: bool = False) -> dict[str, list[str]]:
+    """Methods declared directly in a type body: name -> simple names of their declared return types ("" when the
+    return type is `void`, a method type parameter, or not a plain type name)."""
+    body = type_node.child_by_field_name("body")
+    out: dict[str, list[str]] = {}
+    if body is None:
+        return out
+    for member in body.children:
+        if member.type != "method_declaration" or (visible_only and not _csharp_member_visible(member, type_node, source)):
+            continue
+        name = member.child_by_field_name("name")
+        returns = member.child_by_field_name("returns")
+        if name is None or returns is None:
+            continue
+        declared = _csharp_simple_type_name(returns, source)
+        tparams = member.child_by_field_name("type_parameters")
+        generic = {
+            source[g.start_byte:g.end_byte].decode(errors="ignore")
+            for tp in (tparams.children if tparams is not None else []) if tp.type == "type_parameter"
+            for g in tp.children if g.type == "identifier"
+        }
+        if declared in generic or declared == "void":
+            declared = ""
+        out.setdefault(source[name.start_byte:name.end_byte].decode(errors="ignore"), []).append(declared)
     return out
 
 
@@ -4482,6 +4552,10 @@ def _csharp_type_reference_targets(
         if name in shadowing and name not in type_context:
             continue  # binds to an inherited or own member, not to the type of that name
         use = uses.get(name) if uses is not None else None
+        if use is not None and not use["kinds"]:
+            continue  # the name is only declared in this file (a method, property or variable), never used
+        if use is not None and use["kinds"] == {"plain_call"} and not _CSHARP_USING_STATIC_RE.search(text):
+            continue  # only ever called without a receiver: binds to a method in scope, not to an extension or a type
         short_type = False
         short_ext = False
         if len(name) < _CSHARP_MIN_TYPE_NAME:
@@ -4495,7 +4569,7 @@ def _csharp_type_reference_targets(
             # exactly (an instance method of that type with the same name would win, so the edge is only inferred)
             if not short_type and scope is not None and use is not None and use["kinds"] == {"call"} and index["ext_owners"].get(name):
                 if receivers is None and tree_root is not None:
-                    receivers = ReceiverTypes(tree_root, source, index["kinds"], index["ext_returns"])
+                    receivers = ReceiverTypes(tree_root, source, index["kinds"], index["ext_returns"], index)
                 recvs = receivers.calls.get(name) if receivers is not None else None
                 if recvs and all(r is not None for r in recvs):
                     typed = {normalize_type(r) for r in recvs}
@@ -4527,7 +4601,7 @@ def _csharp_type_reference_targets(
             if receivers is None and tree_root is not None and any(
                 name in (index["files"].get(o) or {}).get("ext_decls", {}) for o in chosen
             ):
-                receivers = ReceiverTypes(tree_root, source, index["kinds"], index["ext_returns"])
+                receivers = ReceiverTypes(tree_root, source, index["kinds"], index["ext_returns"], index)
             if receivers is not None:
                 chosen = _csharp_extension_winners(chosen, name, use, receivers, index)
             for owner in chosen:
@@ -6808,7 +6882,9 @@ def _compute_resolution_signatures(
     if "csharp" in paths_by_language:
         extras["csharp"] = [
             {rel(p): [s["ns"], sorted(s["types"].items()), s["ext_methods"], s["ext_generic"], s["global_usings"],
-                      sorted(s["arity"].items()), sorted(s["ext_decls"].items()), sorted(s["kinds"].items())]
+                      sorted(s["arity"].items()), sorted(s["ext_decls"].items()), sorted(s["kinds"].items()),
+                      sorted((k, sorted(v.items())) for k, v in s["members_sig"].items()),
+                      sorted((k, sorted((m, sorted(r)) for m, r in v.items())) for k, v in s["returns_sig"].items())]
              for p, s in sorted(csharp_summaries.items(), key=lambda kv: rel(kv[0]))},
             sorted((k, rel(v)) for k, v in csharp_prefix_map.items()),
             sorted((rel(p), rel(q) if q else None) for p, q in (csharp_index or {}).get("project_of", {}).items()),

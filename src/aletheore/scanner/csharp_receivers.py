@@ -32,6 +32,18 @@ _STATIC_MEMBER_TYPES = {
     ("Guid", "Empty"): "Guid", ("DateOnly", "MinValue"): "DateOnly", ("DateOnly", "MaxValue"): "DateOnly",
 }
 _NUMERIC_MEMBERS = {"MaxValue", "MinValue"}
+# well-known .NET methods whose result has the receiver's own type (or a fixed one)
+_BCL_METHOD_TYPES = {
+    **{("DateTime", m): "DateTime" for m in ("Add", "AddDays", "AddHours", "AddMinutes", "AddSeconds", "AddMilliseconds",
+                                             "AddMonths", "AddYears", "AddTicks", "ToUniversalTime", "ToLocalTime")},
+    **{("DateTimeOffset", m): "DateTimeOffset" for m in ("Add", "AddDays", "AddHours", "AddMinutes", "AddSeconds",
+                                                          "AddMonths", "AddYears", "ToUniversalTime", "ToLocalTime")},
+    **{("TimeSpan", m): "TimeSpan" for m in ("Add", "Negate", "Duration", "FromDays", "FromHours", "FromMinutes",
+                                             "FromSeconds", "FromMilliseconds", "FromTicks")},
+    ("DateOnly", "AddDays"): "DateOnly", ("DateOnly", "AddMonths"): "DateOnly", ("DateOnly", "AddYears"): "DateOnly",
+    ("Guid", "NewGuid"): "Guid", ("Guid", "Parse"): "Guid",
+    ("DateTime", "Parse"): "DateTime", ("TimeSpan", "Parse"): "TimeSpan",
+}
 # implicit numeric conversions (C# spec 10.2.3)
 _WIDENING = {
     "sbyte": {"short", "int", "long", "float", "double", "decimal"},
@@ -112,9 +124,13 @@ def definitely_not(recv: str, param: str, type_params: set[str], kinds: dict[str
 class ReceiverTypes:
     """Receiver static types of the method calls in one file: name -> [type or None] (None = could not be inferred)."""
 
-    def __init__(self, root: Node, source: bytes, kinds: dict[str, str], ext_returns: dict[str, str] | None = None):
+    def __init__(
+        self, root: Node, source: bytes, kinds: dict[str, str], ext_returns: dict[str, str] | None = None,
+        index: dict | None = None,
+    ):
         self.source = source
         self.kinds = kinds
+        self.index = index  # the repository's merged member and return-type tables (see _build_csharp_index)
         self.ext_returns = ext_returns or {}  # extension method name -> the one return type all its overloads share
         self.local_returns: dict[str, set[str]] = {}  # method name -> return types of the methods declared in this file
         self._collect_local_returns(root)
@@ -275,6 +291,12 @@ class ReceiverTypes:
         if kind == "member_access_expression":
             left = node.child_by_field_name("expression")
             member = node.child_by_field_name("name")
+            if left is not None and member is not None:
+                owner_type = self.infer(left) or self._static_type(left)
+                if owner_type is not None and self.kinds.get(owner_type) != "enum":
+                    found = self._member_of(owner_type, _text(member, self.source), call=False)
+                    if found:
+                        return found
             if left is not None and member is not None and left.type in ("predefined_type", "identifier"):
                 owner = normalize_type(_text(left, self.source))
                 member_name = _text(member, self.source)
@@ -293,6 +315,33 @@ class ReceiverTypes:
                        "Substring", "Replace", "Remove", "Insert", "PadLeft", "PadRight", "Normalize"}
     _RANK = {"double": 4, "float": 3, "decimal": 5, "ulong": 2, "long": 2, "uint": 1, "int": 1, "short": 1, "ushort": 1,
              "byte": 1, "sbyte": 1, "char": 1}
+
+    def _member_of(self, type_name: str | None, member: str, call: bool) -> str | None:
+        """The declared type of property/field `member` (or the return type of method `member`) of a repository type,
+        looking through its base types. None when unknown or ambiguous."""
+        if not type_name or self.index is None:
+            return None
+        table = self.index["returned_types" if call else "member_types"]
+        chains = self.index.setdefault("_lookup_chains", {})
+        chain = chains.get(type_name)
+        if chain is None:
+            chain = chains[type_name] = (type_name, *sorted(self.index["ancestors"](type_name)))
+        for owner in chain:
+            found = table.get(owner, {}).get(member)
+            if found is not None:
+                return found or None  # "" = overloads or declarations disagree
+        return None
+
+    def _static_type(self, node: Node | None) -> str | None:
+        """The type a bare type name in receiver position stands for (`ByteSize.FromBits`): a type name no variable hides."""
+        if node is None or node.type not in ("identifier", "predefined_type"):
+            return None
+        name = normalize_type(_text(node, self.source))
+        if node.type == "identifier" and self._declared_anywhere(node, _text(node, self.source)):
+            return None
+        if name in self.kinds or name in _LEAF or (node.type == "predefined_type" and name):
+            return name
+        return None
 
     def _binary(self, node: Node) -> str | None:
         op_node = node.child_by_field_name("operator")
@@ -324,7 +373,8 @@ class ReceiverTypes:
             return None
         if func.type == "member_access_expression":
             name_node = func.child_by_field_name("name")
-            recv = self.infer(func.child_by_field_name("expression"))
+            recv_node = func.child_by_field_name("expression")
+            recv = self.infer(recv_node) or self._static_type(recv_node)
         elif func.type == "identifier":
             name_node, recv = func, None
         else:
@@ -344,7 +394,13 @@ class ReceiverTypes:
                 value = next(iter(local))
                 return value if value not in ("void", "var") else None
             return None
-        # a chained extension call: every extension overload of that name returns the same type
+        # an instance or static method of a known type: .NET methods that return their own kind of value, then repository
+        # methods with one declared return type, then a chained extension call whose overloads all return the same type
+        if recv is not None and (recv, name) in _BCL_METHOD_TYPES:
+            return _BCL_METHOD_TYPES[(recv, name)]
+        found = self._member_of(recv, name, call=True)
+        if found:
+            return found
         return self.ext_returns.get(name)
 
     # --- call sites -----------------------------------------------------------------------------------------------
