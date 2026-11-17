@@ -61,3 +61,49 @@ def test_many_reports_in_a_row_all_reach_the_agent(world):
     d, runner = daemon(world, "bob")
     d.run_once()
     assert all(f"TAIL-{i}" in runner.calls[0] for i in range(3))
+
+
+# ---- the prompt is built to a budget: earlier messages give way, the job and the message to you never do ---------------------------------------------
+
+def test_with_a_huge_history_the_job_and_the_message_to_you_survive_and_the_oldest_messages_give_way(world):
+    from aletheore.council.protocol import EventDraft, EventType
+    for i in range(30):
+        say(world, "alice", f"report {i} " + "r" * 3000 + f" END-{i}", agent="codex")
+    world["store"].append(EventDraft(world["alice"].room_id, "job:x", "room", EventType.SYSTEM, "alice", None, None,
+                                     {"subtype": "standing_job", "agent": "claude", "text": "THE-STANDING-JOB-TEXT"}))
+    say(world, "alice", "@claude write the final review NOW-DO-IT")
+    d, runner = daemon(world, "bob")
+    d.run_once()
+    p = runner.calls[0]
+    from aletheore.council.wake import WAKE_PROMPT_CHARS
+    assert len(p) <= WAKE_PROMPT_CHARS + 200
+    assert "THE-STANDING-JOB-TEXT" in p and "NOW-DO-IT" in p                       # the two things the agent must always see
+    assert "END-29" in p and "END-28" in p                                           # the newest history is kept
+    assert "END-0 " not in p and "END-0\n" not in p and " END-0" not in p            # the oldest gave way
+    assert "older messages left out" in p                                            # and the agent is told some are missing
+
+
+def test_a_short_history_is_shown_whole_with_no_omission_note(world):
+    for i in range(10):
+        say(world, "alice", f"short {i}", agent="codex")
+    say(world, "alice", "@claude go")
+    d, runner = daemon(world, "bob")
+    d.run_once()
+    assert all(f"short {i}" in runner.calls[0] for i in range(10)) and "left out" not in runner.calls[0]
+
+
+def test_the_room_remembers_more_than_twelve_messages_for_a_planner_with_many_executors(world):
+    for i in range(25):
+        say(world, "alice", f"report {i} FINDING-{i}", agent="codex")
+    say(world, "alice", "@claude combine them")
+    d, runner = daemon(world, "bob")
+    d.run_once()
+    assert all(f"FINDING-{i}" in runner.calls[0] for i in range(25))
+
+
+def test_a_message_to_you_longer_than_the_limit_is_clipped_but_still_comes_last(world):
+    say(world, "alice", "@claude " + "q" * 50000 + " THE-VERY-END")
+    d, runner = daemon(world, "bob")
+    d.run_once()
+    from aletheore.council.wake import WAKE_PROMPT_CHARS
+    assert len(runner.calls[0]) <= WAKE_PROMPT_CHARS + 200 and "THE-VERY-END" not in runner.calls[0]
