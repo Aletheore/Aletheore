@@ -3740,6 +3740,8 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
     ext_decls: dict[str, list[dict]] = {}  # extension method name -> [{type, recv, tp}]: containing type, receiver type, type parameters
     type_kinds: dict[str, str] = {}  # top-level type name -> class / struct / interface / enum / record
     method_returns: dict[str, dict[str, list[str]]] = {}  # top-level type name -> method name -> declared return types
+    members_sig: dict[str, dict[str, str]] = {}  # the same two tables, externally visible members only: what the cache fingerprint sees
+    returns_sig: dict[str, dict[str, list[str]]] = {}
 
     def collect_extension_methods(type_node: Node, type_name: str) -> None:
         body = type_node.child_by_field_name("body")
@@ -3821,6 +3823,9 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
                     members.setdefault(type_name, {}).update(_csharp_value_members(c, source))
                     for method_name, returned in _csharp_method_returns(c, source).items():
                         method_returns.setdefault(type_name, {}).setdefault(method_name, []).extend(returned)
+                    members_sig.setdefault(type_name, {}).update(_csharp_value_members(c, source, visible_only=True))
+                    for method_name, returned in _csharp_method_returns(c, source, visible_only=True).items():
+                        returns_sig.setdefault(type_name, {}).setdefault(method_name, []).extend(returned)
                     bases.setdefault(type_name, set()).update(_csharp_base_names(c, source))
             elif c.type == "declaration_list":
                 walk(c.children, ns)
@@ -3854,6 +3859,8 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
         "global_usings": _CSHARP_GLOBAL_USING_RE.findall(decoded),
         "members": members,
         "method_returns": method_returns,
+        "members_sig": members_sig,
+        "returns_sig": returns_sig,
         "bases": {name: sorted(parents) for name, parents in bases.items()},
         "partial": partial,
         "nested_partial": sorted(nested_partial),
@@ -4261,7 +4268,18 @@ def _csharp_simple_type_name(node: Node | None, source: bytes) -> str:
     return ""
 
 
-def _csharp_value_members(type_node: Node, source: bytes) -> dict[str, str]:
+def _csharp_member_visible(member: Node, type_node: Node, source: bytes) -> bool:
+    """Whether another file can observe the member: public, internal or protected, or any member of an interface.
+    A member with no modifier in a class or struct is private."""
+    if type_node.type == "interface_declaration":
+        return True
+    return any(
+        c.type == "modifier" and source[c.start_byte:c.end_byte].decode(errors="ignore") in ("public", "internal", "protected")
+        for c in member.children
+    )
+
+
+def _csharp_value_members(type_node: Node, source: bytes, visible_only: bool = False) -> dict[str, str]:
     """Properties and fields declared directly in a type body: name -> simple name of its declared type ("" unknown).
     Methods are left out: a call never makes a name stand for a type."""
     body = type_node.child_by_field_name("body")
@@ -4269,6 +4287,8 @@ def _csharp_value_members(type_node: Node, source: bytes) -> dict[str, str]:
     if body is None:
         return out
     for member in body.children:
+        if visible_only and member.type in ("property_declaration", "field_declaration") and not _csharp_member_visible(member, type_node, source):
+            continue
         if member.type == "property_declaration":
             name = member.child_by_field_name("name")
             if name is not None:
@@ -4291,7 +4311,7 @@ def _csharp_value_members(type_node: Node, source: bytes) -> dict[str, str]:
     return out
 
 
-def _csharp_method_returns(type_node: Node, source: bytes) -> dict[str, list[str]]:
+def _csharp_method_returns(type_node: Node, source: bytes, visible_only: bool = False) -> dict[str, list[str]]:
     """Methods declared directly in a type body: name -> simple names of their declared return types ("" when the
     return type is `void`, a method type parameter, or not a plain type name)."""
     body = type_node.child_by_field_name("body")
@@ -4299,7 +4319,7 @@ def _csharp_method_returns(type_node: Node, source: bytes) -> dict[str, list[str
     if body is None:
         return out
     for member in body.children:
-        if member.type != "method_declaration":
+        if member.type != "method_declaration" or (visible_only and not _csharp_member_visible(member, type_node, source)):
             continue
         name = member.child_by_field_name("name")
         returns = member.child_by_field_name("returns")
@@ -6812,8 +6832,8 @@ def _compute_resolution_signatures(
         extras["csharp"] = [
             {rel(p): [s["ns"], sorted(s["types"].items()), s["ext_methods"], s["ext_generic"], s["global_usings"],
                       sorted(s["arity"].items()), sorted(s["ext_decls"].items()), sorted(s["kinds"].items()),
-                      sorted((k, sorted(v.items())) for k, v in s["members"].items()),
-                      sorted((k, sorted((m, sorted(r)) for m, r in v.items())) for k, v in s["method_returns"].items())]
+                      sorted((k, sorted(v.items())) for k, v in s["members_sig"].items()),
+                      sorted((k, sorted((m, sorted(r)) for m, r in v.items())) for k, v in s["returns_sig"].items())]
              for p, s in sorted(csharp_summaries.items(), key=lambda kv: rel(kv[0]))},
             sorted((k, rel(v)) for k, v in csharp_prefix_map.items()),
             sorted((rel(p), rel(q) if q else None) for p, q in (csharp_index or {}).get("project_of", {}).items()),
