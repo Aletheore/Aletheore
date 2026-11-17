@@ -43,23 +43,38 @@ THE REVIEW
 """
 
 
-def judge(text, bugs, runner):
-    cands = candidates(text, bugs)
-    if not cands:
-        return {}
-    listing = "\n".join(f"{b['id']}: {b['file']} line {b['line']}, function {b['function']}: the code was changed from `{b['original']}` to `{b['mutated']}`" for b in cands)
+class JudgeFailed(Exception):
+    """The judge gave no readable answer twice in a row. Never treated as 'found nothing': the caller keeps the review text and scores it again later."""
+
+
+BATCH = 15
+
+
+def _ask(prompt, runner):
     d = Path(tempfile.mkdtemp(prefix="judge-"))
     cfg = d / "mcp.json"
     cfg.write_text('{"mcpServers": {}}')
-    r = runner.run(JUDGE_PROMPT.format(cands=listing, review=text[:30000]), d, cfg, {}, 300, read_only=True)
-    m = re.search(r"\{.*\}", r.final_text, re.S)
-    verdict = {}
-    if m:
-        try:
-            verdict = {k: bool(v) for k, v in json.loads(m.group(0)).items()}
-        except ValueError:
-            pass
-    return {b["id"]: verdict.get(b["id"], False) for b in cands}
+    for _ in range(2):  # one retry on an unreadable answer
+        r = runner.run(prompt, d, cfg, {}, 600, read_only=True)
+        m = re.search(r"\{.*\}", r.final_text or "", re.S)
+        if m:
+            try:
+                return {k: bool(v) for k, v in json.loads(m.group(0)).items()}
+            except (ValueError, AttributeError):
+                pass
+    raise JudgeFailed("the judge's answer could not be read")
+
+
+def judge(text, bugs, runner):
+    """{bug id: found?} for the candidate bugs of this review, asked in batches so a long list never swamps the judge."""
+    cands = candidates(text, bugs)
+    out = {}
+    for i in range(0, len(cands), BATCH):
+        batch = cands[i:i + BATCH]
+        listing = "\n".join(f"{b['id']}: {b['file']} line {b['line']}, function {b['function']}: the code was changed from `{b['original']}` to `{b['mutated']}`" for b in batch)
+        verdict = _ask(JUDGE_PROMPT.format(cands=listing, review=text[:80000]), runner)
+        out.update({b["id"]: verdict.get(b["id"], False) for b in batch})
+    return out
 
 
 def found_ids(text, bugs, runner):
