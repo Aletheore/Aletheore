@@ -3649,6 +3649,7 @@ _CSHARP_TYPE_DECLS = (
 # start in practice, and a wrong edge is worse than a missing one: it invents a
 # dependency the wiki will then explain.
 _CSHARP_MIN_TYPE_NAME = 4
+_CSHARP_USING_STATIC_RE = re.compile(r"\busing\s+static\b")
 
 # Bounded so one file referencing hundreds of types cannot dominate the graph or
 # the importance ranking. Ordered by first appearance, so what survives the cap
@@ -3969,6 +3970,11 @@ def _csharp_name_uses(root: Node, source: bytes) -> dict[str, dict]:
                 item["declared"] = True
             elif is_call_name(n):
                 item["kinds"].add("call")
+                item["arities"].add(0)
+            elif parent is not None and parent.type == "invocation_expression" and (
+                parent.child_by_field_name("function") is not None and parent.child_by_field_name("function").id == n.id
+            ):
+                item["kinds"].add("plain_call")  # `Name(...)` with no receiver: never an extension call, never a type
                 item["arities"].add(0)
             elif parent is not None and parent.type == "member_access_expression" and (
                 parent.child_by_field_name("expression") is not None and parent.child_by_field_name("expression").id == n.id
@@ -4483,6 +4489,8 @@ def _csharp_type_reference_targets(
         use = uses.get(name) if uses is not None else None
         if use is not None and not use["kinds"]:
             continue  # the name is only declared in this file (a method, property or variable), never used
+        if use is not None and use["kinds"] == {"plain_call"} and not _CSHARP_USING_STATIC_RE.search(text):
+            continue  # only ever called without a receiver: binds to a method in scope, not to an extension or a type
         short_type = False
         short_ext = False
         if len(name) < _CSHARP_MIN_TYPE_NAME:

@@ -5,7 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- Added: C# types the receiver of a chained call or property access from the repository's declared members (and a table of well-known .NET methods), so an extension call binds to the overload for that type (macro F1 on the C# benchmark 0.902 to 0.911; humanizer 0.843 to 0.944).
+- Added: C# types the receiver of a chained call or property access from the repository's declared members (and a table of well-known .NET methods), so an extension call binds to the overload for that type (macro F1 on the C# benchmark 0.902 to 0.912; humanizer 0.843 to 0.947).
 
 - Added: C# resolves generic arity (`Mock<T>` is not `Mock`), skips the called name of `x.Name()` as a type, links two- and three-letter types used in an unambiguous type position, and binds extension calls to the overload their receiver's type selects (macro F1 on the C# benchmark 0.880 to 0.902).
 - Added: Kotlin links the file that declares each member a file resolves through declared types (inherited properties, `a.b.c` chains), marked inferred (macro F1 on the Kotlin benchmark 0.915 to 0.923).

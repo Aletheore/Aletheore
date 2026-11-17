@@ -110,3 +110,22 @@ def test_a_call_of_a_same_named_extension_still_links(tmp_path):
         "Truncator.cs": "namespace App;\npublic class Truncator { string Truncate(string v, int n) => v; string Run() => \"abc\".Truncate(2); }\n",
     }
     assert "TruncateExt.cs" in _imports(tmp_path, files, "Truncator.cs")
+
+
+TRANSFORM_EXT = "namespace App;\npublic static class To { public static string Transform(this string s, int n) => s; }\n"
+
+
+def test_a_call_without_a_receiver_is_not_an_extension_call(tmp_path):
+    files = {
+        "To.cs": TRANSFORM_EXT,
+        "Upper.cs": "namespace App;\npublic class Upper { string Transform(string s) => s; string Run(string s) => Transform(s); }\n",
+    }
+    assert "To.cs" not in _imports(tmp_path, files, "Upper.cs")
+
+
+def test_a_call_without_a_receiver_still_links_when_the_file_uses_using_static(tmp_path):
+    files = {
+        "To.cs": TRANSFORM_EXT,
+        "Upper.cs": "using static App.To;\nnamespace App;\npublic class Upper { string Run(string s) => Transform(s); }\n",
+    }
+    assert "To.cs" in _imports(tmp_path, files, "Upper.cs")
