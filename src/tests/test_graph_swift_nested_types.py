@@ -68,3 +68,24 @@ def test_an_extension_of_a_nested_type_names_the_file_that_declares_it(tmp_path)
         "Sources/App/Ext.swift": "extension Logger.Provider {\n    func describe() -> String { \"\" }\n}\n",
     })
     assert "Sources/App/Provider.swift" in _imports(mods, "Sources/App/Ext.swift")
+
+
+def test_an_argument_label_is_not_a_use_of_a_member_of_that_name(tmp_path):
+    # `Config(dataCache: x)` names the callee's parameter; another file declaring a member `dataCache` is not used there
+    mods = _scan(tmp_path, {
+        "Sources/App/Cache.swift": "extension Config {\n    var dataCache: Int { 1 }\n}\n",
+        "Sources/App/Config.swift": "struct Config {\n    init(dataCache: Int) {}\n}\n",
+        "Sources/App/Use.swift": "func make() -> Config { Config(dataCache: 3) }\n",
+    })
+    got = _imports(mods, "Sources/App/Use.swift")
+    assert "Sources/App/Config.swift" in got
+    assert "Sources/App/Cache.swift" not in got
+
+
+def test_a_member_used_after_a_dot_still_links_to_the_declaring_file(tmp_path):
+    mods = _scan(tmp_path, {
+        "Sources/App/Cache.swift": "extension Config {\n    var dataCache: Int { 1 }\n}\n",
+        "Sources/App/Config.swift": "struct Config {\n    init() {}\n}\n",
+        "Sources/App/Use.swift": "func read(_ c: Config) -> Int { c.dataCache }\n",
+    })
+    assert "Sources/App/Cache.swift" in _imports(mods, "Sources/App/Use.swift")
