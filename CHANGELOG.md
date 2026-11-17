@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Added: the blast-radius result lists `direct_dependents_non_test` when some direct importers are test files, so an agent asking for the source files that import a file does not have to filter them (router arm on the C# benchmark 0.47 to 0.68).
+
 - Added: C# resolves generic arity (`Mock<T>` is not `Mock`), skips the called name of `x.Name()` as a type, links two- and three-letter types used in an unambiguous type position, and binds extension calls to the overload their receiver's type selects (macro F1 on the C# benchmark 0.880 to 0.902).
 - Added: Kotlin links the file that declares each member a file resolves through declared types (inherited properties, `a.b.c` chains), marked inferred (macro F1 on the Kotlin benchmark 0.915 to 0.923).
 - Added: Swift links nested types (`extension Logger { struct MetadataProvider }`) when a file writes `Logger.MetadataProvider` or uses the plain name inside `Logger` (macro F1 on the Swift benchmark 0.832 to 0.843).
