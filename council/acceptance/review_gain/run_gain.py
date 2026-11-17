@@ -7,8 +7,12 @@ The same task in every condition: review 12 networkx modules that hold 24 inject
   split                       three agents in parallel, four files each (a fixed split, no planner, no talking), their reports joined; at most 8 findings each
   council                     the real thing: a planner (Claude) is asked once; it splits the files across three executors (Codex, Claude, Codex) by mentioning
                               them, they work in parallel, each reports back with a mention, and the planner writes the final review. No person after the first message.
+Settings come from the environment: GAIN_EXECUTORS (3 by default, up to 6) and GAIN_CAPS ("fixed": 25 findings for one agent and 8 per executor, the first run; "per-file":
+1.5 findings per file everywhere, so the executors' caps add up to the single agent's, the large run). A finished condition is not run again if the script is started again;
+the review text of every condition is saved before it is scored, so a judge failure costs a re-score, not a re-run.
 Each review is scored by score.py against manifest.json. Also scored: each executor's own report, to see whether the planner dropped correct findings."""
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -26,17 +30,27 @@ from aletheore.council.runners import ClaudeRunner, CodexRunner
 from aletheore.council.sqlite_store import SqliteRoomStore
 from aletheore.council.state import Area
 from aletheore.council.store import read_all
-from score import found_ids
+import gainlib
+from score import JudgeFailed, found_ids
 
 CORPUS, OUT, REP = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve(), int(sys.argv[3])
 CONDITIONS = sys.argv[4:] or ["claude-alone", "codex-alone", "split", "council"]
 MANIFEST = json.load(open(CORPUS.parent / "manifest.json"))["bugs"]
 FILES = sorted({b["file"] for b in MANIFEST})
 LINES = {f: len((CORPUS / f).read_text().split("\n")) for f in FILES}
-TURN_TIMEOUT = 1500
-CAP_ALONE, CAP_EXECUTOR = 25, 8
-EXECUTORS = [("alice-codex", "alice", CodexRunner), ("carol-claude", "carol", ClaudeRunner), ("dave-codex", "dave", CodexRunner)]
+K = int(os.environ.get("GAIN_EXECUTORS", "3"))
+CAPS = os.environ.get("GAIN_CAPS", "fixed")
+TURN_TIMEOUT = int(os.environ.get("GAIN_TURN_TIMEOUT", "3000"))
+CAP_ALONE = gainlib.cap_for(len(FILES), CAPS, 25)
+ALL_EXECUTORS = [("alice-codex", "alice", CodexRunner), ("carol-claude", "carol", ClaudeRunner), ("dave-codex", "dave", CodexRunner),
+                 ("erin-claude", "erin", ClaudeRunner), ("finn-codex", "finn", CodexRunner), ("gwen-claude", "gwen", ClaudeRunner)]
+EXECUTORS = ALL_EXECUTORS[:K]
 PLANNER = ("bob-claude", "bob", ClaudeRunner)
+
+
+def cap_executor(n_files):
+    return gainlib.cap_for(n_files, "per-file") if CAPS == "per-file" else 8
+
 
 TASK = ("Review the networkx modules listed below for bugs: code that does not do what its name, docstring or the surrounding logic says it should. Some of "
         "these files were changed recently and the changes introduced subtle bugs (a wrong operator, a flipped condition, an off-by-one, a wrong constant). Read the "
@@ -45,14 +59,7 @@ TASK = ("Review the networkx modules listed below for bugs: code that does not d
 
 
 def groups():
-    """Three groups of about equal line count (greedy, biggest first)."""
-    g = [[], [], []]
-    sizes = [0, 0, 0]
-    for f in sorted(FILES, key=lambda f: -LINES[f]):
-        i = sizes.index(min(sizes))
-        g[i].append(f)
-        sizes[i] += LINES[f]
-    return g
+    return gainlib.groups(FILES, LINES, K)
 
 
 def clone(dest):
@@ -83,13 +90,13 @@ def run_split():
     def one(i):
         wt = clone(base / f"repo{i}")
         runner = EXECUTORS[i][2]()
-        r = runner.run(TASK.format(cap=CAP_EXECUTOR, files="\n".join(f"- {f}" for f in g[i])), wt, empty_mcp(base, f"mcp{i}.json"), {}, TURN_TIMEOUT, read_only=True)
+        r = runner.run(TASK.format(cap=cap_executor(len(g[i])), files="\n".join(f"- {f}" for f in g[i])), wt, empty_mcp(base, f"mcp{i}.json"), {}, TURN_TIMEOUT, read_only=True)
         return r.final_text, r.ok, round(time.time() - t0)
 
-    with ThreadPoolExecutor(3) as ex:
-        res = list(ex.map(one, range(3)))
+    with ThreadPoolExecutor(K) as ex:
+        res = list(ex.map(one, range(K)))
     return {"text": "\n\n".join(t for t, _, _ in res), "secs": round(time.time() - t0), "ok": all(ok for _, ok, _ in res), "parts": [t for t, _, _ in res],
-            "part_secs": [s for _, _, s in res]}
+            "part_secs": [s for _, _, s in res], "files_by_group": g}
 
 
 def run_council():
@@ -107,27 +114,31 @@ def run_council():
             rooms[person] = Room.open_remote(store, host.room_id, clone(base / f"{person}-repo"), base / f"state-{person}")
     rid = host.room_id
     bundles = LocalBundleStore(base / "bundles")
-    wake_from = {"alice": {"bob"}, "bob": {"carol", "dave"}, "carol": {"bob"}, "dave": {"bob"}}
+    exec_people = {p for _, p, _ in EXECUTORS}
+    wake_from = {"bob": exec_people - {"alice"}, **{p: {"bob"} for p in exec_people}}
     daemons = {}
     for agent, person, kind in people:
+        # the planner is woken once for the request and once for each executor's answer: its budget must cover K + 1 wakes (the default is 6 per ten minutes)
+        extra = {"max_wakes": K + 6} if person == "bob" else {}
         daemons[person] = WorkerDaemon(store, rooms[person], person, {agent: kind()}, bundles=bundles, task_timeout_s=TURN_TIMEOUT, claim_timeout_s=TURN_TIMEOUT + 900,
-                                       wake_cooldown_s=0.0, max_wake_depth=4, wake_from=wake_from[person], poll_interval_s=0.5)
+                                       wake_cooldown_s=0.0, max_wake_depth=4, wake_from=wake_from.get(person, set()), poll_interval_s=0.5, **extra)
     pid, p_person = PLANNER[0], PLANNER[1]
     ex_ids = [a for a, _, _ in EXECUTORS]
 
     def job(agent, text):
         store.append(EventDraft(rid, f"job:{agent}", "room", EventType.SYSTEM, "alice", None, None, {"subtype": "standing_job", "agent": agent, "text": text}))
 
-    job(pid, f"You coordinate a code review done by three executor agents: {', '.join(ex_ids)}. When you are asked to review, do not read the code yourself first. Split the "
-             "files into three groups of roughly equal size and send ONE message that mentions all three executors (write each as @name), gives each its own group of files "
-             f"and tells each to report at most {CAP_EXECUTOR} findings (file, function, line, what is wrong and what it should be; real defects only). Executors answer one at a time "
-             "and each answer wakes you: until all three have answered, reply with one short line saying who is still missing, and mention nobody. When all three have "
-             f"answered, write the final review: a numbered list of at most {CAP_ALONE} findings, most confident first, combining the three reports (you may read the code to check "
+    cap_text = ("at most one and a half findings for each file assigned to it (rounded up)" if CAPS == "per-file" else f"at most {cap_executor(0)} findings")
+    job(pid, f"You coordinate a code review done by {K} executor agents: {', '.join(ex_ids)}. When you are asked to review, do not read the code yourself first. Split the "
+             f"files into {K} groups of roughly equal size and send ONE message that mentions all {K} executors (write each as @name), gives each its own group of files "
+             f"and tells each to report {cap_text} (file, function, line, what is wrong and what it should be; real defects only). Executors answer one at a time "
+             f"and each answer wakes you: until all {K} have answered, reply with one short line saying who is still missing, and mention nobody. When all {K} have "
+             f"answered, write the final review: a numbered list of at most {CAP_ALONE} findings, most confident first, combining the reports (you may read the code to check "
              "a finding before you include it, and drop one that is wrong), each with file, function, line and what is wrong. The last line must be exactly: REVIEW COMPLETE. "
              "The final review must not mention anyone with an @.")
     for a in ex_ids:
-        job(a, f"You are a code reviewer. The message that woke you names three reviewers, each with its own files: review ONLY the files listed for you ({a}). Real defects only, at "
-               f"most {CAP_EXECUTOR}, each with file, function, line, and what is wrong and what it should be. End your reply with one line that mentions @{pid} so the planner sees it.")
+        job(a, f"You are a code reviewer. The message that woke you names {K} reviewers, each with its own files: review ONLY the files listed for you ({a}). Real defects only, "
+               f"{cap_text}, each with file, function, line, and what is wrong and what it should be. End your reply with one line that mentions @{pid} so the planner sees it.")
 
     stop = threading.Event()
     threads = [threading.Thread(target=d.run_forever, args=(stop,), daemon=True) for d in daemons.values()]
@@ -136,24 +147,24 @@ def run_council():
     files_text = "; ".join(f"{', '.join(Path(f).name for f in grp)}" for grp in g)
     t0 = time.time()
     store.append(EventDraft(rid, "human:1", "room", EventType.QUESTION, "alice", None, None,
-                            {"kind": "chat", "text": f"@{pid} review the networkx modules in this repo: {', '.join(FILES)}. Some were changed recently and have subtle bugs. Your three "
+                            {"kind": "chat", "text": f"@{pid} review the networkx modules in this repo: {', '.join(FILES)}. Some were changed recently and have subtle bugs. Your {K} "
                                                      f"executors are {', '.join(ex_ids)}. I will not answer questions; work it out between you."}))
 
     def state():
         ev = read_all(store, rid)
         ex_answers = {e.sender_agent: e for e in ev if e.sender_agent in ex_ids and e.body.get("wake_for") and e.type is EventType.QUESTION}
-        first_all = max((e.seq for e in ex_answers.values()), default=None) if len(ex_answers) == 3 else None
+        first_all = max((e.seq for e in ex_answers.values()), default=None) if len(ex_answers) == K else None
         final = next((e for e in ev if e.sender_agent == pid and first_all and e.seq > first_all and "REVIEW COMPLETE" in str(e.body.get("text", ""))), None)
         return ev, ex_answers, final
 
     last_n, last_change = 0, time.time()
-    while time.time() - t0 < 50 * 60:
+    while time.time() - t0 < 150 * 60:
         ev, ex_answers, final = state()
         if final is not None:
             break
         if len(ev) != last_n:
             last_n, last_change = len(ev), time.time()
-        elif time.time() - last_change > 20 * 60:
+        elif time.time() - last_change > 55 * 60:
             break
         time.sleep(2)
     secs = round(time.time() - t0)
@@ -170,27 +181,60 @@ def run_council():
             "planner_wakes": len([e for e in ev if e.body.get("subtype") == "wake_claimed" and e.sender_agent == pid]), "files_by_group": g}
 
 
+def score(text, judge, label):
+    """(found ids, judge_failed). A judge that cannot answer is recorded as a failure, never as zero found."""
+    if not text.strip():
+        return [], False
+    try:
+        return found_ids(text, MANIFEST, judge), False
+    except JudgeFailed:
+        print(f"  judge failed for {label}: the review text is saved; run again to score it", flush=True)
+        return None, True
+
+
 def main():
     out = OUT / f"rep{REP}"
     out.mkdir(parents=True, exist_ok=True)
     judge = ClaudeRunner()
     for cond in CONDITIONS:
+        if gainlib.already_done(out, cond):
+            print(f"[rep {REP}] {cond}: already done, skipped", flush=True)
+            continue
         print(f"[rep {REP}] {cond} ...", flush=True)
         res = {"claude-alone": lambda: run_alone("claude"), "codex-alone": lambda: run_alone("codex"), "split": run_split, "council": run_council}[cond]()
-        found = found_ids(res["text"], MANIFEST, judge) if res["text"].strip() else []
-        record = {"condition": cond, "rep": REP, "secs": res["secs"], "ok": res["ok"], "found": found, "n_found": len(found)}
+        # the review text is saved first, so a scoring problem never costs a run
         (out / f"{cond}.txt").write_text(res["text"])
+        record = {"condition": cond, "rep": REP, "secs": res["secs"], "ok": res["ok"]}
         if cond == "council":
-            parts = {a: found_ids(t, MANIFEST, judge) for a, t in res["executor_reports"].items()}
-            record.update({"executor_found": parts, "executor_union": sorted({i for v in parts.values() for i in v}), "notices": res["notices"],
-                           "person_messages": res["person_messages"], "planner_wakes": res["planner_wakes"], "files_by_group": res["files_by_group"]})
-            (out / "council-planner-messages.txt").write_text("\n\n=====\n\n".join(res["planner_messages"]))
             for a, t in res["executor_reports"].items():
                 (out / f"council-executor-{a}.txt").write_text(t)
-        if cond == "split":
-            parts = [found_ids(t, MANIFEST, judge) for t in res["parts"]]
-            record.update({"part_found": parts, "part_secs": res["part_secs"]})
-        print(f"[rep {REP}] {cond}: {record['n_found']}/{len(MANIFEST)} in {record['secs']}s ok={record['ok']}", flush=True)
+            (out / "council-planner-messages.txt").write_text("\n\n=====\n\n".join(res["planner_messages"]))
+            parts, failed = {}, False
+            found, f1 = score(res["text"], judge, "the final review")
+            failed = f1
+            for a, t in res["executor_reports"].items():
+                parts[a], f2 = score(t, judge, a)
+                failed = failed or f2
+            ok_parts = [v for v in parts.values() if v is not None]
+            record.update({"found": found, "n_found": len(found) if found is not None else None, "executor_found": parts,
+                           "executor_union": sorted({i for v in ok_parts for i in v}), "notices": res["notices"], "person_messages": res["person_messages"],
+                           "planner_wakes": res["planner_wakes"], "files_by_group": res["files_by_group"], "judge_failed": failed})
+        elif cond == "split":
+            for i, t in enumerate(res["parts"]):
+                (out / f"split-part{i}.txt").write_text(t)
+            parts, failed = [], False
+            for i, t in enumerate(res["parts"]):
+                v, f = score(t, judge, f"split part {i}")
+                parts.append(v)
+                failed = failed or f
+            ok_parts = [v for v in parts if v is not None]
+            union = sorted({i for v in ok_parts for i in v})
+            record.update({"found": None if failed else union, "n_found": None if failed else len(union), "part_found": parts, "part_secs": res["part_secs"],
+                           "files_by_group": res["files_by_group"], "judge_failed": failed})
+        else:
+            found, failed = score(res["text"], judge, cond)
+            record.update({"found": found, "n_found": len(found) if found is not None else None, "judge_failed": failed})
+        print(f"[rep {REP}] {cond}: {record['n_found']}/{len(MANIFEST)} in {record['secs']}s ok={record['ok']} judge_failed={record['judge_failed']}", flush=True)
         with open(out / "results.jsonl", "a") as f:
             f.write(json.dumps(record) + "\n")
 

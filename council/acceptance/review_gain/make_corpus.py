@@ -1,6 +1,9 @@
 """Build the review-gain corpus: real networkx modules with subtle bugs injected, every one confirmed by the library's own tests.
 
-    python make_corpus.py OUT_DIR [mutants-per-file (default 2)]
+    python make_corpus.py OUT_DIR [mutants-per-file (default 2)] [--auto N]
+
+With --auto N, the modules are not the fixed twelve: N are drawn (seeded) from every networkx algorithms module that has at least 120 code lines and a
+tests/test_<name>.py next to it whose tests all pass unmodified. That is the large version, built to exceed what one agent can read in one turn.
 
 For each of 12 modules, many single-token mutations are tried (a comparison flipped, + and - swapped, and/or swapped, a `not` dropped, a small constant
 changed, break turned into continue). A mutation is kept only if the module's own test file FAILS with it, so every kept bug is a real behaviour change
@@ -109,9 +112,54 @@ def candidates(src):
     return out
 
 
+def eligible_modules():
+    """Every algorithms module with at least 120 code lines (docstrings not counted) and a test file named after it, sorted."""
+    out = {}
+    for p in sorted((NX / "algorithms").rglob("*.py")):
+        if "tests" in p.parts or p.name == "__init__.py":
+            continue
+        t = p.parent / "tests" / f"test_{p.stem}.py"
+        if not t.exists():
+            continue
+        src = p.read_text()
+        tree = ast.parse(src)
+        doc = 0
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)) and ast.get_docstring(n, clean=False) is not None:
+                d = n.body[0]
+                doc += d.end_lineno - d.lineno + 1
+        if len(src.split("\n")) - doc >= 120:
+            out[str(p.relative_to(NX))] = str(t.relative_to(NX))
+    return out
+
+
+def pristine_passes(path, test):
+    r = subprocess.run([sys.executable, "-m", "pytest", str(NX / test), "-q", "-p", "no:cacheprovider"], cwd="/tmp", capture_output=True, text=True, timeout=300,
+                       env={"PATH": "/usr/bin:/bin", "HOME": "/tmp"})
+    return r.returncode == 0 and " passed" in r.stdout
+
+
 def main():
-    out_dir = Path(sys.argv[1]).resolve()
-    per_file = int(sys.argv[2]) if len(sys.argv) > 2 else 2
+    global MODULES
+    args = [a for a in sys.argv[1:]]
+    auto = None
+    if "--auto" in args:
+        i = args.index("--auto")
+        auto = int(args[i + 1])
+        del args[i:i + 2]
+    out_dir = Path(args[0]).resolve()
+    per_file = int(args[1]) if len(args) > 1 else 2
+    if auto:
+        pool_all = eligible_modules()
+        names = sorted(pool_all)
+        random.Random(SEED).shuffle(names)
+        MODULES = {}
+        for name in names:
+            if len(MODULES) >= auto:
+                break
+            if pristine_passes(name, pool_all[name]):
+                MODULES[name] = pool_all[name]
+        print(f"{len(MODULES)} modules chosen from {len(names)} eligible", flush=True)
     work = out_dir / "work"
     shutil.rmtree(out_dir, ignore_errors=True)
     pool = queue.Queue()

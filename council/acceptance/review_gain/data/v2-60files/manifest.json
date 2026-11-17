@@ -1,0 +1,546 @@
+{
+ "networkx": "3.7",
+ "seed": 20261116,
+ "bugs": [
+  {
+   "id": "M01",
+   "file": "networkx/algorithms/connectivity/edge_augmentation.py",
+   "function": "weighted_bridge_augmentation",
+   "line": 956,
+   "kind": "constant",
+   "original": "root = next(n for n, d in C.degree() if d == 1)",
+   "mutated": "root = next(n for n, d in C.degree() if d == 0)"
+  },
+  {
+   "id": "M02",
+   "file": "networkx/algorithms/community/lukes.py",
+   "function": "lukes_partitioning._concatenate_or_merge",
+   "line": 160,
+   "kind": "arithmetic",
+   "original": "option_2 = [merged_xi] + cp1 + cp2",
+   "mutated": "option_2 = [merged_xi] - cp1 + cp2"
+  },
+  {
+   "id": "M03",
+   "file": "networkx/algorithms/chordal.py",
+   "function": "chordal_graph_cliques",
+   "line": 219,
+   "kind": "constant",
+   "original": "if C.number_of_nodes() == 1:",
+   "mutated": "if C.number_of_nodes() == 0:"
+  },
+  {
+   "id": "M04",
+   "file": "networkx/algorithms/community/bipartitions.py",
+   "function": "kernighan_lin_bisection",
+   "line": 149,
+   "kind": "constant",
+   "original": "sum_weight = lambda u, v, d: d.get(weight, 1)",
+   "mutated": "sum_weight = lambda u, v, d: d.get(weight, 0)"
+  },
+  {
+   "id": "M05",
+   "file": "networkx/algorithms/swap.py",
+   "function": "directed_edge_swap",
+   "line": 120,
+   "kind": "boolean",
+   "original": "and second not in G.succ[third]",
+   "mutated": "or second not in G.succ[third]"
+  },
+  {
+   "id": "M06",
+   "file": "networkx/algorithms/minors/contraction.py",
+   "function": "_quotient_graph",
+   "line": 396,
+   "kind": "constant",
+   "original": "block_pairs = permutations(H, 2) if H.is_directed() else combinations(H, 2)",
+   "mutated": "block_pairs = permutations(H, 2) if H.is_directed() else combinations(H, 1)"
+  },
+  {
+   "id": "M07",
+   "file": "networkx/algorithms/isomorphism/ismags.py",
+   "function": "ISMAGS._find_permutations",
+   "line": 1439,
+   "kind": "comparison",
+   "original": "if len(top) > 1 or len(bot) > 1:",
+   "mutated": "if len(top) >= 1 or len(bot) > 1:"
+  },
+  {
+   "id": "M08",
+   "file": "networkx/algorithms/approximation/density.py",
+   "function": "_fista",
+   "line": 194,
+   "kind": "arithmetic",
+   "original": "+ (tk / tknew) * (clamped_x - y)",
+   "mutated": "- (tk / tknew) * (clamped_x - y)"
+  },
+  {
+   "id": "M09",
+   "file": "networkx/algorithms/link_prediction.py",
+   "function": "cn_soundarajan_hopcroft.predict",
+   "line": 489,
+   "kind": "constant",
+   "original": "sum(_community(G, w, community) == Cu for w in cnbors) if Cu == Cv else 0",
+   "mutated": "sum(_community(G, w, community) == Cu for w in cnbors) if Cu == Cv else 1"
+  },
+  {
+   "id": "M10",
+   "file": "networkx/algorithms/community/quality.py",
+   "function": "overlapping_modularity.community_contribution",
+   "line": 405,
+   "kind": "constant",
+   "original": "for u, v, wt in G.edges(comm, data=weight, default=1)",
+   "mutated": "for u, v, wt in G.edges(comm, data=weight, default=0)"
+  },
+  {
+   "id": "M11",
+   "file": "networkx/algorithms/bipartite/matching.py",
+   "function": "hopcroft_karp_matching.breadth_first_search",
+   "line": 137,
+   "kind": "comparison",
+   "original": "if distances[v] < distances[None]:",
+   "mutated": "if distances[v] <= distances[None]:"
+  },
+  {
+   "id": "M12",
+   "file": "networkx/algorithms/clique.py",
+   "function": "find_cliques_recursive",
+   "line": 387,
+   "kind": "comparison",
+   "original": "if len(G) == 0:",
+   "mutated": "if len(G) != 0:"
+  },
+  {
+   "id": "M13",
+   "file": "networkx/algorithms/dag.py",
+   "function": "root_to_leaf_paths",
+   "line": 1242,
+   "kind": "comparison",
+   "original": "leaves = (v for v, d in G.out_degree() if d == 0)",
+   "mutated": "leaves = (v for v, d in G.out_degree() if d != 0)"
+  },
+  {
+   "id": "M14",
+   "file": "networkx/algorithms/approximation/traveling_salesman.py",
+   "function": "threshold_accepting_tsp",
+   "line": 1468,
+   "kind": "arithmetic",
+   "original": "if len(cycle) - 1 != len(G) or len(set(G.nbunch_iter(cycle))) != len(G):",
+   "mutated": "if len(cycle) + 1 != len(G) or len(set(G.nbunch_iter(cycle))) != len(G):"
+  },
+  {
+   "id": "M15",
+   "file": "networkx/algorithms/d_separation.py",
+   "function": "find_minimal_d_separator",
+   "line": 424,
+   "kind": "boolean",
+   "original": "intersection = x & y or x & included or y & included",
+   "mutated": "intersection = x & y and x & included or y & included"
+  },
+  {
+   "id": "M16",
+   "file": "networkx/algorithms/core.py",
+   "function": "k_truss",
+   "line": 482,
+   "kind": "comparison",
+   "original": "if len(nbrs_u & set(H[v])) < (k - 2):",
+   "mutated": "if len(nbrs_u & set(H[v])) <= (k - 2):"
+  },
+  {
+   "id": "M17",
+   "file": "networkx/algorithms/lowest_common_ancestors.py",
+   "function": "all_pairs_lowest_common_ancestor",
+   "line": 91,
+   "kind": "arithmetic",
+   "original": "if set(pair) - nodeset:",
+   "mutated": "if set(pair) + nodeset:"
+  },
+  {
+   "id": "M18",
+   "file": "networkx/algorithms/shortest_paths/weighted.py",
+   "function": "goldberg_radzik.relax",
+   "line": 2125,
+   "kind": "arithmetic",
+   "original": "if d_u + w_e < d[v]:",
+   "mutated": "if d_u - w_e < d[v]:"
+  },
+  {
+   "id": "M19",
+   "file": "networkx/algorithms/triads.py",
+   "function": "triadic_census",
+   "line": 245,
+   "kind": "boolean",
+   "original": "if m[u] < m[w] or (m[v] < m[w] < m[u] and v not in nbrs[w]):",
+   "mutated": "if m[u] < m[w] or (m[v] < m[w] < m[u] or v not in nbrs[w]):"
+  },
+  {
+   "id": "M20",
+   "file": "networkx/algorithms/isomorphism/isomorphvf2.py",
+   "function": "GraphMatcher.syntactic_feasibility",
+   "line": 535,
+   "kind": "comparison",
+   "original": "if self.G1.number_of_edges(G1_node, G1_node) < self.G2.number_of_edges(",
+   "mutated": "if self.G1.number_of_edges(G1_node, G1_node) <= self.G2.number_of_edges("
+  },
+  {
+   "id": "M21",
+   "file": "networkx/algorithms/tree/coding.py",
+   "function": "to_prufer_sequence",
+   "line": 310,
+   "kind": "constant",
+   "original": "degree[v] -= 1",
+   "mutated": "degree[v] -= 0"
+  },
+  {
+   "id": "M22",
+   "file": "networkx/algorithms/community/modularity_max.py",
+   "function": "greedy_modularity_communities",
+   "line": 314,
+   "kind": "comparison",
+   "original": "if (cutoff < 1) or (cutoff > G.number_of_nodes()):",
+   "mutated": "if (cutoff < 1) or (cutoff >= G.number_of_nodes()):"
+  },
+  {
+   "id": "M23",
+   "file": "networkx/algorithms/bipartite/generators.py",
+   "function": "configuration_model",
+   "line": 122,
+   "kind": "constant",
+   "original": "if len(aseq) == 0 or max(aseq) == 0:",
+   "mutated": "if len(aseq) == 1 or max(aseq) == 0:"
+  },
+  {
+   "id": "M24",
+   "file": "networkx/algorithms/approximation/treewidth.py",
+   "function": "MinDegreeHeuristic.best_node",
+   "line": 123,
+   "kind": "arithmetic",
+   "original": "elif min_degree == len(graph) - 1:",
+   "mutated": "elif min_degree == len(graph) + 1:"
+  },
+  {
+   "id": "M25",
+   "file": "networkx/algorithms/bipartite/cluster.py",
+   "function": "butterflies",
+   "line": 399,
+   "kind": "constant",
+   "original": "_bt = dict.fromkeys(G, 0)",
+   "mutated": "_bt = dict.fromkeys(G, 1)"
+  },
+  {
+   "id": "M26",
+   "file": "networkx/algorithms/flow/networksimplex.py",
+   "function": "network_simplex",
+   "line": 517,
+   "kind": "comparison",
+   "original": "if abs(w) == inf:",
+   "mutated": "if abs(w) != inf:"
+  },
+  {
+   "id": "M27",
+   "file": "networkx/algorithms/shortest_paths/unweighted.py",
+   "function": "_single_shortest_path",
+   "line": 420,
+   "kind": "boolean",
+   "original": "while nextlevel and cutoff > level:",
+   "mutated": "while nextlevel or cutoff > level:"
+  },
+  {
+   "id": "M28",
+   "file": "networkx/algorithms/approximation/steinertree.py",
+   "function": "_remove_nonterminal_leaves",
+   "line": 151,
+   "kind": "constant",
+   "original": "leaves = {n for n in G if len(set(G[n]) - {n}) == 1}",
+   "mutated": "leaves = {n for n in G if len(set(G[n]) - {n}) == 0}"
+  },
+  {
+   "id": "M29",
+   "file": "networkx/algorithms/sparsifiers.py",
+   "function": "spanner",
+   "line": 173,
+   "kind": "comparison",
+   "original": "if clustering[u] == clustering[v]:",
+   "mutated": "if clustering[u] != clustering[v]:"
+  },
+  {
+   "id": "M30",
+   "file": "networkx/algorithms/cycles.py",
+   "function": "_bounded_cycle_search",
+   "line": 445,
+   "kind": "constant",
+   "original": "stack = [iter(G[path[-1]])]",
+   "mutated": "stack = [iter(G[path[-0]])]"
+  },
+  {
+   "id": "M31",
+   "file": "networkx/algorithms/connectivity/edge_kcomponents.py",
+   "function": "k_edge_components",
+   "line": 94,
+   "kind": "comparison",
+   "original": "if k == 1:",
+   "mutated": "if k != 1:"
+  },
+  {
+   "id": "M32",
+   "file": "networkx/algorithms/operators/product.py",
+   "function": "power",
+   "line": 430,
+   "kind": "comparison",
+   "original": "if k <= level:",
+   "mutated": "if k < level:"
+  },
+  {
+   "id": "M33",
+   "file": "networkx/algorithms/community/label_propagation.py",
+   "function": "fast_label_propagation_communities",
+   "line": 83,
+   "kind": "comparison",
+   "original": "if G.degree(node) > 0:",
+   "mutated": "if G.degree(node) >= 0:"
+  },
+  {
+   "id": "M34",
+   "file": "networkx/algorithms/approximation/kcomponents.py",
+   "function": "k_components",
+   "line": 125,
+   "kind": "constant",
+   "original": "k_components[2].append(bicomp)",
+   "mutated": "k_components[1].append(bicomp)"
+  },
+  {
+   "id": "M35",
+   "file": "networkx/algorithms/community/louvain.py",
+   "function": "_one_level",
+   "line": 277,
+   "kind": "comparison",
+   "original": "nbrs = {u: {v: dd[\"weight\"] for v, dd in G[u].items() if v != u} for u in G}",
+   "mutated": "nbrs = {u: {v: dd[\"weight\"] for v, dd in G[u].items() if v == u} for u in G}"
+  },
+  {
+   "id": "M36",
+   "file": "networkx/algorithms/isomorphism/temporalisomorphvf2.py",
+   "function": "TimeRespectingGraphMatcher.one_hop",
+   "line": 116,
+   "kind": "boolean",
+   "original": "return not dates or max(dates) - min(dates) <= self.delta",
+   "mutated": "return not dates and max(dates) - min(dates) <= self.delta"
+  },
+  {
+   "id": "M37",
+   "file": "networkx/algorithms/connectivity/cuts.py",
+   "function": "minimum_node_cut",
+   "line": 423,
+   "kind": "boolean",
+   "original": "if (s is not None and t is None) or (s is None and t is not None):",
+   "mutated": "if (s is not None and t is None) and (s is None and t is not None):"
+  },
+  {
+   "id": "M38",
+   "file": "networkx/algorithms/graph_hashing.py",
+   "function": "_neighborhood_aggregate_undirected",
+   "line": 47,
+   "kind": "arithmetic",
+   "original": "return node_labels[node] + \"\".join(sorted(label_list))",
+   "mutated": "return node_labels[node] - \"\".join(sorted(label_list))"
+  },
+  {
+   "id": "M39",
+   "file": "networkx/algorithms/tree/mst.py",
+   "function": "kruskal_mst_edges",
+   "line": 259,
+   "kind": "comparison",
+   "original": "if edges_added == edges_needed:",
+   "mutated": "if edges_added != edges_needed:"
+  },
+  {
+   "id": "M40",
+   "file": "networkx/algorithms/planarity.py",
+   "function": "LRPlanarity.dfs_embedding",
+   "line": 708,
+   "kind": "comparison",
+   "original": "if ei == self.parent_edge[w]:  # tree edge",
+   "mutated": "if ei != self.parent_edge[w]:  # tree edge"
+  },
+  {
+   "id": "M41",
+   "file": "networkx/algorithms/operators/all.py",
+   "function": "intersection_all",
+   "line": 312,
+   "kind": "comparison",
+   "original": "elif G.is_multigraph() != R.is_multigraph():",
+   "mutated": "elif G.is_multigraph() == R.is_multigraph():"
+  },
+  {
+   "id": "M42",
+   "file": "networkx/algorithms/community/leiden.py",
+   "function": "leiden_partitions.delta_func",
+   "line": 315,
+   "kind": "comparison",
+   "original": "if len(community) == 1:",
+   "mutated": "if len(community) != 1:"
+  },
+  {
+   "id": "M43",
+   "file": "networkx/algorithms/shortest_paths/dense.py",
+   "function": "floyd_warshall_predecessor_and_distance",
+   "line": 347,
+   "kind": "arithmetic",
+   "original": "d = dist_u[w] + dist_w[v]",
+   "mutated": "d = dist_u[w] - dist_w[v]"
+  },
+  {
+   "id": "M44",
+   "file": "networkx/algorithms/connectivity/disjoint_paths.py",
+   "function": "edge_disjoint_paths",
+   "line": 200,
+   "kind": "comparison",
+   "original": "if d[\"capacity\"] == d[\"flow\"] and d[\"flow\"] > 0",
+   "mutated": "if d[\"capacity\"] == d[\"flow\"] and d[\"flow\"] >= 0"
+  },
+  {
+   "id": "M45",
+   "file": "networkx/algorithms/smallworld.py",
+   "function": "lattice_reference",
+   "line": 193,
+   "kind": "arithmetic",
+   "original": "D[nnodes - v - 1, :] = np.append(u[v + 1 :], u[: v + 1])",
+   "mutated": "D[nnodes - v - 1, :] = np.append(u[v - 1 :], u[: v + 1])"
+  },
+  {
+   "id": "M46",
+   "file": "networkx/algorithms/isomorphism/tree_isomorphism.py",
+   "function": "rooted_tree_isomorphism",
+   "line": 135,
+   "kind": "constant",
+   "original": "for n, dist in nx.shortest_path_length(dT, source=0).items():",
+   "mutated": "for n, dist in nx.shortest_path_length(dT, source=1).items():"
+  },
+  {
+   "id": "M47",
+   "file": "networkx/algorithms/tree/branchings.py",
+   "function": "maximum_branching.edmonds_step_I2",
+   "line": 401,
+   "kind": "comparison",
+   "original": "if w < minweight:",
+   "mutated": "if w <= minweight:"
+  },
+  {
+   "id": "M48",
+   "file": "networkx/algorithms/euler.py",
+   "function": "has_eulerian_path",
+   "line": 317,
+   "kind": "constant",
+   "original": "elif outs[v] - ins[v] == 1:",
+   "mutated": "elif outs[v] - ins[v] == 0:"
+  },
+  {
+   "id": "M49",
+   "file": "networkx/algorithms/planar_drawing.py",
+   "function": "triangulate_embedding",
+   "line": 394,
+   "kind": "constant",
+   "original": "triangulate_face(embedding, face[0], face[1])",
+   "mutated": "triangulate_face(embedding, face[1], face[1])"
+  },
+  {
+   "id": "M50",
+   "file": "networkx/algorithms/simple_paths.py",
+   "function": "_bidirectional_pred_succ.filter_iter.iterate",
+   "line": 720,
+   "kind": "boolean",
+   "original": "if (v, w) not in ignore_edges and (w, v) not in ignore_edges:",
+   "mutated": "if (v, w) not in ignore_edges or (w, v) not in ignore_edges:"
+  },
+  {
+   "id": "M51",
+   "file": "networkx/algorithms/matching.py",
+   "function": "max_weight_matching.addBlossom",
+   "line": 593,
+   "kind": "comparison",
+   "original": "assert label[bv] == 2 or (",
+   "mutated": "assert label[bv] != 2 or ("
+  },
+  {
+   "id": "M52",
+   "file": "networkx/algorithms/cluster.py",
+   "function": "_directed_triangles_and_degree_iter",
+   "line": 181,
+   "kind": "constant",
+   "original": "1",
+   "mutated": "0"
+  },
+  {
+   "id": "M53",
+   "file": "networkx/algorithms/threshold.py",
+   "function": "shortest_path",
+   "line": 612,
+   "kind": "comparison",
+   "original": "if vert[1] == \"d\":",
+   "mutated": "if vert[1] != \"d\":"
+  },
+  {
+   "id": "M54",
+   "file": "networkx/algorithms/approximation/connectivity.py",
+   "function": "node_connectivity",
+   "line": 212,
+   "kind": "boolean",
+   "original": "if y not in G[x] and x != y:",
+   "mutated": "if y not in G[x] or x != y:"
+  },
+  {
+   "id": "M55",
+   "file": "networkx/algorithms/graphical.py",
+   "function": "is_digraphical",
+   "line": 462,
+   "kind": "constant",
+   "original": "if zeroheap and (not stubheap or stubheap[0][0] > zeroheap[0]):",
+   "mutated": "if zeroheap and (not stubheap or stubheap[1][0] > zeroheap[0]):"
+  },
+  {
+   "id": "M56",
+   "file": "networkx/algorithms/components/strongly_connected.py",
+   "function": "condensation",
+   "line": 383,
+   "kind": "constant",
+   "original": "if len(G) == 0:",
+   "mutated": "if len(G) == 1:"
+  },
+  {
+   "id": "M57",
+   "file": "networkx/algorithms/isomorphism/vf2pp.py",
+   "function": "_all_morphisms",
+   "line": 522,
+   "kind": "constant",
+   "original": "current_node, candidate_iter = stack[-1]",
+   "mutated": "current_node, candidate_iter = stack[-0]"
+  },
+  {
+   "id": "M58",
+   "file": "networkx/algorithms/distance_measures.py",
+   "function": "harmonic_diameter",
+   "line": 495,
+   "kind": "constant",
+   "original": "if order > 1:",
+   "mutated": "if order > 0:"
+  },
+  {
+   "id": "M59",
+   "file": "networkx/algorithms/connectivity/connectivity.py",
+   "function": "node_connectivity",
+   "line": 319,
+   "kind": "negation",
+   "original": "if not nx.is_weakly_connected(G):",
+   "mutated": "if nx.is_weakly_connected(G):"
+  },
+  {
+   "id": "M60",
+   "file": "networkx/algorithms/summarization.py",
+   "function": "dedensify",
+   "line": 199,
+   "kind": "arithmetic",
+   "original": "new_edges = high_degree_node_count + low_degree_node_count",
+   "mutated": "new_edges = high_degree_node_count - low_degree_node_count"
+  }
+ ]
+}
