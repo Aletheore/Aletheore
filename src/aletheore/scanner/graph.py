@@ -3738,6 +3738,7 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
     arity: dict[str, set[int]] = {}  # top-level type name -> generic arities declared (`Mock` is 0, `Mock<T>` is 1)
     ext_decls: dict[str, list[dict]] = {}  # extension method name -> [{type, recv, tp}]: containing type, receiver type, type parameters
     type_kinds: dict[str, str] = {}  # top-level type name -> class / struct / interface / enum / record
+    method_returns: dict[str, dict[str, list[str]]] = {}  # top-level type name -> method name -> declared return types
 
     def collect_extension_methods(type_node: Node, type_name: str) -> None:
         body = type_node.child_by_field_name("body")
@@ -3817,6 +3818,8 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
                     )
                     types.setdefault(type_name, ns)
                     members.setdefault(type_name, {}).update(_csharp_value_members(c, source))
+                    for method_name, returned in _csharp_method_returns(c, source).items():
+                        method_returns.setdefault(type_name, {}).setdefault(method_name, []).extend(returned)
                     bases.setdefault(type_name, set()).update(_csharp_base_names(c, source))
             elif c.type == "declaration_list":
                 walk(c.children, ns)
@@ -3849,6 +3852,7 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
         "ext_ns": next(iter(types.values())) if types else "",
         "global_usings": _CSHARP_GLOBAL_USING_RE.findall(decoded),
         "members": members,
+        "method_returns": method_returns,
         "bases": {name: sorted(parents) for name, parents in bases.items()},
         "partial": partial,
         "nested_partial": sorted(nested_partial),
@@ -4096,6 +4100,18 @@ def _build_csharp_index(repo_path: Path, summaries: dict[Path, dict]) -> dict:
     for method, rets in ext_return_seen.items():
         if len(rets) == 1 and "" not in rets:
             ext_returns[method] = next(iter(rets))
+    member_types: dict[str, dict[str, str]] = {}  # type -> property/field -> its type; "" when files disagree
+    returned_types: dict[str, dict[str, str]] = {}  # type -> method -> its return type; "" when overloads differ
+    for summary in summaries.values():
+        for type_name, table in summary.get("members", {}).items():
+            merged = member_types.setdefault(type_name, {})
+            for member, declared in table.items():
+                merged[member] = declared if merged.get(member, declared) == declared else ""
+        for type_name, table in summary.get("method_returns", {}).items():
+            merged = returned_types.setdefault(type_name, {})
+            for method, declared_list in table.items():
+                for declared in declared_list:
+                    merged[method] = declared if merged.get(method, declared) == declared else ""
     kinds: dict[str, str] = {}
     conflicting: set[str] = set()
     base_names: dict[str, set[str]] = {}
@@ -4127,6 +4143,7 @@ def _build_csharp_index(repo_path: Path, summaries: dict[Path, dict]) -> dict:
         "partial_owners": partial_owners,
         "nested_partial_owners": nested_partial_owners,
         "kinds": kinds, "ancestors": ancestors, "ext_returns": ext_returns,
+        "member_types": member_types, "returned_types": returned_types,
     }
 
 
@@ -4265,6 +4282,33 @@ def _csharp_value_members(type_node: Node, source: bytes) -> dict[str, str]:
                 )
                 if name is not None:
                     out[source[name.start_byte:name.end_byte].decode(errors="ignore")] = declared
+    return out
+
+
+def _csharp_method_returns(type_node: Node, source: bytes) -> dict[str, list[str]]:
+    """Methods declared directly in a type body: name -> simple names of their declared return types ("" when the
+    return type is `void`, a method type parameter, or not a plain type name)."""
+    body = type_node.child_by_field_name("body")
+    out: dict[str, list[str]] = {}
+    if body is None:
+        return out
+    for member in body.children:
+        if member.type != "method_declaration":
+            continue
+        name = member.child_by_field_name("name")
+        returns = member.child_by_field_name("returns")
+        if name is None or returns is None:
+            continue
+        declared = _csharp_simple_type_name(returns, source)
+        tparams = member.child_by_field_name("type_parameters")
+        generic = {
+            source[g.start_byte:g.end_byte].decode(errors="ignore")
+            for tp in (tparams.children if tparams is not None else []) if tp.type == "type_parameter"
+            for g in tp.children if g.type == "identifier"
+        }
+        if declared in generic or declared == "void":
+            declared = ""
+        out.setdefault(source[name.start_byte:name.end_byte].decode(errors="ignore"), []).append(declared)
     return out
 
 
@@ -4450,7 +4494,7 @@ def _csharp_type_reference_targets(
             # exactly (an instance method of that type with the same name would win, so the edge is only inferred)
             if not short_type and scope is not None and use is not None and use["kinds"] == {"call"} and index["ext_owners"].get(name):
                 if receivers is None and tree_root is not None:
-                    receivers = ReceiverTypes(tree_root, source, index["kinds"], index["ext_returns"])
+                    receivers = ReceiverTypes(tree_root, source, index["kinds"], index["ext_returns"], index)
                 recvs = receivers.calls.get(name) if receivers is not None else None
                 if recvs and all(r is not None for r in recvs):
                     typed = {normalize_type(r) for r in recvs}
@@ -4482,7 +4526,7 @@ def _csharp_type_reference_targets(
             if receivers is None and tree_root is not None and any(
                 name in (index["files"].get(o) or {}).get("ext_decls", {}) for o in chosen
             ):
-                receivers = ReceiverTypes(tree_root, source, index["kinds"], index["ext_returns"])
+                receivers = ReceiverTypes(tree_root, source, index["kinds"], index["ext_returns"], index)
             if receivers is not None:
                 chosen = _csharp_extension_winners(chosen, name, use, receivers, index)
             for owner in chosen:
@@ -6757,7 +6801,9 @@ def _compute_resolution_signatures(
     if "csharp" in paths_by_language:
         extras["csharp"] = [
             {rel(p): [s["ns"], sorted(s["types"].items()), s["ext_methods"], s["ext_generic"], s["global_usings"],
-                      sorted(s["arity"].items()), sorted(s["ext_decls"].items()), sorted(s["kinds"].items())]
+                      sorted(s["arity"].items()), sorted(s["ext_decls"].items()), sorted(s["kinds"].items()),
+                      sorted((k, sorted(v.items())) for k, v in s["members"].items()),
+                      sorted((k, sorted((m, sorted(r)) for m, r in v.items())) for k, v in s["method_returns"].items())]
              for p, s in sorted(csharp_summaries.items(), key=lambda kv: rel(kv[0]))},
             sorted((k, rel(v)) for k, v in csharp_prefix_map.items()),
             sorted((rel(p), rel(q) if q else None) for p, q in (csharp_index or {}).get("project_of", {}).items()),
