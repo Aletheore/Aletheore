@@ -92,3 +92,21 @@ def test_a_local_variable_named_like_a_type_is_not_a_static_call(tmp_path):
     got = _imports(tmp_path, files, "T.cs")
     assert "SpanExt.cs" in got
     assert "MoneyExt.cs" not in got
+
+
+def test_a_name_that_is_only_declared_in_a_file_is_not_a_use_of_the_same_named_extension(tmp_path):
+    truncate_ext = "namespace App;\npublic static class TruncateExt { public static string Truncate(this string s, int n) => s; }\n"
+    files = {
+        "TruncateExt.cs": truncate_ext,
+        "ITruncator.cs": "namespace App;\npublic interface ITruncator { string Truncate(string value, int length); }\n",
+    }
+    assert "TruncateExt.cs" not in _imports(tmp_path, files, "ITruncator.cs")
+
+
+def test_a_call_of_a_same_named_extension_still_links(tmp_path):
+    truncate_ext = "namespace App;\npublic static class TruncateExt { public static string Truncate(this string s, int n) => s; }\n"
+    files = {
+        "TruncateExt.cs": truncate_ext,
+        "Truncator.cs": "namespace App;\npublic class Truncator { string Truncate(string v, int n) => v; string Run() => \"abc\".Truncate(2); }\n",
+    }
+    assert "TruncateExt.cs" in _imports(tmp_path, files, "Truncator.cs")

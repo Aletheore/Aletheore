@@ -4481,6 +4481,8 @@ def _csharp_type_reference_targets(
         if name in shadowing and name not in type_context:
             continue  # binds to an inherited or own member, not to the type of that name
         use = uses.get(name) if uses is not None else None
+        if use is not None and not use["kinds"]:
+            continue  # the name is only declared in this file (a method, property or variable), never used
         short_type = False
         short_ext = False
         if len(name) < _CSHARP_MIN_TYPE_NAME:
