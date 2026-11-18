@@ -185,6 +185,7 @@ def run_council():
 
 def healthy(kind_cls):
     d = Path(tempfile.mkdtemp(prefix="gain-health-"))
+    subprocess.run("git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init", shell=True, cwd=d, check=True)   # Codex only runs inside a git repository
     r = kind_cls().run("Reply with the single word: ok", d, empty_mcp(d), {}, 240, read_only=True)
     return r.ok and bool(r.final_text.strip()), r.final_text.strip()[:200]
 
