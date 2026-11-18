@@ -80,3 +80,28 @@ def test_a_finished_condition_is_skipped_on_resume_and_a_failed_one_is_not(tmp_p
     assert gainlib.already_done(tmp_path, "codex-alone") is False      # the run itself failed
     assert gainlib.already_done(tmp_path, "claude-alone") is False
     assert gainlib.already_done(tmp_path / "missing", "council") is False
+
+
+# ---- the judge waits out a CLI that is briefly unavailable (Claude Code updates itself in place) -----------------------------------------------------
+class FlakyRunner(FakeRunner):
+    """Replies are (ok, text): a failed run (the CLI missing or erroring) is not the same as an answer that cannot be read."""
+
+    def run(self, prompt, wt, mcp, env, timeout, read_only=False):
+        from types import SimpleNamespace
+        self.prompts.append(prompt)
+        ok, text = self.replies.pop(0)
+        return SimpleNamespace(final_text=text, ok=ok)
+
+
+def test_the_judge_waits_and_retries_when_the_cli_itself_fails_then_succeeds():
+    sleeps = []
+    runner = FlakyRunner([(False, "claude is not installed or not on PATH"), (False, "agent exited with code 1"), (True, '{"M01": true}')])
+    assert judge("alpha is wrong", [bug(1, fn="alpha")], runner, sleep=sleeps.append) == {"M01": True}
+    assert len(runner.prompts) == 3 and len(sleeps) == 2 and all(s > 0 for s in sleeps)
+
+
+def test_the_judge_gives_up_after_many_cli_failures_and_says_so():
+    runner = FlakyRunner([(False, "claude is not installed or not on PATH")] * 8)
+    with pytest.raises(JudgeFailed):
+        judge("alpha is wrong", [bug(1, fn="alpha")], runner, sleep=lambda s: None)
+    assert len(runner.prompts) <= 8

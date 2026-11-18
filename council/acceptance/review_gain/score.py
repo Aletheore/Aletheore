@@ -7,6 +7,7 @@ measured here, which is why every condition is capped at the same number of find
 import json
 import re
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -50,32 +51,42 @@ class JudgeFailed(Exception):
 BATCH = 15
 
 
-def _ask(prompt, runner):
+def _ask(prompt, runner, sleep=time.sleep):
+    """One judge call. A CLI that fails outright (missing for a moment because Claude Code updates itself in place, a rate limit) is waited out with growing pauses,
+    up to 6 attempts; an answer that is there but unreadable gets one more try."""
     d = Path(tempfile.mkdtemp(prefix="judge-"))
     cfg = d / "mcp.json"
     cfg.write_text('{"mcpServers": {}}')
-    for _ in range(2):  # one retry on an unreadable answer
+    unreadable = 0
+    for attempt in range(6):
         r = runner.run(prompt, d, cfg, {}, 600, read_only=True)
+        if not r.ok:
+            if attempt < 5:
+                sleep(min(30 * (attempt + 1), 180))
+            continue
         m = re.search(r"\{.*\}", r.final_text or "", re.S)
         if m:
             try:
                 return {k: bool(v) for k, v in json.loads(m.group(0)).items()}
             except (ValueError, AttributeError):
                 pass
+        unreadable += 1
+        if unreadable >= 2:
+            break
     raise JudgeFailed("the judge's answer could not be read")
 
 
-def judge(text, bugs, runner):
+def judge(text, bugs, runner, sleep=time.sleep):
     """{bug id: found?} for the candidate bugs of this review, asked in batches so a long list never swamps the judge."""
     cands = candidates(text, bugs)
     out = {}
     for i in range(0, len(cands), BATCH):
         batch = cands[i:i + BATCH]
         listing = "\n".join(f"{b['id']}: {b['file']} line {b['line']}, function {b['function']}: the code was changed from `{b['original']}` to `{b['mutated']}`" for b in batch)
-        verdict = _ask(JUDGE_PROMPT.format(cands=listing, review=text[:80000]), runner)
+        verdict = _ask(JUDGE_PROMPT.format(cands=listing, review=text[:80000]), runner, sleep)
         out.update({b["id"]: verdict.get(b["id"], False) for b in batch})
     return out
 
 
-def found_ids(text, bugs, runner):
-    return sorted(k for k, v in judge(text, bugs, runner).items() if v)
+def found_ids(text, bugs, runner, sleep=time.sleep):
+    return sorted(k for k, v in judge(text, bugs, runner, sleep).items() if v)
