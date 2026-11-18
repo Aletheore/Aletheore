@@ -249,3 +249,44 @@ def test_scripted_runner_writes_nothing_when_read_only(tmp_path):
     assert not (tmp_path / "a.txt").exists() and r.read_only_calls == [True]
     r.run("i", tmp_path, tmp_path / "m.json", {}, 5)
     assert (tmp_path / "a.txt").exists() and r.read_only_calls == [True, False]
+
+
+# ---- a failed run says why: the CLI's own error, not just its exit code ----------------------------------------------------------------------------
+
+def _run_with_output(tmp_path, monkeypatch, out, err="", code=1, kind="claude"):
+    import aletheore.council.runners as r
+    monkeypatch.setattr(r, "_run_process", lambda argv, cwd, env, timeout_s: (code, out, err, False))
+    monkeypatch.setattr(r, "_resolve", lambda b: f"/bin/{b}")
+    cfg = tmp_path / "m.json"
+    cfg.write_text('{"mcpServers": {}}')
+    runner = ClaudeRunner() if kind == "claude" else CodexRunner()
+    return runner.run("go", tmp_path, cfg, {}, 5)
+
+
+def test_a_claude_failure_with_nothing_on_stderr_reports_the_error_from_its_output(tmp_path, monkeypatch):
+    out = '{"type":"system","subtype":"init"}\n{"type":"result","subtype":"error","is_error":true,"result":"You have reached your usage limit. It resets at 4pm."}'
+    res = _run_with_output(tmp_path, monkeypatch, out)
+    assert not res.ok and "usage limit" in res.final_text
+
+
+def test_stderr_still_wins_when_the_agent_wrote_there(tmp_path, monkeypatch):
+    out = '{"type":"result","is_error":true,"result":"from stdout"}'
+    res = _run_with_output(tmp_path, monkeypatch, out, err="from stderr")
+    assert "from stderr" in res.final_text and "from stdout" not in res.final_text
+
+
+def test_with_no_message_anywhere_the_exit_code_is_reported(tmp_path, monkeypatch):
+    res = _run_with_output(tmp_path, monkeypatch, "", code=3)
+    assert res.final_text == "agent exited with code 3"
+
+
+def test_a_codex_failure_reports_its_error_event(tmp_path, monkeypatch):
+    out = '{"type":"error","message":"rate limit exceeded, try again later"}'
+    res = _run_with_output(tmp_path, monkeypatch, out, kind="codex")
+    assert not res.ok and "rate limit" in res.final_text
+
+
+def test_an_error_message_longer_than_the_limit_is_kept_to_its_tail(tmp_path, monkeypatch):
+    out = json.dumps({"type": "result", "is_error": True, "result": "x" * 5000 + " THE-REASON"})
+    res = _run_with_output(tmp_path, monkeypatch, out)
+    assert len(res.final_text) <= 2000 and res.final_text.endswith("THE-REASON")

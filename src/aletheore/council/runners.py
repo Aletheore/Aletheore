@@ -148,10 +148,21 @@ def _parse_events(stdout: str) -> list[dict]:
     return events
 
 
+def _error_from_events(events: list[dict]) -> str:
+    """The agent CLIs often print why they failed (a usage limit, an expired sign-in) on stdout, as a final result or error event, and nothing on stderr."""
+    for e in reversed(events):
+        text = e.get("result") if e.get("type") == "result" and e.get("is_error") else (e.get("message") or e.get("error") if e.get("type") in ("error", "turn.failed") else None)
+        if isinstance(text, dict):
+            text = text.get("message")
+        if isinstance(text, str) and text.strip():
+            return text.strip()[-2000:]
+    return ""
+
+
 def _failure(code: int, stderr: str, events: list[dict], timed_out: bool, timeout_s: int) -> RunResult:
     if timed_out:
         return RunResult(False, f"agent run timed out after {timeout_s}s", code, events)
-    note = stderr.strip()[-2000:] or f"agent exited with code {code}"
+    note = stderr.strip()[-2000:] or _error_from_events(events) or f"agent exited with code {code}"
     return RunResult(False, note, code, events)
 
 
