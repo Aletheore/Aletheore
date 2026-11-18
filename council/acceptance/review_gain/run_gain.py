@@ -166,6 +166,8 @@ def run_council():
             last_n, last_change = len(ev), time.time()
         elif time.time() - last_change > 55 * 60:
             break
+        if any(e.body.get("subtype") in ("wake_failed", "worker_error") for e in ev) and time.time() - last_change > 240:
+            break   # an agent failed and the room has gone quiet: the planner would wait forever for its answer
         time.sleep(2)
     secs = round(time.time() - t0)
     ev, ex_answers, final = state()
@@ -181,6 +183,31 @@ def run_council():
             "planner_wakes": len([e for e in ev if e.body.get("subtype") == "wake_claimed" and e.sender_agent == pid]), "files_by_group": g}
 
 
+def healthy(kind_cls):
+    d = Path(tempfile.mkdtemp(prefix="gain-health-"))
+    r = kind_cls().run("Reply with the single word: ok", d, empty_mcp(d), {}, 240, read_only=True)
+    return r.ok and bool(r.final_text.strip()), r.final_text.strip()[:200]
+
+
+def wait_until_healthy(max_wait_s=6 * 3600):
+    """Both agent CLIs must answer a trivial question before a condition starts. A usage limit or sign-in problem then waits (growing pauses, up to six hours)
+    instead of burning the condition: the first large run lost three replicates to Claude failing instantly for hours."""
+    t0, delay = time.time(), 60
+    while True:
+        bad = []
+        for name, cls in (("claude", ClaudeRunner), ("codex", CodexRunner)):
+            ok, note = healthy(cls)
+            if not ok:
+                bad.append(f"{name}: {note}")
+        if not bad:
+            return
+        if time.time() - t0 > max_wait_s:
+            raise SystemExit(f"agents still not answering after {max_wait_s}s: {bad}")
+        print(f"  waiting for the agent CLIs ({'; '.join(bad)}); trying again in {delay}s", flush=True)
+        time.sleep(delay)
+        delay = min(delay * 2, 900)
+
+
 def score(text, judge, label):
     """(found ids, judge_failed). A judge that cannot answer is recorded as a failure, never as zero found."""
     if not text.strip():
@@ -192,16 +219,61 @@ def score(text, judge, label):
         return None, True
 
 
+def last_record(out, cond):
+    f = out / "results.jsonl"
+    rec = None
+    if f.exists():
+        for line in f.read_text().splitlines():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("condition") == cond:
+                rec = r
+    return rec
+
+
+def load_saved(out, cond, rec):
+    """A run that finished fine but could not be scored: rebuild its result from the saved texts, so it is scored again and not run again."""
+    text = (out / f"{cond}.txt").read_text() if (out / f"{cond}.txt").exists() else ""
+    if not text.strip():
+        return None
+    res = {"text": text, "secs": rec["secs"], "ok": True}
+    if cond == "split":
+        files = sorted(out.glob("split-part*.txt"), key=lambda p: int(p.stem.replace("split-part", "")))
+        res.update({"parts": [f.read_text() for f in files], "part_secs": rec.get("part_secs", []), "files_by_group": rec.get("files_by_group", [])})
+    if cond == "council":
+        res.update({"executor_reports": {f.stem.replace("council-executor-", ""): f.read_text() for f in out.glob("council-executor-*.txt")},
+                    "planner_messages": [], "notices": rec.get("notices", []), "person_messages": rec.get("person_messages"), "planner_wakes": rec.get("planner_wakes"),
+                    "files_by_group": rec.get("files_by_group", [])})
+    return res
+
+
 def main():
     out = OUT / f"rep{REP}"
     out.mkdir(parents=True, exist_ok=True)
     judge = ClaudeRunner()
+    runners = {"claude-alone": lambda: run_alone("claude"), "codex-alone": lambda: run_alone("codex"), "split": run_split, "council": run_council}
     for cond in CONDITIONS:
         if gainlib.already_done(out, cond):
             print(f"[rep {REP}] {cond}: already done, skipped", flush=True)
             continue
-        print(f"[rep {REP}] {cond} ...", flush=True)
-        res = {"claude-alone": lambda: run_alone("claude"), "codex-alone": lambda: run_alone("codex"), "split": run_split, "council": run_council}[cond]()
+        prev = last_record(out, cond)
+        res = load_saved(out, cond, prev) if prev and prev.get("ok") and prev.get("judge_failed") else None
+        if res is not None:
+            print(f"[rep {REP}] {cond}: scoring the saved review again (the run itself was fine)", flush=True)
+            wait_until_healthy()
+        else:
+            for attempt in range(1, 4):
+                wait_until_healthy()
+                print(f"[rep {REP}] {cond} ... (attempt {attempt})", flush=True)
+                res = runners[cond]()
+                if res["ok"] and res["text"].strip():
+                    break
+                print(f"[rep {REP}] {cond}: failed ({res['secs']}s); {'trying again' if attempt < 3 else 'giving up'}", flush=True)
+                with open(out / "results.jsonl", "a") as f:   # failures stay on record
+                    f.write(json.dumps({"condition": cond, "rep": REP, "secs": res["secs"], "ok": False, "n_found": None, "found": None, "judge_failed": False,
+                                        "attempt": attempt, "notices": res.get("notices", [])}) + "\n")
         # the review text is saved first, so a scoring problem never costs a run
         (out / f"{cond}.txt").write_text(res["text"])
         record = {"condition": cond, "rep": REP, "secs": res["secs"], "ok": res["ok"]}
