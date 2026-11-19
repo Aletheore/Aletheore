@@ -11,6 +11,7 @@ from aletheore.council.room import Room
 from aletheore.council.runners import ScriptedRunner
 from aletheore.council.state import Area
 from tests.council.chaos.live import LiveServer
+from tests.council.world_fixture import uid
 
 
 def git(repo, *args):
@@ -42,7 +43,7 @@ def live(tmp_path):
 
 
 def chat(live, text):
-    return live["alice"].append(EventDraft(live["room"].room_id, f"m:{time.monotonic_ns()}", "room", EventType.QUESTION, "alice", None, None,
+    return live["alice"].append(EventDraft(live["room"].room_id, f"m:{uid()}", "room", EventType.QUESTION, "alice", None, None,
                                            {"text": text, "kind": "chat"}))
 
 

@@ -6,11 +6,11 @@ import pytest
 
 from aletheore.council.protocol import EventDraft, EventType
 from aletheore.council.waiting import Cursor, wait_for
-from tests.council.world_fixture import world  # noqa: F401
+from tests.council.world_fixture import uid, world  # noqa: F401
 
 
 def put(world, who, etype, body, thread="th-1", agent=None):
-    return world["store"].append(EventDraft(world["alice"].room_id, f"x:{time.monotonic_ns()}", thread, etype, who, agent, None, body))
+    return world["store"].append(EventDraft(world["alice"].room_id, f"x:{uid()}", thread, etype, who, agent, None, body))
 
 
 def wait(world, me, **kw):

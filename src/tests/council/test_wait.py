@@ -6,11 +6,11 @@ import pytest
 
 from aletheore.council.protocol import EventDraft, EventType
 from aletheore.council.waiting import Cursor, addressed, wait_for
-from tests.council.world_fixture import world  # noqa: F401
+from tests.council.world_fixture import uid, world  # noqa: F401
 
 
 def post(world, who, text, kind="chat", agent=None):
-    return world["store"].append(EventDraft(world["alice"].room_id, f"m:{time.monotonic_ns()}", "room", EventType.QUESTION, who, agent, None,
+    return world["store"].append(EventDraft(world["alice"].room_id, f"m:{uid()}", "room", EventType.QUESTION, who, agent, None,
                                             {"text": text, "kind": kind}))
 
 

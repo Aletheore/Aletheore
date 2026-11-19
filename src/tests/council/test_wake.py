@@ -9,14 +9,14 @@ from aletheore.council.protocol import EventDraft, EventType
 from aletheore.council.runners import ScriptedRunner
 from aletheore.council.state import load_state
 from aletheore.council.wake import WAKE_PROMPT_CHARS, WakeGate, mentions
-from tests.council.world_fixture import daemon, git, world  # noqa: F401
+from tests.council.world_fixture import daemon, git, uid, world  # noqa: F401
 
 
 def say(world, who, text, thread="room", wake_depth=None, agent=None, cid=None):
     body = {"text": text, "kind": "chat"}
     if wake_depth is not None:
         body["wake_depth"] = wake_depth
-    return world["store"].append(EventDraft(world["alice"].room_id, cid or f"m:{time.monotonic_ns()}", thread, EventType.QUESTION, who, agent, None, body))
+    return world["store"].append(EventDraft(world["alice"].room_id, cid or f"m:{uid()}", thread, EventType.QUESTION, who, agent, None, body))
 
 
 def events(world):
@@ -294,7 +294,7 @@ def test_the_prompt_is_bounded(world):
 # ---- standing jobs -------------------------------------------------------------------------------------------------------------------
 
 def job(world, who, agent, text):
-    return world["store"].append(EventDraft(world["alice"].room_id, f"job:{time.monotonic_ns()}", "room", EventType.SYSTEM, who, agent, None,
+    return world["store"].append(EventDraft(world["alice"].room_id, f"job:{uid()}", "room", EventType.SYSTEM, who, agent, None,
                                             {"subtype": "standing_job", "agent": agent, "text": text}))
 
 
