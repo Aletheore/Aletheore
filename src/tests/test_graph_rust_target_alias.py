@@ -53,3 +53,13 @@ def test_reexport_from_inferred_crate_is_also_inferred(tmp_path):
 def test_alias_is_not_replaced_by_crate_guess(tmp_path):
     repo = _repo(tmp_path, "examples", "use crate::other as bytes;\nuse bytes::Buf;\n")
     assert target_crate_alias(repo, repo / "examples/runner.rs", "bytes::Buf") is None
+
+
+def test_single_segment_use_also_prefers_the_library(tmp_path):
+    repo = _repo(tmp_path, "tests", "use bytes::{self, Buf};\nfn main() {}\n")
+    _, graph, _ = build_module_graph(repo)
+    edges = {tuple(edge) for edge in graph["edges"]}
+    assert ("tests/runner.rs", "src/lib.rs") in edges
+    assert ("tests/runner.rs", "tests/bytes.rs") not in edges
+    assert target_crate_alias(repo, repo / "tests/runner.rs", "bytes") == repo / "src/lib.rs"
+

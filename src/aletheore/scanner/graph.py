@@ -5112,24 +5112,30 @@ def _extract_module(
 
             # Macro-declared modules and inline `crate::a::b` / `workspace_crate::a::b` paths are not `use` items.
             extra_paths = rust_resolve.extra_imports(repo_path, path, source.decode(errors="ignore"))
+            inferred_targets: set[str] = set()
+            exact_targets: set[str] = set()
             for use_path in [*raw_imports, *extra_paths]:
                 target = _resolve_rust_path(repo_path, path, use_path)
-                inferred = rust_resolve.target_crate_alias(repo_path, path, use_path) is not None
+                # The edge is only inferred when this `use` reached the library through a shadowed Cargo-target name.
+                bucket = (
+                    inferred_targets if rust_resolve.target_crate_alias(repo_path, path, use_path) is not None
+                    else exact_targets
+                )
                 if target is not None and target != rel_path:
                     resolved_imports.append(target)
-                    if inferred:
-                        import_confidence[target] = "inferred"
+                    bucket.add(target)
                 if target is not None:
                     for defining in _rust_reexport_targets(repo_path, path, use_path, target):
                         if defining != rel_path:
                             resolved_imports.append(defining)
-                            if inferred:
-                                import_confidence[defining] = "inferred"
+                            bucket.add(defining)
                 for module_file in _rust_module_reexport_targets(repo_path, path, use_path):
                     if module_file != rel_path:
                         resolved_imports.append(module_file)
-                        if inferred:
-                            import_confidence[module_file] = "inferred"
+                        bucket.add(module_file)
+            # Another `use` that reached the same file exactly keeps the edge exact.
+            for target in inferred_targets - exact_targets:
+                import_confidence[target] = "inferred"
     elif language_name == "java":
         raw_imports, functions, classes = _extract_java(tree.root_node, source)
         java_refs = _java_type_references(tree.root_node, source) if java_package_types else None

@@ -201,7 +201,7 @@ def clean_source(text: str, keep_literals: bool = False) -> str:
 def clear_cache() -> None:
     """Forget directory listings, Cargo manifests, macro registries and module summaries (called once per scan,
     so edits between scans in one process are seen). Also clears the Go package cache."""
-    for cached in (dir_names, _workspace, _macro_registry, _arg_macro_registry, module_items, manifest_root_dirs):
+    for cached in (dir_names, _workspace, _macro_registry, _arg_macro_registry, module_items, manifest_root_dirs, _renames_name):
         cached.cache_clear()
     from aletheore.scanner import go_resolve
 
@@ -346,11 +346,22 @@ def module_items(file_path: str) -> tuple[frozenset[str], tuple[str, ...]]:
     return declared, tuple(uses)
 
 
+@lru_cache(maxsize=2048)
+def _renames_name(from_file: str, head: str) -> bool:
+    """True when the file renames something to `head` (`use x as head`), which makes the local name its own."""
+    try:
+        cleaned = clean_source(Path(from_file).read_text(encoding="utf-8", errors="ignore"))
+    except OSError:
+        return True
+    return re.search(r"\bas\s+" + re.escape(head) + r"\b", cleaned) is not None
+
+
 def target_crate_alias(repo_path: Path, from_file: Path, path: str) -> Path | None:
-    """Find a crate hidden by an undeclared sibling Cargo target; the result is inferred."""
-    head, separator, _ = path.partition("::")
+    """Find a crate hidden by an undeclared sibling Cargo target; the result is inferred. `path` may be a single segment
+    (`use bytes;`, or `use bytes::{self, Buf}` flattened to `bytes`) as well as a `::` path."""
+    head = path.partition("::")[0]
     parent = from_file.parent
-    if not separator or parent.name not in ("tests", "examples", "benches"):
+    if parent.name not in ("tests", "examples", "benches"):
         return None
     if not (parent.parent / "Cargo.toml").is_file():
         return None
@@ -359,13 +370,7 @@ def target_crate_alias(repo_path: Path, from_file: Path, path: str) -> Path | No
     ):
         return None
     lib_root = crate_aliases(repo_path, from_file).get(head)
-    if lib_root is None or head in module_items(str(from_file))[0]:
-        return None
-    try:
-        cleaned = clean_source(from_file.read_text(encoding="utf-8", errors="ignore"))
-    except OSError:
-        return None
-    if re.search(r"\bas\s+" + re.escape(head) + r"\b", cleaned):
+    if lib_root is None or head in module_items(str(from_file))[0] or _renames_name(str(from_file), head):
         return None
     return lib_root
 
