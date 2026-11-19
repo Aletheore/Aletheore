@@ -100,8 +100,10 @@ def _check(command, root, cwd):
     leaves, after_cd = False, False
     for i, tok in enumerate(toks):
         is_target = i > 0 and toks[i - 1] == "cd"
-        if tok.startswith(_SAFE_ABS):
-            continue
+        if not re.fullmatch(r"[\w.@+\-/~]+", tok):
+            continue   # something with regex or shell punctuation in it (a leftover of nested quoting) is not a path
+        if tok == "/" or tok.startswith(_SAFE_ABS):
+            continue   # a lone "/" is what nested quoting leaves behind (an awk or sed pattern), not a path
         if tok.startswith("~/") or tok == "~":
             leaves = True
             continue

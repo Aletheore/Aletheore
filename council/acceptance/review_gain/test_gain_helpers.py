@@ -259,3 +259,10 @@ def test_an_absolute_cd_into_the_runs_own_worktree_sets_the_folder():
     run = "/private/var/folders/p2/4x5y/T/gain-claude-abc/repo"
     assert gainlib.audit_commands([f"Bash cd {run}/parse/parse; sed -n 1,40p __init__.py", "Bash ls ../../funcy"]) == []
     assert gainlib.audit_commands([f"Bash cd {run}/parse; ls ../../.."]) != []
+
+
+def test_fragments_of_nested_quoting_that_cannot_be_paths_are_ignored():
+    cmd = '''/bin/zsh -lc "for f in pyrsistent/pyrsistent/{_pbag,_pclass}.py; do printf '\\\\n%s\\\\n' \\""'$f"; nl -ba "$f" | awk '"'/"'^ *[0-9]+[[:space:]]+("""|[[:alnum:]_@#(])/ && !/>>>/'"'; done"'''
+    assert gainlib.audit_commands([cmd]) == []
+    for bad in ("cat /etc/hosts", "cat ../manifest.enc", "ls ~/dev", "Read /Users/x/other/file.py"):
+        assert gainlib.audit_commands([bad]), bad
