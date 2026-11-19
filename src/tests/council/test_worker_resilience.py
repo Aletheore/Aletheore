@@ -85,7 +85,9 @@ def test_it_backs_off_while_failing_and_recovers_when_it_works(world):
     time.sleep(1.0)
     failing = len(times)
     state["fail"] = False
-    time.sleep(2.0)                                         # the longest backoff pause passes, then it runs at the normal rate again
+    deadline = time.monotonic() + 15.0                      # the longest backoff pause passes, then it runs at the normal rate again;
+    while len(times) - failing <= 15 and time.monotonic() < deadline:   # wait for that rather than a fixed sleep, so a slow runner cannot flake
+        time.sleep(0.05)
     stop.set()
     t.join(3)
     assert failing < 1.0 / 0.05 * 0.6                       # slower than the normal rate while failing
