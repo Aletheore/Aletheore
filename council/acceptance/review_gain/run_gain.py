@@ -72,6 +72,12 @@ def groups():
     return gainlib.groups(FILES, LINES, K)
 
 
+def recorded(kind_cls, agent):
+    """The runner for an agent, recording what it does; a Codex agent gets a fresh config folder for every run (no memory from earlier runs)."""
+    env = (lambda: {"CODEX_HOME": str(gainlib.fresh_codex_home())}) if kind_cls is CodexRunner else None
+    return gainlib.Recording(kind_cls(), LOG, agent, env=env)
+
+
 def clone(dest):
     subprocess.run(["git", "clone", "-q", str(CORPUS), str(dest)], check=True)
     subprocess.run(["git", "remote", "remove", "origin"], cwd=dest, check=True)   # a clone must not say where it came from: the folder beside the corpus held the answer key
@@ -87,7 +93,7 @@ def empty_mcp(d, name="mcp.json"):
 def run_alone(kind):
     base = Path(tempfile.mkdtemp(prefix=f"gain-{kind}-"))
     wt = clone(base / "repo")
-    runner = gainlib.Recording({"claude": ClaudeRunner, "codex": CodexRunner}[kind](), LOG, f"{kind}-alone")
+    runner = recorded({"claude": ClaudeRunner, "codex": CodexRunner}[kind], f"{kind}-alone")
     t0 = time.time()
     r = runner.run(TASK.format(cap=CAP_ALONE, files="\n".join(f"- {f}" for f in FILES)), wt, empty_mcp(base), {}, TURN_TIMEOUT, read_only=True)
     return {"text": r.final_text, "secs": round(time.time() - t0), "ok": r.ok}
@@ -100,7 +106,7 @@ def run_split():
 
     def one(i):
         wt = clone(base / f"repo{i}")
-        runner = gainlib.Recording(EXECUTORS[i][2](), LOG, EXECUTORS[i][0])
+        runner = recorded(EXECUTORS[i][2], EXECUTORS[i][0])
         r = runner.run(TASK.format(cap=cap_executor(len(g[i])), files="\n".join(f"- {f}" for f in g[i])), wt, empty_mcp(base, f"mcp{i}.json"), {}, TURN_TIMEOUT, read_only=True)
         return r.final_text, r.ok, round(time.time() - t0)
 
@@ -131,7 +137,7 @@ def run_council():
     for agent, person, kind in people:
         # the planner is woken once for the request and once for each executor's answer: its budget must cover K + 1 wakes (the default is 6 per ten minutes)
         extra = {"max_wakes": K + 6} if person == "bob" else {}
-        daemons[person] = WorkerDaemon(store, rooms[person], person, {agent: gainlib.Recording(kind(), LOG, agent)}, bundles=bundles, task_timeout_s=TURN_TIMEOUT, claim_timeout_s=TURN_TIMEOUT + 900,
+        daemons[person] = WorkerDaemon(store, rooms[person], person, {agent: recorded(kind, agent)}, bundles=bundles, task_timeout_s=TURN_TIMEOUT, claim_timeout_s=TURN_TIMEOUT + 900,
                                        wake_cooldown_s=0.0, max_wake_depth=4, wake_from=wake_from.get(person, set()), poll_interval_s=0.5, **extra)
     pid, p_person = PLANNER[0], PLANNER[1]
     ex_ids = [a for a, _, _ in EXECUTORS]

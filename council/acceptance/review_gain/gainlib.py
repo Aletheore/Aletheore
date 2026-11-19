@@ -82,11 +82,13 @@ def commands_of(events):
 class Recording:
     """Wraps a runner and keeps what each run did, for the audit: log gets (agent id, commands) after every run."""
 
-    def __init__(self, inner, log, agent):
-        self.inner, self.log, self.agent = inner, log, agent
+    def __init__(self, inner, log, agent, env=None):
+        self.inner, self.log, self.agent, self.env = inner, log, agent, env   # env: called before every run, returns extra environment for that run only
         self.name = getattr(inner, "name", agent)
 
     def run(self, *args, **kwargs):
+        if self.env is not None and len(args) >= 4:
+            args = (*args[:3], {**args[3], **self.env()}, *args[4:])
         r = self.inner.run(*args, **kwargs)
         self.log.append((self.agent, commands_of(getattr(r, "raw_events", []))))
         return r
@@ -111,3 +113,15 @@ def load_manifest(folder, key):
         from cryptography.fernet import Fernet
         return json.loads(Fernet(key.encode()).decrypt(enc.read_bytes()))
     return json.loads((Path(folder) / "manifest.json").read_text())
+
+
+def fresh_codex_home():
+    """A new, empty Codex config folder holding only a link to the sign-in file. Codex keeps notes from its own sessions in ~/.codex/memories; with this, a run
+    cannot read what an earlier run (or an earlier replicate) left there."""
+    import os
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="codex-home-"))
+    auth = Path(os.path.expanduser("~")) / ".codex" / "auth.json"
+    if auth.exists():
+        (d / "auth.json").symlink_to(auth)
+    return d

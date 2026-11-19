@@ -153,3 +153,27 @@ def test_a_recording_runner_keeps_every_commands_for_the_audit():
 def test_the_cap_rate_is_a_setting():
     assert gainlib.cap_for(23, "per-file", rate=3) == 69 and gainlib.cap_for(6, "per-file", rate=3) == 18 and gainlib.cap_for(5, "per-file", rate=2.5) == 13
     assert gainlib.cap_for(23, "per-file") == 35          # the default is unchanged
+
+
+def test_a_recording_runner_can_give_each_run_its_own_environment():
+    from types import SimpleNamespace
+    seen, counter = [], iter(range(10))
+    inner = SimpleNamespace(name="codex", run=lambda inst, wt, mcp, env, t, **k: seen.append(dict(env)) or SimpleNamespace(ok=True, final_text="x", exit_code=0, raw_events=[]))
+    rec = gainlib.Recording(inner, [], "alice-codex", env=lambda: {"CODEX_HOME": f"/fresh/{next(counter)}"})
+    rec.run("p", None, None, {"KEEP": "1"}, 5)
+    rec.run("p", None, None, {}, 5)
+    assert seen[0] == {"KEEP": "1", "CODEX_HOME": "/fresh/0"} and seen[1] == {"CODEX_HOME": "/fresh/1"}
+
+
+def test_a_fresh_codex_home_links_only_the_sign_in_file(tmp_path, monkeypatch):
+    real = tmp_path / ".codex"
+    real.mkdir()
+    (real / "auth.json").write_text("{}")
+    (real / "config.toml").write_text("model='x'")
+    (real / "memories").mkdir()
+    (real / "memories" / "MEMORY.md").write_text("notes")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = gainlib.fresh_codex_home()
+    names = sorted(p.name for p in home.iterdir())
+    assert names == ["auth.json"] and (home / "auth.json").is_symlink() and home != real
+    assert gainlib.fresh_codex_home() != home                     # a new one every time: nothing accumulates between runs
