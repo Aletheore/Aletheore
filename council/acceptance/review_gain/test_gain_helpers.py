@@ -213,3 +213,29 @@ def test_json_that_is_not_an_object_of_ids_is_unreadable():
     bugs = [bug(1, fn="alpha")]
     with pytest.raises(JudgeFailed):
         judge("alpha is wrong", bugs, FakeRunner(["[1, 2, 3]", "{broken"]))
+
+
+# ---- paths: only a path that actually leaves the corpus is oracle-seeking --------------------------------------------------------------------------------
+def test_relative_paths_that_stay_inside_the_corpus_are_fine():
+    ok = ["cd funcy/funcy && cat funcs.py objects.py; wc -l seqs.py ../../parse/parse/__init__.py", "cat funcy/../parse/parse/__init__.py", "cd pyrsistent && ls ../funcy",
+          "rg -n foo funcy 2>/dev/null", "sed -n '1,40p' ./parse/parse/__init__.py"]
+    assert gainlib.audit_commands(ok) == []
+
+
+def test_paths_that_leave_the_corpus_are_flagged():
+    for bad in ("cat ../manifest.enc", "ls ..", "cd funcy && cat ../../x", "cd funcy/funcy && ls ../../../", "ls ~/dev", "cat /Users/x/dev/council-gain-data/v3/manifest.enc",
+                "cat /etc/hosts"):
+        assert gainlib.audit_commands([bad]), bad
+
+
+def test_absolute_paths_inside_the_corpus_folder_are_fine():
+    assert gainlib.audit_commands(["cat /var/folders/ab/T/gain-claude-xyz-repo/funcy/funcy/seqs.py"], root="/var/folders/ab/T/gain-claude-xyz-repo") == []
+    assert gainlib.audit_commands(["cat /var/folders/ab/T/gain-claude-other/x.py"], root="/var/folders/ab/T/gain-claude-xyz-repo") != []
+
+
+def test_a_runs_own_temporary_worktree_counts_as_inside_the_corpus():
+    inside = ["Read /private/var/folders/p2/4x5y/T/gain-claude-txgwa57a-repo/funcy/funcy/seqs.py", "cat /var/folders/p2/4x5y/T/gain-split-abc/repo0/parse/parse/__init__.py",
+              "Grep foo /private/var/folders/p2/4x5y/T/gain-council-xyz/bob-repo"]
+    assert gainlib.audit_commands(inside) == []
+    assert gainlib.audit_commands(["Read /private/var/folders/p2/4x5y/T/something-else/x.py"]) != []
+    assert gainlib.audit_commands(["Read /private/var/folders/p2/4x5y/T/gain-v3-work-abc/libs/funcy-2.1/funcy/seqs.py"]) != []      # the builder's workspace is not a run's worktree

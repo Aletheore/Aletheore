@@ -46,7 +46,7 @@ _ORACLE = [
     (re.compile(r"pip(3)?\s+(download|install|show|list)|\buv\s+pip|npm\s+(view|pack|install)"), "fetches or lists packages"),
     (re.compile(r"\b(curl|wget)\b|https?://"), "uses the network"),
     (re.compile(r"\.codex|\.claude|memories|MEMORY\.md"), "reads the agent's own memory or settings"),
-    (re.compile(r"council-gain-data|/dev/|\.\./"), "reads outside the corpus"),
+    (re.compile(r"council-gain-data|~/dev\b|/Users/[^/\s]+/dev\b"), "reads the experiment's data folder"),
 ]
 
 
@@ -61,17 +61,51 @@ def audit_notes(commands):
     return [(c, why) for c in commands for rx, why in _NOTES if rx.search(c)]
 
 
-def audit_commands(commands):
+_CD = re.compile(r"\bcd\s+([^\s;&|]+)")
+_TOKENS = re.compile(r"[^\s;&|<>()]+")
+_RUN_TREE = re.compile(r"^/(private/)?var/folders/[^/]+/[^/]+/T/gain-(claude|codex|split|council)[\w.-]*(/|$)")   # a run's own throwaway worktree
+_SAFE_ABS = ("/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/usr/bin/", "/bin/", "/usr/local/bin/", "/opt/homebrew/bin/")
+
+
+def _leaves_corpus(command, root):
+    """Does any path in the command leave the corpus? Relative paths are resolved from the corpus root (or from the folder a `cd` moved to); absolute ones must be under `root`
+    when it is known. Paths to system programs and /dev/null are ignored."""
+    import posixpath
+    cwd = "."
+    m = _CD.search(command)
+    if m and not m.group(1).startswith(("/", "~")):
+        cwd = posixpath.normpath(m.group(1))
+    for tok in _TOKENS.findall(command):
+        tok = tok.strip("\"'`,")
+        if tok.startswith(_SAFE_ABS):
+            continue
+        if tok.startswith("~/") or tok == "~":
+            return True
+        if tok.startswith("/"):
+            if _RUN_TREE.match(tok):
+                continue
+            if root is None or not (tok.rstrip("/") == root.rstrip("/") or tok.startswith(root.rstrip("/") + "/")):
+                return True
+            continue
+        if ".." in tok.split("/"):
+            full = posixpath.normpath(posixpath.join(cwd, tok))
+            if full == ".." or full.startswith("../"):
+                return True
+    return False
+
+
+def audit_commands(commands, root=None):
     """Commands (shell lines, or 'Read path' / 'Grep pattern path') that look like a search for an oracle: another copy of the code, the answer key, the clone's origin,
-    the network, or anything outside the corpus. Returns [(command, reason)]."""
+    the network, or anything outside the corpus. `root` is the corpus folder when known (then absolute paths must stay under it). Returns [(command, reason)]."""
     out = []
     for c in commands:
         if _OWN_TOOL_RESULT.search(c):
             continue   # Claude Code saves a large tool output to a file in its own session folder and reads it back: that is not a search for anything
-        for rx, why in _ORACLE:
-            if rx.search(c):
-                out.append((c, why))
-                break
+        why = next((w for rx, w in _ORACLE if rx.search(c)), None)
+        if why is None and _leaves_corpus(c, root):
+            why = "reads outside the corpus"
+        if why:
+            out.append((c, why))
     return out
 
 
