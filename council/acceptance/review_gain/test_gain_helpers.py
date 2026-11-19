@@ -177,3 +177,12 @@ def test_a_fresh_codex_home_links_only_the_sign_in_file(tmp_path, monkeypatch):
     names = sorted(p.name for p in home.iterdir())
     assert names == ["auth.json"] and (home / "auth.json").is_symlink() and home != real
     assert gainlib.fresh_codex_home() != home                     # a new one every time: nothing accumulates between runs
+
+
+def test_claude_reading_back_its_own_saved_tool_output_is_not_oracle_seeking():
+    own = "Read /Users/x/.claude/projects/-private-var-gain-claude-abc-repo/597d52dd-eb25-4ed5-8c92-720a15736f22/tool-results/bcn45.txt"
+    assert gainlib.audit_commands([own]) == []
+    # but its memory, settings and other projects' files still are
+    for bad in ("Read /Users/x/.claude/projects/-private-var-gain-claude-abc-repo/memory/MEMORY.md", "Read /Users/x/.claude/CLAUDE.md",
+                "Read /Users/x/.claude/projects/-Users-x-Aletheore/abc/notes.md", "cat ~/.claude/settings.json"):
+        assert gainlib.audit_commands([bad]), bad
