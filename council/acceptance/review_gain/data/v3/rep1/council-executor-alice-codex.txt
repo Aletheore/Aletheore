@@ -1,0 +1,16 @@
+funcy/funcy/_inspect.py:173 — _sig_to_spec treats ordinary parameters as **kwargs and skips their arity and names. Change the comparison to == so only VAR_KEYWORD sets varkw. At line 177, *args should contribute to max_n without increasing req_n, matching _code_to_spec.
+
+funcy/funcy/calc.py:98 — CacheMemory.expire crashes on an invalidated key and can evict a fresh replacement for the same key. Change or to and so eviction requires an existing entry whose expiry is at or before the queued timestamp.
+
+funcy/funcy/colls.py:106 — join_with raises IndexError for a single input in non-strict mode. Return dicts[0].
+funcy/funcy/colls.py:323 — del_in repeats the current path segment during recursion, leaving nested keys undeleted. Pass path[1:].
+
+funcy/funcy/debug.py:147 — format_time never uses milliseconds because the preceding branch already handles all values below zero. Use sec < 1 for the millisecond branch.
+funcy/funcy/debug.py:204 — _format_error lets KeyboardInterrupt and SystemExit fall through as raw objects, so log_calls and log_exits can mask them with TypeError. Format BaseException instances.
+funcy/funcy/debug.py:241 — smart_repr truncates short values and raises TypeError when max_len=None, breaking successful call logging. Truncate only when max_len is not None and len(res) exceeds it.
+
+funcy/funcy/decorators.py:118 — arggetter slices backward over keyword-only parameters, so explicitly supplied values can appear missing or fall back to defaults. End the slice at n + code.co_kwonlyargcount.
+
+funcy/funcy/flow.py:154 — limit_error_rate adds zero on every failure, so positive failure thresholds never trip. Increment wrapper.fails by one.
+
+@bob-claude Review complete for my six assigned files.

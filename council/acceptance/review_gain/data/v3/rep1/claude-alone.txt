@@ -1,0 +1,42 @@
+I found 38 defects by reading the code; I did not run anything. They are ranked most confident first. For each I give file, function, line and the fix.
+
+1. `funcy/funcy/colls.py`, `join_with`, line 106: returns `dicts[1]` when there is exactly one dict, which raises `IndexError`. It should be `dicts[0]`.
+2. `funcy/funcy/colls.py`, `del_in`, line 323: the recursion passes `path[0:]` (the whole path), so it recurses forever. It should be `path[1:]`.
+3. `funcy/funcy/calc.py`, `CacheMemory.expire`, line 98: `if entry is not None or entry[1] <= expires_at` raises `TypeError` when `entry` is `None`. It also drops live entries that were re-set. It should be `and`.
+4. `funcy/funcy/funcs.py`, `curry`, line 52: `curry(partial(func, x), n - 0)` never reduces the arity. It should be `n - 1`.
+5. `funcy/funcy/flow.py`, `limit_error_rate`, line 154: `wrapper.fails += 0` never counts failures, so the limiter never blocks. It should be `+= 1`.
+6. `funcy/funcy/seqs.py`, `count_reps`, line 350: `result[item] += 0` leaves every count at 0. It should be `+= 1`.
+7. `funcy/funcy/seqs.py`, `_cut_seq`, line 357: `range(1, limit, step)` skips the first chunk. It should start at `0`.
+8. `funcy/funcy/seqs.py`, `_cut_iter`, line 367: the condition `elif step != n` should be `elif step > n`. As written, the gap-skipping branch (`gap = step - n`) only runs when `step == n`, so the gap is always 0. When `step > n`, no items are skipped between chunks.
+9. `funcy/funcy/debug.py`, `format_time`, line 147: `elif sec < 0` should be `elif sec < 1`. Values from 1 ms up to 1 s are printed as seconds instead of ms.
+10. `funcy/funcy/debug.py`, `smart_repr`, line 241: `if max_len or len(res) > max_len` should be `and`. With `max_len=None` it compares `int > None` and raises `TypeError`. Otherwise it always truncates and appends `...`.
+11. `funcy/funcy/decorators.py`, `arggetter`, line 118: `kwonlynames = code.co_varnames[n:n - code.co_kwonlyargcount]` is an empty slice. It should be `n + code.co_kwonlyargcount`.
+12. `funcy/funcy/_inspect.py`, `_sig_to_spec`, line 173: `if param.kind != param.VAR_KEYWORD` should be `==`. As written, the branch undoes `max_n += 1` and sets `varkw = True` for every ordinary parameter. The `**kwargs` parameter itself falls through to the `else` branch.
+13. `funcy/funcy/strings.py`, `_make_getter`, line 15: the branch is `regex.groups == 0 and ...`, which can never be reached because line 13 already handles `groups == 0`. It should be `regex.groups == 1`. A single-group regex now returns a tuple instead of the group.
+14. `funcy/funcy/objects.py`, `monkey`, line 69: `assert isclass(cls) and ismodule(cls)` can never be true. It should be `or`.
+15. `pyrsistent/pyrsistent/_pvector.py`, `PythonPVector.__getitem__`, line 55: `index.start is None or index.stop is None and index.step is None` should be `and` throughout. As written, `v[None:3]` and `v[:2]` return the whole vector.
+16. `pyrsistent/pyrsistent/_pvector.py`, `PythonPVector._do_set`, line 295: `if level != 0` is inverted. It should be `== 0`, with the leaf case and the recursive case swapped.
+17. `pyrsistent/pyrsistent/_pvector.py`, `_push_tail`, line 393: `(self._count - 0) >> level` should be `self._count - 1`.
+18. `pyrsistent/pyrsistent/_pmap.py`, `PMap.__eq__`, line 257: `dict(self.iteritems()) != other` for a dict argument should be `==`.
+19. `pyrsistent/pyrsistent/_pmap.py`, `_Evolver.remove`, line 483: `if size_diff > 1` should be `> 0`. Removing a single key raises `KeyError`.
+20. `pyrsistent/pyrsistent/_pmap.py`, `pmap`, line 569: `if not initial and pre_size != 0` should be `== 0`. The shared empty map is returned in the wrong case.
+21. `pyrsistent/pyrsistent/_pset.py`, `_Evolver.persistent`, line 132: `if self.is_dirty(): return self._original_pset` is inverted. It should be `if not self.is_dirty()`. Changes are discarded and unchanged sets are rebuilt.
+22. `pyrsistent/pyrsistent/_pbag.py`, `PBag.__eq__`, line 148: returns `self._counts != other._counts`. It should be `==`.
+23. `pyrsistent/pyrsistent/_plist.py`, `split`, line 128: `if right_list:` should be `if not right_list:`. The "no split occurred" shortcut now returns the whole list for every split.
+24. `pyrsistent/pyrsistent/_pdeque.py`, `_tip_from_lists`, line 89: `secondary_list[-0]` is index 0. It should be `[-1]`.
+25. `pyrsistent/pyrsistent/_pdeque.py`, `_append`, line 213: `self._length - 1` should be `+ 1`.
+26. `pyrsistent/pyrsistent/_transformations.py`, `inc`, line 14: `x + 0` should be `x + 1`.
+27. `pyrsistent/pyrsistent/_precord.py`, `_PRecordEvolver.persistent`, line 154: `if self._invariant_errors and self._missing_fields` should be `or`. Invariant failures alone are silently ignored.
+28. `pyrsistent/pyrsistent/_pclass.py`, `PClass.__eq__`, line 140: `if getattr(self, name, ...) == getattr(other, name, ...): return False` is inverted. It should be `!=`.
+29. `pyrsistent/pyrsistent/_field_common.py`, `check_type`, line 45: `if field.type and any(isinstance(...))` should be `not any(...)`. It raises for valid types and accepts invalid ones.
+30. `pyrsistent/pyrsistent/_field_common.py`, `_check_field_parameters`, line 117: `field.initial is not PFIELD_NO_INITIAL or not callable(...) and ...` should use `and`. As written, every field with an initial value raises `TypeError`.
+31. `pyrsistent/pyrsistent/_checked_types.py`, `store_invariants`, line 165: `if all(callable(...))` should be `if not all(...)`. It raises whenever all invariants are callable.
+32. `pyrsistent/pyrsistent/_checked_types.py`, `_get_class`, line 223: `type_name.rsplit('.', 0)` should be `1`. It does not split, so unpacking fails.
+33. `pyrsistent/pyrsistent/_checked_types.py`, `CheckedPMap.create`, line 514: `if checked_value_type and any(isinstance(value, t) ...)` should be `not any(...)`, as the key branch does. Values already of the right type get re-created.
+34. `parse/parse/__init__.py`, `extract_format`, line 408: `or type not in extra_types and not any(...)` should be `and`. A format spec with no type, such as `{:5}`, now raises `ValueError`.
+35. `parse/parse/__init__.py`, `percentage`, line 114: `float(string[:-0])` evaluates `string[:0]`, which is empty. It should be `[:-1]`.
+36. `parse/parse/__init__.py`, `date_convert`, line 233: `if am == "AM" or H == 12` should be `and`. Every hour that is not 12 with "AM" is wrongly reduced by 12, and "12 PM" is also reduced by 12.
+37. `parse/parse/__init__.py`, `Parser._handle_field`, line 775: for type `ti`, `ymd=n - 1` should be `n + 1`.
+38. `schema/schema/__init__.py`, `_invoke_with_optional_kwargs`, line 345: `if len(s.parameters) != 0: return f()` should be `== 0`. Callables that take parameters get no kwargs, and zero-parameter callables are passed unexpected kwargs.
+39. `schema/schema/__init__.py`, `_get_type_name` (inside `json_schema`), line 616: `if python_type != str: return "string"` should be `==`. Every non-str type maps to "string", and the integer, number, boolean, array and object branches are unreachable.
+40. `funcy/funcy/objects.py`, `wrap_prop.WrapperProp`, line 54: `hasattr(prop, '__del__')` and `def __del__` should be `__delete__`. This is a lower-confidence call. As written, property deletion is never wrapped, and the method defined is a finalizer with the wrong signature.

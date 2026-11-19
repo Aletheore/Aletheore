@@ -1,0 +1,17 @@
+Here are the defects I found, most confident first. I read the code without running it.
+
+1. **`pyrsistent/pyrsistent/_pdeque.py`, `PDeque._append`, line 213.** It returns `self._length - 1` for the non-full case. Appending an element should increase the length, so this should be `self._length + 1`. As written, `len()` shrinks on every append, and it goes negative on a fresh deque.
+
+2. **`pyrsistent/pyrsistent/_pdeque.py`, `PDeque._tip_from_lists`, line 89.** It uses `secondary_list[-0]`, which is index 0. The secondary list is the reversed opposite side, so the tip is its last element and this should be `secondary_list[-1]`. As written, `left` or `right` returns the wrong element whenever the primary list is empty.
+
+3. **`pyrsistent/pyrsistent/_pbag.py`, `PBag.__eq__`, line 148.** It returns `self._counts != other._counts`. The docstring says equal bags compare `True`, so this should be `==`.
+
+4. **`pyrsistent/pyrsistent/_pset.py`, `PSet._Evolver.persistent`, line 132.** The condition is `if self.is_dirty(): return self._original_pset`. It is inverted. It should be `if not self.is_dirty()`. As written, any modified evolver throws away its changes and returns the original set. That breaks `add`, `update`, `remove` and `discard`.
+
+5. **`funcy/funcy/strings.py`, `_make_getter`, line 15.** The second branch tests `regex.groups == 0 and regex.groupindex == {}`. The first branch has already handled `groups == 0`, so this branch can never run. It should be `regex.groups == 1 and regex.groupindex == {}`. As written, a single-group regex returns the tuple from `groups()` instead of the group string.
+
+6. **`funcy/funcy/calc.py`, `CacheMemory.expire`, line 98.** The test is `entry is not None or entry[1] <= expires_at`. When `entry` is `None`, the `or` evaluates `entry[1]` and raises `TypeError`. It also pops entries that have been refreshed and haven't expired yet. It should be `and`.
+
+7. **`schema/schema/__init__.py`, `_invoke_with_optional_kwargs`, line 345.** The check is `if len(s.parameters) != 0: return f()`. It is inverted. It should be `== 0`. As written, a callable that takes parameters is called with no arguments, which raises. A callable with none gets `**kwargs`, which also raises if any are passed.
+
+8. **`schema/schema/__init__.py`, `_get_type_name`, line 616.** The first test is `python_type != str`, which returns `"string"` for every type except `str`. It should be `== str`. As written, `int`, `float` and the other types never reach their own branches. `str` itself falls through to the final `return "string"`, so it still comes out right.

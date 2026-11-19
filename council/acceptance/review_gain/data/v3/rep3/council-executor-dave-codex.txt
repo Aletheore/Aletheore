@@ -1,0 +1,18 @@
+pyrsistent/pyrsistent/_checked_types.py:165, store_invariants — Raises when every invariant is callable, including when the list is empty. This blocks class creation during import. Raise only if any invariant is non-callable.
+pyrsistent/pyrsistent/_checked_types.py:273, _checked_type_create — Always passes `ignore_extra` to nested factories. An outer checked vector containing an inner checked map raises `TypeError` because `CheckedPMap.create` lacks that keyword. Pass it only to factories that accept it.
+pyrsistent/pyrsistent/_checked_types.py:514, CheckedPMap.create — Converts values that already match an allowed type and skips raw values that need conversion. Negate the `any(isinstance(...))` check, as the key branch does.
+
+pyrsistent/pyrsistent/_field_common.py:41, check_type — Rejects matching values and accepts mismatches. Raise only when a type is declared and no allowed type matches.
+pyrsistent/pyrsistent/_field_common.py:137, _check_field_parameters — The `or` rejects every explicit default, including valid values and callable defaults. Use `and` and resolve type strings before checking concrete defaults.
+pyrsistent/pyrsistent/_field_common.py:189, _make_seq_field_type — The cache ignores `item_invariant`, so fields with the same item type reuse the first field’s validation rules. Include the invariant in the generated type’s identity and preserve that identity through pickle restoration.
+
+pyrsistent/pyrsistent/_pbag.py:148, PBag.__eq__ — Equal counts compare unequal and differing counts compare equal. Compare the count maps with `==`.
+
+pyrsistent/pyrsistent/_pclass.py:156, PClass.__eq__ — Returns false on matching fields and true when every field differs. Return false on the first mismatch.
+pyrsistent/pyrsistent/_pclass.py:49, PClass.__new__ — Consumes the public field name `ignore_extra` as an internal option. Direct construction loses that field, and `create()` raises on duplicate keyword arguments. Pass the option through a private construction path.
+
+pyrsistent/pyrsistent/_pdeque.py:89, PDeque._tip_from_lists — `[-0]` reads the head of the opposite list, which is stored in reverse order. Read its last element.
+pyrsistent/pyrsistent/_pdeque.py:213, PDeque._append — Appending to a deque below capacity decrements its recorded length. Increment it by one.
+pyrsistent/pyrsistent/_pdeque.py:328, PDeque.__getitem__ — Modulo wraps slice bounds and divides by zero on empty deques. Normalize unit-step bounds with `slice.indices()` and return an empty deque when the normalized stop is at or before the start.
+
+@bob-claude review complete.

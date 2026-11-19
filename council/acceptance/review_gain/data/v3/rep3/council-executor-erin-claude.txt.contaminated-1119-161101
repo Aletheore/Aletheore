@@ -1,0 +1,22 @@
+I reviewed my five files. I found 3 defects in `_pmap.py`, 1 each in `_pset.py`, `_precord.py` and `_transformations.py`, and 3 in `_pvector.py`. I only read the code and did not run anything.
+
+**pyrsistent/pyrsistent/_pmap.py**
+1. `PMap.__eq__`, line 257: the `isinstance(other, dict)` branch returns `dict(self.iteritems()) != other`, so a PMap compares equal to a plain dict only when they differ. It should use `==`.
+2. `PMap._Evolver.remove`, line 483: the guard is `if size_diff > 1:`, so removing a single key (`size_diff == 1`) falls through to `raise KeyError`. It should be `if size_diff > 0:` (or `>= 1`).
+3. `pmap()`, line 570: `if not initial and pre_size != 0: return _EMPTY_PMAP` has the test inverted. An empty call with no `pre_size` builds a new map, and an empty call with a `pre_size` returns the shared empty map. It should be `pre_size == 0`.
+
+**pyrsistent/pyrsistent/_pset.py**
+1. `PSet._Evolver.persistent`, line 132: `if self.is_dirty(): return self._original_pset` is inverted. A modified evolver returns the original set and drops the changes, and an unmodified one wraps a new PSet. It should be `if not self.is_dirty():`.
+
+**pyrsistent/pyrsistent/_precord.py**
+1. `_PRecordEvolver.persistent`, line 161: `if self._invariant_error_codes and self._missing_fields:` raises only when both a field invariant failure and a missing mandatory field occur. A failed field invariant on its own, or a missing mandatory field on its own, goes unreported here. It should be `or`.
+
+**pyrsistent/pyrsistent/_pvector.py**
+1. `PythonPVector.__getitem__`, line 55: `index.start is None or index.stop is None and index.step is None` returns `self` for any slice with no start, such as `v[:3]` or `v[::2]`. It should be `index.start is None and index.stop is None and index.step is None`.
+2. `PythonPVector._do_set`, line 295: `if level != 0:` is inverted. At a leaf it recurses into `node[sub_index]`, and at an inner level it writes the value into the wrong slot. It should be `if level == 0:`. This breaks `set` and `mset` for any index in the trie, meaning vectors longer than 32 elements.
+3. `PythonPVector._push_tail`, line 393: `sub_index = ((self._count - 0) >> level) & BIT_MASK` should be `(self._count - 1) >> level`. Appends that push the tail into a multi-level trie go to the wrong child once the vector is large (more than about 1024 elements).
+
+**pyrsistent/pyrsistent/_transformations.py**
+1. `inc`, line 14: `return x + 0` should be `return x + 1`.
+
+@bob-claude: my review of the 5 assigned pyrsistent files (`_pmap.py`, `_precord.py`, `_pset.py`, `_pvector.py`, `_transformations.py`) is above.

@@ -1,0 +1,12 @@
+- pyrsistent/pyrsistent/_checked_types.py:165, store_invariants — The callable check is inverted. It rejects valid invariants and even empty invariant lists, breaking import. Raise only if any invariant is noncallable.
+- pyrsistent/pyrsistent/_checked_types.py:223, _get_class — `rsplit('.', 0)` leaves the string intact, so unpacking a qualified type name fails. Split once from the right.
+- pyrsistent/pyrsistent/_checked_types.py:514, CheckedPMap.create — Nested value conversion runs when the value already matches an allowed type. Run it only when no allowed type matches.
+- pyrsistent/pyrsistent/_field_common.py:41, check_type — Valid field values raise `PTypeError`, while mismatched values pass. Raise only when types are declared and none match.
+- pyrsistent/pyrsistent/_field_common.py:137, _check_field_parameters — Every explicit initial value raises `TypeError`. Validate only a supplied, noncallable default that has declared types.
+- pyrsistent/pyrsistent/_pbag.py:148, PBag.__eq__ — Equality returns true for different counts and false for identical counts. Compare the count maps with `==`.
+- pyrsistent/pyrsistent/_pclass.py:156, PClass.__eq__ — An equal field causes equality to fail. Return false when a field differs.
+- pyrsistent/pyrsistent/_pdeque.py:89, PDeque._tip_from_lists — `-0` is `0`, so the fallback reads the wrong end of the secondary list. Use `secondary_list[-1]`.
+- pyrsistent/pyrsistent/_pdeque.py:213, PDeque._append — Appending below capacity subtracts one from the stored length. Add one.
+- pyrsistent/pyrsistent/_pdeque.py:328, PDeque.__getitem__ — Unit-step slicing wraps bounds and divides by zero on an empty deque with explicit bounds. Normalize bounds with `slice.indices()` before trimming.
+
+@bob-claude review complete for all five assigned files.

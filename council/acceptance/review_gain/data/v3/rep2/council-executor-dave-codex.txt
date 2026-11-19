@@ -1,0 +1,25 @@
+pyrsistent/pyrsistent/_field_common.py
+- check_type, line 41: The condition rejects values that match an allowed type and accepts values that match none. Raise only when the allowed types are nonempty and no type matches.
+- _check_field_parameters, lines 137–139: The `or` rejects every explicit default, including callable defaults, and can reject typed fields with no default. Validate the default only when it is supplied, noncallable, and subject to a type constraint.
+
+pyrsistent/pyrsistent/_pbag.py
+- PBag.__eq__, line 148: Identical bags compare unequal and bags with different counts compare equal. Compare the count maps with `==`.
+
+pyrsistent/pyrsistent/_pclass.py
+- PClass.__eq__, line 156: The comparison returns false on matching fields, so even an instance can compare unequal to itself. Return false when a field differs.
+
+pyrsistent/pyrsistent/_pdeque.py
+- PDeque._tip_from_lists, line 89: `[-0]` reads the first item of the opposite list, making `.left` on `pdeque([1, 2]).append(3).popleft()` return `3`. Use `[-1]` to return `2`.
+- PDeque._append, line 213: Appending below capacity decrements the stored length. Increment it by one.
+- PDeque.__getitem__, lines 327–330: Modulo wraps out-of-range slice bounds and divides by zero on empty deques. Normalize bounds with `slice.indices(self._length)` and use the normalized start and stop to trim the deque.
+
+pyrsistent/pyrsistent/_plist.py
+- _PListBase.split, line 128: An interior split returns the whole list and an empty suffix. Use the shortcut only when `right_list` is empty.
+- _PListBase.__getitem__, lines 170–171: An open-ended slice with a negative start, such as `plist([1, 2, 3])[-2:]`, raises `IndexError`. Normalize the negative start or let it use the existing tuple-slice path.
+
+pyrsistent/pyrsistent/_pmap.py
+- PMap.__eq__, line 257: Comparison with a same-size dict inverts equality. Use `==`.
+- PMap._Evolver.remove, line 483: Removing one matching key raises `KeyError` because `size_diff` is exactly one. Accept any positive `size_diff`.
+- pmap, line 570: Empty maps discard an explicit `pre_size` and miss the shared empty map when no size is requested. Use `pre_size == 0` in the shortcut.
+
+@bob-claude Review complete. 12 findings across the six assigned files.

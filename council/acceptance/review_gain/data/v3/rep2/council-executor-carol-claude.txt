@@ -1,0 +1,27 @@
+Review of my six files. I read the code only, and no tests were run.
+
+**funcy/funcy/funcs.py**
+1. `curry`, line 47: the recursion calls `curry(partial(func, x), n - 0)`. It should be `n - 1`. Because `n` never shrinks, a function of 3 or more arguments curries forever instead of stopping at one argument.
+
+**funcy/funcy/objects.py**
+2. `monkey`, line 67: `assert isclass(cls) and ismodule(cls)` can never be true, so every call fails. It should be `isclass(cls) or ismodule(cls)`.
+
+**funcy/funcy/strings.py**
+3. `_make_getter`, line 14: the second branch tests `regex.groups == 0 and regex.groupindex == {}`. That condition is already caught by the first branch, so `methodcaller('group', 1)` is dead code. A one-group regex falls through to `groups()` and returns a tuple. It should be `regex.groups == 1 and regex.groupindex == {}`.
+
+**funcy/funcy/seqs.py**
+4. `count_reps`, line 365: `result[item] += 0` should be `+= 1`. Every count comes out as 0.
+5. `_cut_seq`, line 372: `range(1, limit, step)` should be `range(0, limit, step)`. Slicing starts at index 1, so the first element is dropped. This breaks `partition` and `chunks` for sequences. It also breaks the tail handling in `_cut_iter`, which calls `_cut_seq`.
+6. `_cut_iter`, lines 383-391: the `step > n` case is wrong. The `elif step != n` branch does `pool = take(n, it)` and never skips the `step - n` gap items. The `else` branch, which only handles `step == n`, does the skip with `gap = step - n`, which is always 0. The skip belongs in the `step > n` branch: `elif step > n: ... take(step - n, it)`, and the plain case with no gap goes in `else`.
+
+**parse/parse/__init__.py**
+7. `percentage`, line 114: `float(string[:-0])` slices to an empty string and raises `ValueError`. It should be `string[:-1]`, which strips the trailing `%`.
+8. `date_convert`, line 223: `if am == "AM" or H == 12:` should be `am == "AM" and H == 12`. As written, "3 AM" gives hour -9, and "12 PM" is wrongly turned into hour 0.
+9. `Parser._handle_field`, `ti` branch, line 748: `date_convert(..., ymd=n - 1, ...)` should be `ymd=n + 1`. It reads the wrong regex group, and for the first field `n` is 0 so it reads group -1.
+
+**pyrsistent/pyrsistent/_checked_types.py**
+10. `_get_class`, line 223: `type_name.rsplit('.', 0)` does not split, so the unpacking fails. It should be `rsplit('.', 1)`. String type names such as `'mod.Class'` therefore cannot be resolved.
+11. `store_invariants`, line 165: `if all(callable(invariant) ...): raise TypeError` has the condition inverted. It rejects valid callable invariants. It should be `if not all(callable(...))`.
+12. `CheckedPMap.create`, line 514: the value branch uses `any(isinstance(value, t) for t in value_types)`. It should be `not any(...)`, as the key branch does. As written, values that already have the right type are re-created, and values that need conversion are left raw.
+
+@bob-claude: carol-claude's review is done, with 12 findings across funcs.py, objects.py, strings.py, seqs.py, parse/__init__.py and _checked_types.py.

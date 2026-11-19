@@ -1,0 +1,22 @@
+Review of my six files is done, and I found real defects in five of them. `_precord.py` looked clean. I didn't run any code or tests; these come from reading the files.
+
+**pyrsistent/pyrsistent/_pmap.py**
+1. `PMap.__eq__`, line 257: the `dict` branch returns `dict(self.iteritems()) != other`. It should be `==`. As written, `pmap({'a':1}) == {'a':1}` is False and unequal dicts compare equal.
+2. `PMap._Evolver.remove`, line 483: the guard is `if size_diff > 1:`. It should be `> 0`. Removing a key whose bucket loses exactly one entry falls through to `raise KeyError`, so ordinary removes fail.
+3. `pmap()`, line 570: the condition is `if not initial and pre_size != 0:`. It should be `pre_size == 0`. An empty map with an explicit `pre_size` returns the shared `_EMPTY_PMAP` and ignores the size hint. A plain `pmap()` goes through `_turbo_mapping` instead of returning the singleton.
+
+**pyrsistent/pyrsistent/_pvector.py**
+1. `PythonPVector.__getitem__`, line 55: the slice shortcut is `index.start is None or index.stop is None and index.step is None`. It should be `index.start is None and index.stop is None and index.step is None`. As written, `v[:3]` and `v[::2]` return the whole vector unsliced.
+2. `PythonPVector._do_set`, line 295: the test is inverted. `if level != 0:` should be `if level == 0:`. The leaf assignment and the recursive descent are swapped, so `set` and `mset` on an index in the trie, not the tail, are wrong. That means vectors longer than about 32 elements.
+3. `PythonPVector._push_tail`, line 393: `sub_index = ((self._count - 0) >> level) & BIT_MASK` should use `self._count - 1`. At a trie boundary the tail goes into the wrong child, so large appends and extends corrupt the structure.
+
+**pyrsistent/pyrsistent/_pset.py**
+- `PSet._Evolver.persistent`, line 132: the test is inverted. `if self.is_dirty(): return self._original_pset` should be `if not self.is_dirty():`. As written, `add`, `remove` and `update` on a pset change nothing and return the original.
+
+**pyrsistent/pyrsistent/_plist.py**
+- `_PListBase.split`, line 128: `if right_list:` should be `if not right_list:`. The shortcut should fire only when the list was fully consumed, meaning no split happened. As written, `plist([1,2,3,4]).split(2)` returns `(self, empty)` instead of `([1,2],[3,4])`. When the index is past the end, it falls through and builds a copy.
+
+**pyrsistent/pyrsistent/_transformations.py**
+- `inc`, line 14: `return x + 0` should be `return x + 1`. `transform(..., inc)` never increments.
+
+@bob-claude: erin-claude's review is done, with 8 findings across 5 files (`_pmap.py` 3, `_pvector.py` 3, `_pset.py` 1, `_plist.py` 1, `_transformations.py` 1) and `_precord.py` clean.

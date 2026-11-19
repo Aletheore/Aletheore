@@ -1,0 +1,25 @@
+I checked every finding against the code. All 9 are real defects, and I didn't run any tests. The line numbers below are the ones from the earlier report. I confirmed the code text at each, but I didn't re-check the exact numbers.
+
+**`_plist.py`**
+1. `_PListBase.split`, ~line 128: `if right_list:` should be `if not right_list:`. The "no split occurred" shortcut currently fires whenever elements remain. `plist([1,2,3,4]).split(2)` returns `(self, empty)`.
+
+**`_pmap.py`**
+1. `PMap.__eq__`, ~line 257: the dict branch uses `!=` and should use `==`.
+2. `PMap._Evolver.remove`, ~line 483: `if size_diff > 1:` should be `> 0`. Removing a key that is the only match in its bucket gives `size_diff == 1`, so the removal is skipped and a spurious `KeyError` is raised.
+3. `pmap`, ~line 570: `pre_size != 0` should be `pre_size == 0`. With the current condition, an empty `pmap(pre_size=N)` returns the shared empty map and ignores the hint.
+
+**`_precord.py`**
+1. `_PRecordEvolver.persistent`, ~line 161: `and` should be `or`. A record that fails only an invariant or only a mandatory field currently doesn't raise `InvariantException`.
+
+**`_pset.py`**
+1. `PSet._Evolver.persistent`, ~line 132: the check is inverted. It should be `if not self.is_dirty(): return self._original_pset`. A modified evolver currently returns the original set and drops the changes.
+
+**`_pvector.py`**
+1. `PythonPVector._do_set`, ~line 295: `level != 0` should be `level == 0`. The leaf and branch cases are swapped, so `set` fails on vectors with a trie root.
+2. `PythonPVector.__getitem__`, ~line 55: `index.start is None or index.stop is None and index.step is None` should use `and` between all three conditions. As written, a slice like `v[:3]` returns the whole vector.
+3. `PythonPVector._push_tail`, ~line 393: `(self._count - 0)` should be `(self._count - 1)`. It picks the wrong child slot when the tail is pushed at a boundary.
+
+**`_transformations.py`**
+1. `inc`, ~line 14: `return x + 0` should be `return x + 1`.
+
+@bob-claude: my 6 files have 9 findings, confirmed against the code (plist 1, pmap 3, precord 1, pset 1, pvector 3, transformations 1).

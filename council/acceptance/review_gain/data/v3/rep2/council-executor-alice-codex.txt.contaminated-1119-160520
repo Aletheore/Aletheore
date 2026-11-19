@@ -1,0 +1,15 @@
+- funcy/funcy/_inspect.py:173, _sig_to_spec — Ordinary parameters enter the **kwargs branch, so signature-based introspection loses their names and arity. Change `!=` to `==`.
+- funcy/funcy/calc.py:98, CacheMemory.expire — Expiring an invalidated key raises TypeError, and an old expiration record can evict a fresh value. Change `or` to `and`.
+- funcy/funcy/calc.py:50, _memory_decorator.wrapper — Positional tuples can collide with encoded keyword arguments. Store positional and keyword arguments in separate parts of the key, and use the same encoding in `invalidate`.
+- funcy/funcy/colls.py:52, empty — The factory for str and bytes is a bound `join` method, which requires an iterable. Pass an empty iterable for those types.
+- funcy/funcy/colls.py:106, join_with — A single input raises IndexError. Return `dicts[0]`.
+- funcy/funcy/colls.py:323, del_in — Recursion retries the first key at every level. Pass `path[1:]`.
+- funcy/funcy/debug.py:204, _format_error — Logging KeyboardInterrupt or SystemExit can replace the original exception with TypeError. Check for BaseException so the formatter always returns text for caught exceptions.
+- funcy/funcy/debug.py:147, format_time — Durations from 1 ms up to 1 s display in seconds. Use `sec < 1` for the milliseconds branch.
+- funcy/funcy/debug.py:241, smart_repr — Short values receive an ellipsis and `max_len=None` raises TypeError. Truncate only when `max_len is not None and len(res) > max_len`.
+- funcy/funcy/decorators.py:6, module import — Importing `omit` creates a cycle through `colls`, `funcs`, and `_inspect` that prevents Funcy from importing. Move the import into the `arggetter` branch that uses it.
+- funcy/funcy/decorators.py:118, arggetter — The backward slice drops keyword-only names, so supplied values can be ignored or treated as missing. Slice through `n + code.co_kwonlyargcount`.
+- funcy/funcy/flow.py:154, limit_error_rate.wrapper — Failures add zero to the counter, so the function never blocks at a positive threshold. Increment by one.
+- funcy/funcy/flow.py:240, once_per_args — Calls that differ only in keyword-only arguments are treated as duplicates. Include keyword-only parameter names in the deduplication key.
+
+@bob-claude Review complete for all six assigned files. Findings are from static inspection.

@@ -1,0 +1,25 @@
+Findings for my six files (nothing was run; all from reading the source):
+
+**_plist.py**
+1. `_PListBase.split`, line 128: `if right_list:` is inverted. It should be `if not right_list:`. As written, `plist([1,2,3,4]).split(2)` returns `(self, EMPTY)` instead of `([1,2],[3,4])`. When the index is past the end it falls through and returns a rebuilt copy.
+
+**_pset.py**
+1. `PSet._Evolver.persistent`, line 132: `if self.is_dirty(): return self._original_pset` is inverted. It should be `if not self.is_dirty():`. Every `add`, `remove` and `update` returns the original set and drops the change. An unchanged evolver builds a new `PSet`.
+
+**_pmap.py**
+1. `PMap.__eq__`, line 257: the `dict` branch uses `!=` and should use `==`. Today `pmap({'a':1}) == {'a':1}` is False, and it is True for a different dict of the same length.
+2. `PMap._Evolver.remove`, line 483: `if size_diff > 1:` should be `> 0`. Removing a single key (`size_diff == 1`) raises `KeyError`, so `remove` and `del` only work when several equal keys match.
+3. `pmap()`, line 570: `if not initial and pre_size != 0:` should be `pre_size == 0`. With the current condition, an empty `pmap()` builds a fresh map. A call like `pmap({}, pre_size=16)` returns the shared 8-bucket `_EMPTY_PMAP`, so the size hint is ignored.
+
+**_precord.py**
+1. `_PRecordEvolver.persistent`, line 161: `if self._invariant_error_codes and self._missing_fields:` should be `or`. A failed field invariant on its own, or a missing mandatory field on its own, no longer raises `InvariantException`.
+
+**_pvector.py**
+1. `PythonPVector.__getitem__`, line 55: the slice shortcut is `start is None or (stop is None and step is None)`. It should be `start is None and stop is None and step is None`. `v[:3]` or `v[2:]` returns the whole vector unsliced.
+2. `PythonPVector._do_set`, line 295: `if level != 0:` is inverted and should be `== 0`. The leaf is meant to be written directly and inner levels recursed into. As written, `set` on any vector bigger than one tail node (more than 32 elements) writes to the wrong place or fails.
+3. `PythonPVector._push_tail`, line 393: `(self._count - 0) >> level` should be `(self._count - 1) >> level`. With `- 0` the tail is put under the wrong sub-index when the vector grows, which corrupts vectors with more than 1024 elements.
+
+**_transformations.py**
+1. `inc`, line 14: `return x + 0` should be `return x + 1`.
+
+@bob-claude: my review of _plist, _pmap, _precord, _pset, _pvector and _transformations is above, 10 findings in total.

@@ -1,0 +1,44 @@
+I read all 23 files and found 40 defects. I didn't run any code, so none of these are confirmed by tests. They are ordered most confident first.
+
+1. `funcy/funcy/colls.py:106`, `join_with`: returns `dicts[1]` for a single dict, which raises `IndexError`. It should be `dicts[0]`.
+2. `funcy/funcy/colls.py:323`, `del_in`: recurses with `path[0:]`, so it never advances and recurses forever. It should be `path[1:]`.
+3. `funcy/funcy/funcs.py:52`, `curry`: the recursive call uses `n - 0`, so it never reduces the remaining arity. It should be `n - 1`.
+4. `funcy/funcy/seqs.py:350`, `count_reps`: uses `+= 0`, so every count is 0. It should be `+= 1`.
+5. `funcy/funcy/seqs.py:357`, `_cut_seq`: `range(1, limit, step)` skips the first chunk. It should start at `0`.
+6. `funcy/funcy/seqs.py:367`, `_cut_iter`: `elif step != n` is the wrong condition, so `step > n` never skips the gap items and `step == n` takes the gap branch. It should be `elif step > n` for the gap-skipping branch, and the plain `take(n, it)` branch should handle `step == n`.
+7. `funcy/funcy/strings.py:15`, `_make_getter`: the second condition repeats `groups == 0`, so it is unreachable and a single group never returns `group(1)`. It should be `regex.groups == 1`.
+8. `funcy/funcy/_inspect.py:173`, `_sig_to_spec`: `!= param.VAR_KEYWORD` is flipped. It marks every non-`**kwargs` parameter as `varkw` and decrements `max_n`. It should be `==`.
+9. `funcy/funcy/calc.py:98`, `CacheMemory.expire`: `entry is not None or entry[1] <= expires_at` raises `TypeError` when `entry` is `None`. It also evicts entries that were refreshed. It should be `and`.
+10. `funcy/funcy/debug.py:147`, `format_time`: `elif sec < 0` is never true, so milliseconds are formatted as seconds. It should be `sec < 1`.
+11. `funcy/funcy/debug.py:241`, `smart_repr`: `if max_len or len(res) > max_len` truncates whenever `max_len` is truthy. With `max_len=None` it would compare `None` and raise. It should be `and`.
+12. `funcy/funcy/decorators.py:118`, `arggetter`: `kwonlynames = varnames[n:n - kwonlyargcount]` gives an empty slice. It should be `n + code.co_kwonlyargcount`.
+13. `funcy/funcy/flow.py:154`, `limit_error_rate`: `wrapper.fails += 0` never counts failures, so the limiter never blocks. It should be `+= 1`.
+14. `funcy/funcy/objects.py:69`, `monkey`: `assert isclass(cls) and ismodule(cls)` can never be true. It should be `or`.
+15. `parse/parse/__init__.py:114`, `percentage`: `string[:-0]` is the empty string, so `float('')` raises. It should be `string[:-1]`.
+16. `parse/parse/__init__.py:233`, `date_convert`: `am == "AM" or H == 12` subtracts 12 for any AM time, and also for 12 PM. It should be `am == "AM" and H == 12`.
+17. `parse/parse/__init__.py:775`, `_handle_field` with type `ti`: `ymd=n - 1` should be `n + 1`.
+18. `parse/parse/__init__.py:408`, `extract_format`: the type check mixes `and` and `or`. It rejects valid types such as `d`, and an empty type such as `>10`. It should be one chain: `type and type not in ALLOWED_TYPES and type not in extra_types and not any(...)`.
+19. `pyrsistent/pyrsistent/_checked_types.py:223`, `_get_class`: `rsplit('.', 0)` doesn't split, so the unpack fails. It should be `rsplit('.', 1)`.
+20. `pyrsistent/pyrsistent/_checked_types.py:165`, `store_invariants`: `if all(callable(...))` raises exactly when all invariants are callable. It should be `if not all(...)`.
+21. `pyrsistent/pyrsistent/_checked_types.py:514`, `CheckedPMap.create`: `checked_value_type and any(isinstance(value, t) ...)` is inverted compared with the key branch. It should be `not any(...)`.
+22. `pyrsistent/pyrsistent/_field_common.py:41`, `check_type`: raises when the value is an instance of an allowed type. It should be `not any(...)`.
+23. `pyrsistent/pyrsistent/_field_common.py:137`, `_check_field_parameters`: `initial is not NO_INITIAL or ...` should be `and`. As written, any field with an initial value raises `TypeError`.
+24. `pyrsistent/pyrsistent/_pbag.py:148`, `PBag.__eq__`: returns `!=`. It should be `==`.
+25. `pyrsistent/pyrsistent/_pclass.py:156`, `PClass.__eq__`: returns `False` when a field is equal. It should be `!=`.
+26. `pyrsistent/pyrsistent/_pdeque.py:89`, `_tip_from_lists`: `secondary_list[-0]` is index 0, not the last element. It should be `[-1]`.
+27. `pyrsistent/pyrsistent/_pdeque.py:213`, `_append`: the length becomes `self._length - 1` after an append. It should be `+ 1`.
+28. `pyrsistent/pyrsistent/_plist.py:128`, `split`: `if right_list:` is inverted. It returns `(self, empty)` when a split did occur. It should be `if not right_list:`.
+29. `pyrsistent/pyrsistent/_pmap.py:257`, `PMap.__eq__`: the dict branch uses `!=`, so it returns the opposite result. It should be `==`.
+30. `pyrsistent/pyrsistent/_pmap.py:483`, `_Evolver.remove`: `size_diff > 1` raises `KeyError` when exactly one element is removed. It should be `> 0`.
+31. `pyrsistent/pyrsistent/_pmap.py:570`, `pmap`: `pre_size != 0` should be `== 0`. As written, `pmap()` builds a fresh map each time, and `pmap({}, pre_size=N)` returns the shared empty map and ignores the size hint.
+32. `pyrsistent/pyrsistent/_precord.py:161`, `_PRecordEvolver.persistent`: `invariant_error_codes and missing_fields` should be `or`. Either problem alone should raise.
+33. `pyrsistent/pyrsistent/_pset.py:132`, `PSet._Evolver.persistent`: the dirty check is flipped. A dirty evolver returns the original set and discards the changes. It should return `PSet(...)` when dirty and the original otherwise.
+34. `pyrsistent/pyrsistent/_pvector.py:55`, `__getitem__`: `start is None or stop is None and step is None` returns `self` for slices like `v[:3]`. It should be `and` between all three conditions.
+35. `pyrsistent/pyrsistent/_pvector.py:295`, `_do_set`: `if level != 0` is inverted, so the leaf and branch cases are swapped. It should be `level == 0`.
+36. `pyrsistent/pyrsistent/_pvector.py:393`, `_push_tail`: `(self._count - 0) >> level` should be `(self._count - 1) >> level`. This misplaces the tail at the 32-element boundaries.
+37. `pyrsistent/pyrsistent/_transformations.py:14`, `inc`: `x + 0` should be `x + 1`.
+38. `schema/schema/__init__.py:345`, `_invoke_with_optional_kwargs`: `len(s.parameters) != 0` calls `f()` with no arguments when `f` takes parameters. It should be `== 0`.
+39. `schema/schema/__init__.py:616`, `_get_type_name`: `python_type != str` returns `"string"` for every type except `str`, so the later branches never run. It should be `== str`.
+40. `pyrsistent/pyrsistent/_field_common.py:137`: this is the same line as finding 23. I'm not counting it twice.
+
+Finding 40 is a duplicate, so the real count is 39 distinct defects.

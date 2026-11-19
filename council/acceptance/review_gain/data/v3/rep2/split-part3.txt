@@ -1,0 +1,21 @@
+1. `pyrsistent/pyrsistent/_pmap.py`, `PMap.__eq__`, line 257. When `other` is a plain `dict`, it returns `dict(self.iteritems()) != other`. This is inverted, so `m(a=1) == {'a': 1}` is False. It should use `==`.
+
+2. `pyrsistent/pyrsistent/_pmap.py`, `_Evolver.remove`, line 483. The check is `if size_diff > 1:`. Removing a single key gives `size_diff == 1`, so it falls through and raises `KeyError`. It should be `> 0`.
+
+3. `pyrsistent/pyrsistent/_pmap.py`, `pmap`, line 570. The shortcut is `if not initial and pre_size != 0:`. An empty map with no `pre_size` skips the cached empty map, and an empty map with a `pre_size` returns it, ignoring the size hint. It should be `pre_size == 0`.
+
+4. `pyrsistent/pyrsistent/_checked_types.py`, `store_invariants`, line 165. The check is `if all(callable(...))`, so it raises "Invariants must be callable" when every invariant is callable. It should be `if not all(...)`.
+
+5. `pyrsistent/pyrsistent/_checked_types.py`, `_get_class`, line 223. `type_name.rsplit('.', 0)` never splits, so unpacking into `module_name, class_name` fails. It should be `rsplit('.', 1)`.
+
+6. `pyrsistent/pyrsistent/_checked_types.py`, `CheckedPMap.create`, line 514. The value branch uses `any(isinstance(value, t) ...)`. It converts values that already have a valid type and leaves invalid ones alone. The key branch above it correctly uses `not any`, so the value branch should too.
+
+7. `pyrsistent/pyrsistent/_field_common.py`, `check_type`, line 41. The condition is `any(isinstance(value, get_type(t)) ...)`, so it raises `PTypeError` when the value does have an allowed type. It should be `not any(...)`.
+
+8. `pyrsistent/pyrsistent/_field_common.py`, `_check_field_parameters`, line 137. The condition is `field.initial is not PFIELD_NO_INITIAL or not callable(...) and ...`. Any explicitly given initial value raises "Initial has invalid type". The `or` should be `and`.
+
+9. `pyrsistent/pyrsistent/_pclass.py`, `PClass.__eq__`, line 156. It returns False when a field is equal. It should compare with `!=` (or `not ==`), so that only a differing field returns False.
+
+10. `funcy/funcy/_inspect.py`, `_sig_to_spec`, line 173. The check is `param.kind != param.VAR_KEYWORD`. Every ordinary parameter is treated as `**kwargs`, which decrements `max_n` and sets `varkw`. The `elif` branches are also unreachable for those parameters. It should be `==`.
+
+11. `funcy/funcy/funcs.py`, `curry`, line 52. The recursion calls `curry(partial(func, x), n - 0)`, so `n` never decreases and the recursion never ends. It should be `n - 1`, as in `rcurry`.

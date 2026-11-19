@@ -1,0 +1,74 @@
+@alice-codex @carol-claude @dave-codex @erin-claude: please review your assigned files. Report at most 3 findings per assigned file (rounded up), and only real defects. Give file, function, line, what is wrong, and what it should be.
+
+- @alice-codex: funcy/funcy/_inspect.py, funcy/funcy/calc.py, funcy/funcy/colls.py, funcy/funcy/debug.py, funcy/funcy/decorators.py, funcy/funcy/flow.py
+- @carol-claude: funcy/funcy/funcs.py, funcy/funcy/objects.py, funcy/funcy/seqs.py, funcy/funcy/strings.py, parse/parse/__init__.py, pyrsistent/pyrsistent/_checked_types.py
+- @dave-codex: pyrsistent/pyrsistent/_field_common.py, pyrsistent/pyrsistent/_pbag.py, pyrsistent/pyrsistent/_pclass.py, pyrsistent/pyrsistent/_pdeque.py, pyrsistent/pyrsistent/_plist.py, pyrsistent/pyrsistent/_pmap.py
+- @erin-claude: pyrsistent/pyrsistent/_precord.py, pyrsistent/pyrsistent/_pset.py, pyrsistent/pyrsistent/_pvector.py, pyrsistent/pyrsistent/_transformations.py, schema/schema/__init__.py
+
+=====
+
+Still waiting on @alice-codex, @carol-claude and @dave-codex.
+
+=====
+
+Still waiting on @alice-codex and @carol-claude.
+
+=====
+
+Still waiting on @carol-claude.
+
+=====
+
+Final review (49 findings, most confident first). I combined the four executors' reports from reading the code. I did not run any tests or re-read the code myself.
+
+1. pyrsistent/pyrsistent/_pvector.py:53, `PythonPVector.__getitem__`: the slice shortcut is `start is None or stop is None and step is None`, so `v[:3]` returns the whole vector. It should use `and` throughout.
+2. pyrsistent/pyrsistent/_pvector.py:280, `PythonPVector._do_set`: the `level == 0` and `level != 0` branches are swapped, which corrupts the vector or crashes when setting an index in the trie. At level 0 it should write `ret[i & BIT_MASK] = val`; otherwise it should recurse.
+3. pyrsistent/pyrsistent/_pvector.py:336, `PythonPVector._push_tail`: `(self._count - 0)` should be `(self._count - 1)`. It picks the wrong child slot for vectors of about 1056 or more elements.
+4. pyrsistent/pyrsistent/_pset.py:132, `PSet._Evolver.persistent`: the check is inverted, so changes are discarded. It should be `if not self.is_dirty(): return self._original_pset`.
+5. pyrsistent/pyrsistent/_precord.py:161, `_PRecordEvolver.persistent`: `invariant_error_codes and missing_fields` should be `or`. As written, `InvariantException` is raised only when both conditions hold.
+6. pyrsistent/pyrsistent/_transformations.py:14, `inc`: `x + 0` should be `x + 1`.
+7. schema/schema/__init__.py:345-347, `_invoke_with_optional_kwargs`: `len(s.parameters) != 0` should be `== 0`. The inverted check calls the callable with the wrong arguments.
+8. schema/schema/__init__.py:637, `json_schema._get_type_name`: `python_type != str` should be `== str`. As written, every non-str type maps to "string".
+9. funcy/funcy/funcs.py:47, `curry`: `n - 0` should be `n - 1`. As written, it recurses forever for functions of 3 or more arguments.
+10. funcy/funcy/objects.py:67, `monkey`: `isclass(cls) and ismodule(cls)` can never be true. It should be `or`.
+11. funcy/funcy/strings.py:14, `_make_getter`: `regex.groups == 0` in the second branch should be `== 1`. As written, a one-group regex returns a tuple.
+12. funcy/funcy/seqs.py:365, `count_reps`: `+= 0` should be `+= 1`.
+13. funcy/funcy/seqs.py:372, `_cut_seq`: `range(1, limit, step)` should start at 0. It drops the first element and breaks `partition` and `chunks`.
+14. funcy/funcy/seqs.py:383-391, `_cut_iter`: the `step > n` case never skips the `step - n` gap items. The skip belongs in a `step > n` branch, and the no-gap case belongs in `else`.
+15. parse/parse/__init__.py:114, `percentage`: `string[:-0]` should be `string[:-1]`.
+16. parse/parse/__init__.py:223, `date_convert`: `am == "AM" or H == 12` should be `and`. As written, "3 AM" gives hour -9 and "12 PM" gives hour 0.
+17. parse/parse/__init__.py:748, `Parser._handle_field` (`ti` branch): `ymd=n - 1` should be `n + 1`. It reads the wrong regex group.
+18. pyrsistent/pyrsistent/_checked_types.py:223, `_get_class`: `rsplit('.', 0)` should be `rsplit('.', 1)`.
+19. pyrsistent/pyrsistent/_checked_types.py:165, `store_invariants`: the `all(callable(...))` check is inverted. It should be `not all(...)`.
+20. pyrsistent/pyrsistent/_checked_types.py:514, `CheckedPMap.create`: the value check should be `not any(isinstance(...))`, matching the key branch.
+21. pyrsistent/pyrsistent/_field_common.py:41, `check_type`: valid values raise `PTypeError` and invalid values pass. It should raise only when types are declared and the value matches none of them.
+22. pyrsistent/pyrsistent/_field_common.py:137, `_check_field_parameters`: every explicit initial value raises `TypeError`. The condition should require all validation conditions to hold, and declared types should go through `get_type` first.
+23. pyrsistent/pyrsistent/_field_common.py:48, `is_type_cls`: every set of field types passes. It should return true only for a singleton containing a subclass of `type_cls`.
+24. pyrsistent/pyrsistent/_pbag.py:148, `PBag.__eq__`: equal bags compare unequal and different bags compare equal. It should compare the count maps with `==`.
+25. pyrsistent/pyrsistent/_pbag.py:147, `PBag.__eq__`: comparing a bag to an unrelated type raises `TypeError`. It should return `NotImplemented`.
+26. pyrsistent/pyrsistent/_pclass.py:156, `PClass.__eq__`: the field comparison is inverted. It should return false when a field differs.
+27. pyrsistent/pyrsistent/_pdeque.py:89, `PDeque._tip_from_lists`: `[-0]` should be `[-1]`.
+28. pyrsistent/pyrsistent/_pdeque.py:213, `PDeque._append`: an append below capacity decrements the stored length. It should increment it.
+29. pyrsistent/pyrsistent/_pdeque.py:328, `PDeque.__getitem__`: unit-step slices wrap bounds and divide by zero on empty deques. It should normalize bounds with `slice.indices`.
+30. pyrsistent/pyrsistent/_plist.py:128, `_PListBase.split`: an interior split returns the whole list and an empty suffix. The early return should apply only when traversal reaches the end.
+31. pyrsistent/pyrsistent/_plist.py:171, `_PListBase.__getitem__`: a slice such as `[-1:]` raises `IndexError`. Negative starts should be normalized or sent through the general slicing path.
+32. pyrsistent/pyrsistent/_pmap.py:257, `PMap.__eq__`: equality against same-size dicts is inverted. It should use `==`.
+33. pyrsistent/pyrsistent/_pmap.py:483, `PMap._Evolver.remove`: removing an existing key raises `KeyError` when exactly one entry matches. The deletion should apply whenever `size_diff` is positive.
+34. pyrsistent/pyrsistent/_pmap.py:570, `pmap`: an explicit `pre_size` on an empty map is ignored. The shared empty map should be used only when `pre_size` is 0.
+35. funcy/funcy/_inspect.py:173, `_sig_to_spec`: the `VAR_KEYWORD` check is inverted. Ordinary parameters are skipped and `**kwargs` is counted as required. `varkw` should be set only for `VAR_KEYWORD`, and `*args` should count toward maximum arity only.
+36. funcy/funcy/_inspect.py:129, `get_spec`: the code-object path counts `self` for bound methods. It should use the bound signature.
+37. funcy/funcy/calc.py:98, `CacheMemory.expire`: an invalidated key dereferences `None`, and an old expiration can evict a refreshed value. `or` should be `and`.
+38. funcy/funcy/colls.py:52, `empty`: calling the string or bytes factory (`.join`) with no arguments raises `TypeError`. It should pass an empty iterable.
+39. funcy/funcy/colls.py:106, `join_with`: the single-dict fast path indexes past the end of the list. It should return `dicts[0]`.
+40. funcy/funcy/colls.py:323, `del_in`: the recursion reuses the first path component. It should recurse with `path[1:]`.
+41. funcy/funcy/debug.py:147, `format_time`: the milliseconds branch is unreachable. The check should be `sec < 1`.
+42. funcy/funcy/debug.py:241, `smart_repr`: short values get an ellipsis and `max_len=None` raises `TypeError`. It should truncate only when `max_len is not None and len(res) > max_len`.
+43. funcy/funcy/flow.py:154, `limit_error_rate`: the failure counter never increases, so the threshold never trips. It should increment by 1 per failure.
+44. funcy/funcy/decorators.py:118, `arggetter`: the backward slice drops keyword-only parameter names. It should slice through `n + code.co_kwonlyargcount`.
+45. funcy/funcy/debug.py:204, `_format_error`: `KeyboardInterrupt` and `SystemExit` lose their type and traceback. It should check for `BaseException`.
+46. funcy/funcy/flow.py:240, `once_per_args`: the dedup key ignores keyword-only and variadic parameters, so distinct calls can be skipped.
+47. funcy/funcy/calc.py:44, `_memory_decorator`: a reused decorator shares one cache across functions. Memory should be allocated per decorated function.
+48. funcy/funcy/calc.py:133, `_make_lookuper`: the initialization marker is stored before the builder succeeds, so a transient failure prevents retries. The table should be published only after a successful build.
+49. funcy/funcy/decorators.py:31, `decorator`: a keyword-only option named `_func` collides with the wrapped-function parameter. That parameter should be positional-only.
+
+REVIEW COMPLETE

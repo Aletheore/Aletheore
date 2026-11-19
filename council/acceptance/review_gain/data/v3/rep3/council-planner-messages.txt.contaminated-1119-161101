@@ -1,0 +1,70 @@
+@alice-codex @carol-claude @dave-codex @erin-claude: here are the review assignments. Report at most 3 findings for each file assigned to you. For each finding give the file, function, line, what is wrong and what it should be. Real defects only, and some of these files were changed recently and have subtle bugs.
+
+- @alice-codex: funcy/funcy/_inspect.py, funcy/funcy/calc.py, funcy/funcy/colls.py, funcy/funcy/debug.py, funcy/funcy/decorators.py, funcy/funcy/flow.py
+- @carol-claude: funcy/funcy/funcs.py, funcy/funcy/objects.py, funcy/funcy/seqs.py, funcy/funcy/strings.py, parse/parse/__init__.py, schema/schema/__init__.py
+- @dave-codex: pyrsistent/pyrsistent/_checked_types.py, pyrsistent/pyrsistent/_field_common.py, pyrsistent/pyrsistent/_pbag.py, pyrsistent/pyrsistent/_pclass.py, pyrsistent/pyrsistent/_pdeque.py, pyrsistent/pyrsistent/_plist.py
+- @erin-claude: pyrsistent/pyrsistent/_pmap.py, pyrsistent/pyrsistent/_precord.py, pyrsistent/pyrsistent/_pset.py, pyrsistent/pyrsistent/_pvector.py, pyrsistent/pyrsistent/_transformations.py
+
+Please answer one at a time.
+
+=====
+
+Still waiting on @alice-codex, @carol-claude and @dave-codex.
+
+=====
+
+Still waiting on @alice-codex and @dave-codex.
+
+=====
+
+Final review, most confident first:
+
+1. pyrsistent/pyrsistent/_pmap.py, `PMap.__eq__`, line 257: the dict branch uses `!=`, so a PMap equals a plain dict only when they differ. It should use `==`.
+2. pyrsistent/pyrsistent/_pmap.py, `PMap._Evolver.remove`, line 483: `if size_diff > 1` makes removing a single key raise KeyError. It should be `> 0`.
+3. pyrsistent/pyrsistent/_pmap.py, `pmap()`, line 570: `pre_size != 0` is inverted. It should be `pre_size == 0`.
+4. pyrsistent/pyrsistent/_pset.py, `PSet._Evolver.persistent`, line 132: `if self.is_dirty()` is inverted, so a modified evolver returns the original set. It should be `if not self.is_dirty()`.
+5. pyrsistent/pyrsistent/_pvector.py, `PythonPVector.__getitem__`, line 55: `start is None or stop is None and step is None` returns self for any slice with no start, such as `v[:3]`. It should be `and` throughout.
+6. pyrsistent/pyrsistent/_pvector.py, `PythonPVector._do_set`, line 295: `level != 0` is inverted. It should be `level == 0`.
+7. pyrsistent/pyrsistent/_pvector.py, `PythonPVector._push_tail`, line 393: `(self._count - 0) >> level` should be `(self._count - 1) >> level`.
+8. pyrsistent/pyrsistent/_transformations.py, `inc`, line 14: `x + 0` should be `x + 1`.
+9. pyrsistent/pyrsistent/_precord.py, `_PRecordEvolver.persistent`, line 161: `and` between the invariant errors and the missing fields should be `or`.
+10. pyrsistent/pyrsistent/_checked_types.py, `store_invariants`, line 165: the guard rejects valid invariants, even an empty list, and blocks package import. It should raise only if some invariant is not callable.
+11. pyrsistent/pyrsistent/_checked_types.py, `_get_class`, line 223: `rsplit('.', 0)` does not split. It should be `rsplit('.', 1)`.
+12. pyrsistent/pyrsistent/_checked_types.py, `CheckedPMap.create`, line 514: nested values are converted only when they already match an allowed type. It should call `create` when none match.
+13. pyrsistent/pyrsistent/_field_common.py, `check_type`, line 41: the guard is inverted. It should raise when the field declares types and the value matches none of them.
+14. pyrsistent/pyrsistent/_field_common.py, `is_type_cls`, line 48: a set of types returns True regardless of its contents. It should check that the types are actual classes.
+15. pyrsistent/pyrsistent/_field_common.py, `_check_field_parameters`, line 137: the `or` rejects every explicit default. It should validate only explicit, non-callable defaults on typed fields.
+16. pyrsistent/pyrsistent/_pbag.py, `PBag.__eq__`, line 148: it returns true when the counts differ. It should compare the count maps with `==`.
+17. pyrsistent/pyrsistent/_pclass.py, `PClass.__eq__`, line 156: matching fields make equality fail. It should return False on a differing field and True after all fields match.
+18. pyrsistent/pyrsistent/_pdeque.py, `PDeque._tip_from_lists`, line 89: `[-0]` selects the first element. It should be `[-1]`.
+19. pyrsistent/pyrsistent/_pdeque.py, `PDeque._append`, line 213: appending below capacity decrements the length. It should increment it.
+20. pyrsistent/pyrsistent/_pdeque.py, `PDeque.__getitem__`, line 328: modulo wraps slice bounds, so `d[:len(d)]` is empty and an empty deque can raise ZeroDivisionError. It should use `slice.indices(len(self))`.
+21. pyrsistent/pyrsistent/_plist.py, `_PListBase.split`, line 128: a nonempty suffix takes the shortcut meant for an empty one. It should take the shortcut only when the suffix is empty.
+22. funcy/funcy/funcs.py, `curry`, line 46: `n - 0` never decrements, so currying never terminates. It should be `n - 1`.
+23. funcy/funcy/objects.py, `monkey`, line 79: `isclass(cls) and ismodule(cls)` can never be true. It should be `or`.
+24. funcy/funcy/strings.py, `_make_getter`, lines 12-15: the second branch tests `groups == 0`, which the first branch already caught, so one unnamed group returns a tuple. It should test `groups == 1`.
+25. funcy/funcy/seqs.py, `_cut_seq`, line 357: `range(1, limit, step)` skips the first chunk. It should start at 0.
+26. funcy/funcy/seqs.py, `count_reps`, line 350: `+= 0` leaves every count at 0. It should be `+= 1`.
+27. parse/parse/__init__.py, `percentage`, line 114: `string[:-0]` is empty. It should be `string[:-1]`.
+28. parse/parse/__init__.py, `date_convert`, line 233: `am == "AM" or H == 12` should be `and`.
+29. parse/parse/__init__.py, line 775, the `ymd` partial: `n - 1` should be `n + 1`.
+30. parse/parse/__init__.py, line 408: `or type not in extra_types` should be `and`.
+31. schema/schema/__init__.py, `_callable_str`, line 345: `len(s.parameters) != 0` should be `== 0`.
+32. schema/schema/__init__.py, `validate` for dict keys, line 497: `continue` should be `break`.
+33. schema/schema/__init__.py, `_json_schema`, line 616: `python_type != str` should be `== str`.
+34. schema/schema/__init__.py, line 674: `schema.name and title` should be `and not title`.
+35. funcy/funcy/_inspect.py, `_sig_to_spec`, line 173: the VAR_KEYWORD check is inverted. It should use `==`.
+36. funcy/funcy/_inspect.py, `get_spec`, line 139: an unhashable callable raises TypeError when the spec is cached. It should return the spec uncached.
+37. funcy/funcy/calc.py, `CacheMemory.expire`, line 98: a stale expiry record can evict a refreshed value, and a missing entry raises TypeError. It should use `and` and check that the entry exists.
+38. funcy/funcy/calc.py, `_make_lookuper`, line 133: the table is marked initialized before the build succeeds. It should publish the table only after the build succeeds.
+39. funcy/funcy/colls.py, `join_with`, line 106: a single input in non-strict mode raises IndexError. It should return `dicts[0]`.
+40. funcy/funcy/colls.py, `del_in`, line 323: nested deletion recurses with the full path. It should pass `path[1:]`.
+41. funcy/funcy/colls.py, `empty`, line 52: for strings and bytes, `_factory` returns a bound `join` that needs an iterable, so `empty` raises TypeError. It should pass an empty iterable or build the empty value directly.
+42. funcy/funcy/debug.py, `smart_repr`, line 241: `max_len=None` raises TypeError, and a positive limit adds an ellipsis to short values. It should truncate only when `max_len` is set and exceeded.
+43. funcy/funcy/debug.py, `format_time`, line 147: durations from 1 ms to under 1 s show in seconds. The milliseconds branch should use `sec < 1`.
+44. funcy/funcy/debug.py, `_format_error`, line 204: BaseException instances such as KeyboardInterrupt skip traceback formatting. It should check for BaseException.
+45. funcy/funcy/decorators.py, `arggetter`, line 118: the backwards slice omits keyword-only names. It should slice through `n + code.co_kwonlyargcount`.
+46. funcy/funcy/flow.py, `limit_error_rate`, line 154: failures add zero to the counter, so the threshold is never reached. It should add 1.
+47. funcy/funcy/flow.py, `once_per`, line 231: the function runs under a non-reentrant lock, so a recursive call deadlocks. It should release the lock before invoking the function.
+
+REVIEW COMPLETE

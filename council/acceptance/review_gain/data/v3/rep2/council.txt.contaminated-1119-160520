@@ -1,0 +1,45 @@
+Final review. These are static findings from the four executors, and nobody ran tests. I didn't re-read the code myself.
+
+1. pyrsistent/_checked_types.py:165, `store_invariants`: the callable check is inverted. It rejects valid invariants and empty lists. It should raise only if any invariant is not callable.
+2. pyrsistent/_checked_types.py:223, `_get_class`: `rsplit('.', 0)` doesn't split, so unpacking a qualified type name fails. It should be `rsplit('.', 1)`.
+3. pyrsistent/_field_common.py:41, `check_type`: valid values raise `PTypeError` and mismatched ones pass. It should raise only when types are declared and none match.
+4. pyrsistent/_field_common.py:137, `_check_field_parameters`: every explicit initial value raises `TypeError`. It should validate only a supplied, non-callable default that has declared types.
+5. pyrsistent/_pbag.py:148, `PBag.__eq__`: it returns true for different counts and false for identical ones. It should compare the count maps with `==`.
+6. pyrsistent/_pclass.py:156, `PClass.__eq__`: an equal field makes equality fail. It should return False only when a field differs.
+7. pyrsistent/_pdeque.py:89, `PDeque._tip_from_lists`: `-0` is `0`, so the fallback reads the wrong end of the secondary list. It should be `secondary_list[-1]`.
+8. pyrsistent/_pdeque.py:213, `PDeque._append`: below capacity it subtracts one from the stored length. It should add one.
+9. pyrsistent/_pdeque.py:328, `PDeque.__getitem__`: unit-step slicing wraps bounds, and it divides by zero on an empty deque with explicit bounds. It should normalize bounds with `slice.indices()` first.
+10. pyrsistent/_checked_types.py:514, `CheckedPMap.create`: nested value conversion runs even when the value already matches an allowed type. It should run only when no allowed type matches.
+11. pyrsistent/_pmap.py:257, `PMap.__eq__`: the dict branch uses `!=`. It should be `==`.
+12. pyrsistent/_pmap.py:483, `PMap._Evolver.remove`: `size_diff > 1` skips removal when the key is the only match in its bucket, so a spurious `KeyError` is raised. It should be `> 0`.
+13. pyrsistent/_pmap.py:570, `pmap`: `pre_size != 0` ignores the `pre_size` hint for an empty map. It should be `pre_size == 0`.
+14. pyrsistent/_pset.py:132, `PSet._Evolver.persistent`: the dirty check is inverted, so a modified evolver returns the original set. It should be `if not self.is_dirty(): return self._original_pset`.
+15. pyrsistent/_precord.py:161, `_PRecordEvolver.persistent`: `and` should be `or`. As written, a record failing only an invariant or only a mandatory field doesn't raise `InvariantException`.
+16. pyrsistent/_pvector.py:295, `PythonPVector._do_set`: `level != 0` should be `level == 0`. The leaf and branch cases are swapped, so `set` fails on vectors with a trie root.
+17. pyrsistent/_pvector.py:55, `PythonPVector.__getitem__`: `start is None or stop is None and step is None` should join all three with `and`. As written, `v[:3]` returns the whole vector.
+18. pyrsistent/_pvector.py:393, `PythonPVector._push_tail`: `self._count - 0` should be `self._count - 1`. It picks the wrong child slot at a boundary.
+19. pyrsistent/_plist.py:128, `_PListBase.split`: `if right_list:` should be `if not right_list:`. As written, `plist([1,2,3,4]).split(2)` returns the whole list and an empty one.
+20. pyrsistent/_transformations.py:14, `inc`: `x + 0` should be `x + 1`.
+21. funcy/_inspect.py:173, `_sig_to_spec`: the `VAR_KEYWORD` test is inverted. It should use `==` so only `**kwargs` sets `varkw` and ordinary parameters are counted. `*args` should add to `max_n` without raising `req_n`.
+22. funcy/calc.py:98, `CacheMemory.expire`: `or` deletes refreshed entries and indexes `None` for invalidated keys. It should use `and`.
+23. funcy/colls.py:106, `join_with`: the non-strict single-input case raises `IndexError`. It should return `dicts[0]`.
+24. funcy/colls.py:323, `del_in`: the recursion reuses the current path segment. It should pass `path[1:]`.
+25. funcy/debug.py:147, `format_time`: the millisecond branch is unreachable. It should test `sec < 1`.
+26. funcy/debug.py:241, `smart_repr`: a positive limit adds ellipses to short values, and `None` raises `TypeError`. It should truncate only when `max_len is not None and len(res) > max_len`.
+27. funcy/decorators.py:118, `arggetter`: the keyword-only slice is empty, so explicit values are ignored. It should be `co_varnames[n:n + co_kwonlyargcount]`.
+28. funcy/flow.py:154, `limit_error_rate`: failures increment the counter by zero, so positive thresholds never trip. It should increment by one.
+29. funcy/funcs.py:52, `curry`: `n - 0` never reduces the arity. It should be `n - 1`, as `rcurry` uses.
+30. funcy/seqs.py:357, `_cut_seq`: `range(1, limit, step)` skips the first chunk. It should be `range(0, limit, step)`. This breaks `partition`, `chunks` and the `l*` versions.
+31. funcy/seqs.py:367-376, `_cut_iter`: the branch conditions are wrong. `elif step != n` should be `elif step > n`, and the `else` (step == n) should be the no-gap branch.
+32. funcy/seqs.py:350, `count_reps`: `+= 0` should be `+= 1`. Every count comes out as 0.
+33. funcy/objects.py:69, `monkey`: `isclass(cls) and ismodule(cls)` can never be true. It should use `or`.
+34. funcy/objects.py:54, `wrap_prop`: it checks and defines `__del__`. It should be `__delete__`.
+35. funcy/strings.py:15, `_make_getter`: the second branch repeats `groups == 0` and is dead code. It should be `regex.groups == 1 and regex.groupindex == {}`, returning `group(1)`.
+36. parse/__init__.py:405-410, `extract_format`: the type check groups `and` and `or` wrongly, so an empty type such as `{:>5}` raises `ValueError`. It should be `type and type not in ALLOWED_TYPES and type not in extra_types and not any(...)`.
+37. parse/__init__.py:775, `_handle_field`, `ti` branch: `ymd=n - 1` should be `n + 1`. Parsing ISO datetimes reads the wrong group.
+38. schema/__init__.py:345, `_invoke_with_optional_kwargs`: the condition is inverted. It should be `if len(s.parameters) == 0: return f()`, and otherwise `f(**kwargs)`.
+39. schema/__init__.py:616, `json_schema._get_type_name`: `python_type != str` should be `== str`. As written, every non-`str` type returns `"string"`.
+
+Carol did not read `parse/__init__.py` lines 1–380, so that region is uncovered.
+
+REVIEW COMPLETE

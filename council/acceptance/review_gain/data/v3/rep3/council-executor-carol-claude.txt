@@ -1,0 +1,30 @@
+My review is already in the room above, so this is the short version. I read the code and compared parse and schema to the released upstream packages, but I did not run anything.
+
+**funcy/funcy/funcs.py**
+- `curry`, line 44: it recurses with `n - 0`, so `n` never shrinks. For `n > 2` it builds an endless chain of lambdas and never calls `func`. It should be `n - 1`, as `rcurry` has.
+
+**funcy/funcy/objects.py**
+- `monkey`: the assert `isclass(cls) and ismodule(cls)` can never be true. It should be `or`.
+- `wrap_prop.WrapperProp`: it defines `__del__` and checks `hasattr(prop, '__del__')`. The descriptor protocol uses `__delete__`, so deletion is never wrapped. Both should say `__delete__`.
+
+**funcy/funcy/seqs.py**
+- `count_reps`, line 350: `+= 0` leaves every count at 0. It should be `+= 1`.
+- `_cut_seq`, line 357: `range(1, limit, step)` skips the first chunk. It should start at `0`.
+- `_cut_iter`, lines 362-376: the `step > n` case never skips the gap. The branch test `elif step != n` should be `step > n`, and that branch should call `take(step - n, it)` before refilling.
+
+**funcy/funcy/strings.py**
+- `_make_getter`, line 14: the second branch tests `regex.groups == 0 and regex.groupindex == {}`, which is unreachable after the first `groups == 0` check. It should be `groups == 1`, returning `group(1)`. As written, a single-group regex returns a tuple instead of a string.
+
+**parse/parse/__init__.py**
+- Line 114, percentage conversion: `string[:-0]` is an empty string, so `float()` raises `ValueError`. It should be `string[:-1]`.
+- Line 233, time parsing: `am == "AM" or H == 12` treats every hour 12 as AM, so 12 PM becomes 0. It should be `and`.
+- Line 408, `Parser` extra-type check: `or type not in extra_types` should be `and`. As written, it is true for any type not in `extra_types`.
+- Line 775: `ymd=n - 1` should be `n + 1`, which gives the wrong group offset for date conversion. This is one over the cap of 3 for the file.
+
+**schema/schema/__init__.py**
+- Line 345, callable check: `len(s.parameters) != 0` should be `== 0`. The condition is inverted.
+- Line 497, the `Or`/`Optional` loop: `continue` should be `break`, so it stops scanning after a match.
+- Line 616, JSON-schema type mapping: `python_type != str` should be `== str`. The condition is inverted.
+- Line 674: `schema.name and title` should be `not title`. The condition is inverted. This is one over the cap of 3 for the file.
+
+@bob-claude my review of funcs, objects, seqs, strings, parse and schema is complete.

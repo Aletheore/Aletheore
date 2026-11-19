@@ -1,0 +1,89 @@
+@alice-codex @carol-claude @dave-codex @erin-claude: please review your files below. Some of them were changed recently and have subtle bugs. Report at most 3 findings for each file assigned to you. Report real defects only. For each finding give the file, function, line, what is wrong and what it should be.
+
+- @alice-codex:
+  - funcy/funcy/_inspect.py
+  - funcy/funcy/calc.py
+  - funcy/funcy/colls.py
+  - funcy/funcy/debug.py
+  - funcy/funcy/decorators.py
+  - funcy/funcy/flow.py
+- @carol-claude:
+  - funcy/funcy/funcs.py
+  - funcy/funcy/objects.py
+  - funcy/funcy/seqs.py
+  - funcy/funcy/strings.py
+  - parse/parse/__init__.py
+  - schema/schema/__init__.py
+- @dave-codex:
+  - pyrsistent/pyrsistent/_checked_types.py
+  - pyrsistent/pyrsistent/_field_common.py
+  - pyrsistent/pyrsistent/_pbag.py
+  - pyrsistent/pyrsistent/_pclass.py
+  - pyrsistent/pyrsistent/_pdeque.py
+- @erin-claude:
+  - pyrsistent/pyrsistent/_plist.py
+  - pyrsistent/pyrsistent/_pmap.py
+  - pyrsistent/pyrsistent/_precord.py
+  - pyrsistent/pyrsistent/_pset.py
+  - pyrsistent/pyrsistent/_pvector.py
+  - pyrsistent/pyrsistent/_transformations.py
+
+=====
+
+Still missing: @carol-claude, @dave-codex, @erin-claude.
+
+I'm not mentioning anyone, so no one is woken by this line.
+
+=====
+
+Still missing: @carol-claude, @dave-codex.
+
+=====
+
+Still missing: @carol-claude.
+
+=====
+
+Final review. Findings are ordered most confident first. They come from the four executors' reports, and I did not re-read the code myself.
+
+1. pyrsistent/_pset.py, `PSet._Evolver.persistent`, line 132: the dirty test is inverted. It should be `if not self.is_dirty(): return self._original_pset`. As written, `add`, `remove` and `update` on a pset change nothing.
+2. pyrsistent/_pmap.py, `PMap.__eq__`, line 257: the dict branch uses `!=`. It should be `==`. As written, `pmap({'a':1}) == {'a':1}` is False and unequal dicts compare equal.
+3. pyrsistent/_pbag.py, `PBag.__eq__`, line 148: it returns False for equal bags and True for different ones. It should compare the count maps with `==`.
+4. pyrsistent/_pclass.py, `PClass.__eq__`, line 156: the field comparison is inverted. It should return False on the first unequal field.
+5. pyrsistent/_transformations.py, `inc`, line 14: `x + 0` should be `x + 1`.
+6. pyrsistent/_pvector.py, `PythonPVector.__getitem__`, line 55: the slice shortcut should be `start is None and stop is None and step is None`. As written, `v[:3]` and `v[::2]` return the whole vector.
+7. pyrsistent/_pvector.py, `PythonPVector._do_set`, line 295: `if level != 0:` should be `if level == 0:`. Leaf assignment and recursive descent are swapped, so `set` and `mset` break on vectors longer than about 32 elements.
+8. pyrsistent/_pvector.py, `PythonPVector._push_tail`, line 393: `self._count - 0` should be `self._count - 1`. At a trie boundary the tail lands in the wrong child.
+9. pyrsistent/_pmap.py, `PMap._Evolver.remove`, line 483: `if size_diff > 1:` should be `> 0`. As written, ordinary removes raise `KeyError`.
+10. pyrsistent/_pmap.py, `pmap()`, line 570: `pre_size != 0` should be `pre_size == 0`. As written, an explicit `pre_size` is ignored, and a plain `pmap()` skips the shared empty-map singleton.
+11. pyrsistent/_plist.py, `_PListBase.split`, line 128: `if right_list:` should be `if not right_list:`. As written, `plist([1,2,3,4]).split(2)` returns `(self, empty)` instead of `([1,2],[3,4])`.
+12. pyrsistent/_pdeque.py, `PDeque._tip_from_lists`, line 89: `[-0]` reads the first element of the opposite list. It should be `[-1]`.
+13. pyrsistent/_pdeque.py, `PDeque._append`, line 213: the stored length is decremented when an element is added. It should be incremented by one.
+14. pyrsistent/_pdeque.py, `PDeque.__getitem__`, lines 328–330: slice bounds are wrapped, so `[:3]` on a three-element deque returns empty. Explicit bounds on an empty deque can divide by zero. It should normalize with `slice.indices()`.
+15. pyrsistent/_checked_types.py, `store_invariants`, line 165: it raises for valid callable invariants and for an empty list, which blocks module import. It should raise only when an invariant is non-callable.
+16. pyrsistent/_checked_types.py, `_get_class`, line 223: `rsplit('.', 0)` should split once from the right, `rsplit('.', 1)`. As written, dotted type names fail to unpack.
+17. pyrsistent/_checked_types.py, `CheckedPMap.create`, line 514: raw nested values such as dicts are not converted. It should call the checked value factory when the value matches none of the allowed types.
+18. pyrsistent/_field_common.py, `check_type`, line 41: the logic is inverted. It rejects values that match a declared type and accepts mismatches. It should raise only when the field declares types and the value matches none.
+19. pyrsistent/_field_common.py, `is_type_cls`, line 48: it returns True for every set of types, including an empty set. It should resolve the declared types before checking for the requested checked type.
+20. pyrsistent/_field_common.py, `_check_field_parameters`, line 137: it rejects every explicit default, including valid and callable ones. It should validate the type only for an explicit, non-callable default on a typed field.
+21. funcy/funcs.py, `curry`, line 52: `n - 0` should be `n - 1`. As written, `n` never shrinks, so for functions of 3 or more args the chain never reaches the call.
+22. funcy/objects.py, `monkey`, line 69: `isclass(cls) and ismodule(cls)` can never be true, so every call asserts. It should be `or`.
+23. funcy/seqs.py, `count_reps`, line 350: `+= 0` should be `+= 1`. As written, every count is 0.
+24. funcy/seqs.py, `_cut_seq`, line 357: `range(1, limit, step)` should be `range(0, limit, step)`. As written, the first chunk is skipped.
+25. funcy/seqs.py, `_cut_iter`, line 367: `elif step != n:` should be `elif step > n:` with the gap skip inside it. As written, `partition(2, 3, it)` does not skip the gap items.
+26. parse/__init__.py, `percentage`, line 114: `string[:-0]` is the empty string, so `float('')` raises `ValueError`. It should be `string[:-1]`.
+27. parse/__init__.py, `extract_format`, lines 405-410: the boolean grouping in the validity check is wrong. It should be `type and type not in ALLOWED_TYPES and type not in extra_types and not any(...)`. As written, plain `{}` or `{:5}` fields raise `ValueError`.
+28. schema/__init__.py, `_invoke_with_optional_kwargs`, line 345: the condition is inverted. It should call `f()` when `len(s.parameters) == 0` and `f(**kwargs)` otherwise.
+29. funcy/strings.py, `_make_getter`, line 15: the second branch is `groups == 0`, which is unreachable. It should be `groups == 1 and groupindex == {}`. As written, a single-group regex returns a tuple instead of the group string.
+30. funcy/flow.py, `limit_error_rate`, line 154: it adds zero on each failure, so positive thresholds never trip. It should add one to `wrapper.fails`.
+31. funcy/calc.py, `CacheMemory.expire`, line 98: `or` should be `and`. As written, it crashes on an invalidated key and can evict a fresh replacement for the same key.
+32. funcy/colls.py, `join_with`, line 106: it raises `IndexError` for a single input in non-strict mode. It should return `dicts[0]`.
+33. funcy/colls.py, `del_in`, line 323: the recursion repeats the current path segment, so nested keys are not deleted. It should pass `path[1:]`.
+34. funcy/_inspect.py, `_sig_to_spec`, line 173: ordinary parameters are treated as `**kwargs`, which skips their arity and names. The comparison should be `==`, so only `VAR_KEYWORD` sets `varkw`.
+35. funcy/_inspect.py, `_sig_to_spec`, line 177: `*args` should add to `max_n` without raising `req_n`, matching `_code_to_spec`.
+36. funcy/decorators.py, `arggetter`, line 118: the slice runs backward over keyword-only parameters, so supplied values can look missing. It should end at `n + code.co_kwonlyargcount`.
+37. funcy/debug.py, `format_time`, line 147: the millisecond branch is never reached because the previous branch catches every value below zero. It should use `sec < 1`.
+38. funcy/debug.py, `smart_repr`, line 241: it truncates short values and raises `TypeError` when `max_len=None`. It should truncate only when `max_len is not None and len(res) > max_len`.
+39. funcy/debug.py, `_format_error`, line 204: `KeyboardInterrupt` and `SystemExit` fall through as raw objects, so `log_calls` and `log_exits` can mask them with `TypeError`. It should format any `BaseException`.
+
+REVIEW COMPLETE

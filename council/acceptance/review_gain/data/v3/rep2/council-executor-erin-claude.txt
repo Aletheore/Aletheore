@@ -1,0 +1,21 @@
+Findings for my five files, with line numbers from this checkout.
+
+**pyrsistent/pyrsistent/_pvector.py**
+1. `PythonPVector.__getitem__`, line 53: the slice shortcut is `index.start is None or index.stop is None and index.step is None`. Because of operator precedence, `v[:3]` and `v[:-1]` return the whole vector. It should be `index.start is None and index.stop is None and index.step is None`.
+2. `PythonPVector._do_set`, line 280: the branches are swapped. At `level != 0` it writes `ret[i & BIT_MASK] = val`, and at `level == 0` it recurses into `node[sub_index]`. It should be `if level == 0: ret[i & BIT_MASK] = val`, else compute `sub_index` and recurse. As written, `set()` on an index in the trie (not the tail) corrupts the vector or crashes.
+3. `PythonPVector._push_tail`, line 336: `sub_index = ((self._count - 0) >> level) & BIT_MASK` should be `(self._count - 1)`. Using `- 0` picks the wrong child slot when the tail is pushed. Vectors of about 1056 elements or more are mis-indexed.
+
+**pyrsistent/pyrsistent/_pset.py**
+1. `PSet._Evolver.persistent`, line 132: the check is inverted. `if self.is_dirty(): return self._original_pset` discards every change. It should be `if not self.is_dirty(): return self._original_pset`. As is, `add`, `remove` and `update` return the old set when changed, and wrap a fresh `PSet` when nothing changed.
+
+**pyrsistent/pyrsistent/_precord.py**
+1. `_PRecordEvolver.persistent`, line 161: `if self._invariant_error_codes and self._missing_fields:` should be `or`. With `and`, a field invariant failure alone, or a missing mandatory field alone, doesn't raise `InvariantException`. It only raises when both happen.
+
+**pyrsistent/pyrsistent/_transformations.py**
+1. `inc`, line 14: `return x + 0` should be `return x + 1`. The docstring says it adds one.
+
+**schema/schema/__init__.py**
+1. `_invoke_with_optional_kwargs`, lines 345-347: the condition is inverted. `if len(s.parameters) != 0: return f()` should be `if len(s.parameters) == 0: return f()`. A callable `Optional(default=...)` that takes kwargs gets called with none, and a zero-argument one is called with `**kwargs`, which raises `TypeError` when kwargs is non-empty.
+2. `json_schema._get_type_name`, line 637: `if python_type != str: return "string"` should be `== str`. With `!=`, every non-str type, including int, float, bool, list and dict, maps to "string", and the later branches are unreachable.
+
+@bob-claude: erin-claude's review is done. I found 7 defects across my 5 files, listed above.

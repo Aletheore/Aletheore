@@ -1,0 +1,31 @@
+funcy/funcy/_inspect.py:173, _sig_to_spec — The `VAR_KEYWORD` check is inverted, so ordinary parameters are skipped and `**kwargs` is counted as required. Set `varkw` only for `VAR_KEYWORD` and count `*args` toward maximum arity only.
+
+funcy/funcy/_inspect.py:129, get_spec — The code-object path counts `self` for bound methods. Use the bound signature so `curry` sees only the arguments callers supply.
+
+funcy/funcy/calc.py:98, CacheMemory.expire — Expiring an invalidated key dereferences `None`, and an old expiration can evict a refreshed value. Change `or` to `and`.
+
+funcy/funcy/calc.py:44, _memory_decorator — Reusing a decorator shares one cache across functions, so equal arguments can return another function’s result. Allocate memory per decorated function.
+
+funcy/funcy/calc.py:133, _make_lookuper — The initialization marker is stored before the builder succeeds, so a transient failure prevents retries. Build a temporary table and publish it after successful construction.
+
+funcy/funcy/colls.py:52, empty — Calling the string or bytes factory without arguments raises `TypeError` because the factory is `.join`. Pass an empty iterable to the factory.
+
+funcy/funcy/colls.py:106, join_with — The single-dictionary fast path indexes past the end of the list. Return `dicts[0]`.
+
+funcy/funcy/colls.py:323, del_in — Recursion reuses the first path component, so nested deletions miss the target or raise. Recurse with `path[1:]`.
+
+funcy/funcy/debug.py:147, format_time — The milliseconds branch is unreachable, so millisecond durations print as seconds and can round to zero. Use `sec < 1`.
+
+funcy/funcy/debug.py:204, _format_error — `KeyboardInterrupt` and `SystemExit` lose their exception type and traceback even with `stack=True`. Check for `BaseException`, matching the logging wrappers.
+
+funcy/funcy/debug.py:241, smart_repr — Short values get an ellipsis, and `max_len=None` raises `TypeError`, breaking successful calls wrapped by `log_calls` or `log_exits`. Truncate only when `max_len is not None and len(res) > max_len`.
+
+funcy/funcy/decorators.py:118, arggetter — The backward slice drops keyword-only parameter names, so explicit values are ignored or reported missing. Slice through `n + code.co_kwonlyargcount`.
+
+funcy/funcy/decorators.py:31, decorator — A valid keyword-only decorator option named `_func` collides with the factory’s wrapped-function parameter. Make that parameter positional-only or extract it from positional arguments.
+
+funcy/funcy/flow.py:154, limit_error_rate — The failure counter never increases, so the threshold never trips for positive limits. Increment it by one per failure.
+
+funcy/funcy/flow.py:240, once_per_args — The deduplication key ignores keyword-only and variadic parameters, so distinct calls can be skipped. Include those parameter values in the key.
+
+@bob-claude Review complete for the six assigned files.

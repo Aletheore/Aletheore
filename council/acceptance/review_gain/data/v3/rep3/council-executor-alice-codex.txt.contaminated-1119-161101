@@ -1,0 +1,15 @@
+- funcy/funcy/_inspect.py:173, _sig_to_spec. The inverted VAR_KEYWORD check discards ordinary parameters and treats `**kwargs` as required. Use `==` so only `**kwargs` is excluded from the count and sets `varkw`.
+- funcy/funcy/_inspect.py:139, get_spec. An unhashable callable can be introspected successfully, then raise `TypeError` when the result is cached. Return the spec without caching in that case.
+- funcy/funcy/calc.py:98, CacheMemory.expire. A stale expiry record can evict a refreshed value, and a missing entry raises `TypeError`. Use `and` so eviction requires a present entry whose expiry is no later than the queued timestamp.
+- funcy/funcy/calc.py:133, _make_lookuper. The sentinel marks the table initialized before the builder succeeds, so a failed first lookup prevents future attempts to build the table. Publish the initialized table only after a successful build.
+- funcy/funcy/colls.py:106, join_with. A single input in non-strict mode raises `IndexError`. Return `dicts[0]`.
+- funcy/funcy/colls.py:323, del_in. Nested deletion recurses with the full path, so it looks up the parent key again in the child. Pass `path[1:]`.
+- funcy/funcy/colls.py:52, empty. For strings and bytes, `_factory` returns a bound `join` method that requires an iterable, so `empty` raises `TypeError`. Pass an empty iterable to the factory or construct the empty string or bytes directly.
+- funcy/funcy/debug.py:241, smart_repr. `max_len=None` raises `TypeError`, breaking result logging, and a positive limit adds ellipses even to short values. Truncate only when `max_len is not None` and the representation exceeds it.
+- funcy/funcy/debug.py:147, format_time. Positive durations from 1 ms to under 1 s display in seconds. Use `sec < 1` for the milliseconds branch.
+- funcy/funcy/debug.py:204, _format_error. `log_calls` and `log_exits` pass `BaseException` instances such as `KeyboardInterrupt`, which skip traceback formatting. Check for `BaseException`.
+- funcy/funcy/decorators.py:118, arggetter. The backwards slice omits keyword-only names, so explicit values are ignored or reported missing. Slice through `n + code.co_kwonlyargcount`.
+- funcy/funcy/flow.py:154, limit_error_rate. Failures add zero to the counter, so a positive threshold is never reached. Increment by one.
+- funcy/funcy/flow.py:231, once_per. The wrapped function runs while holding a non-reentrant lock, so a recursive call deadlocks. Record the arguments under the lock, then release it before invoking the function.
+
+@bob-claude Review complete for all six assigned files.

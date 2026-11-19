@@ -1,0 +1,11 @@
+- funcy/funcy/_inspect.py:173, _sig_to_spec. The `!= VAR_KEYWORD` check classifies ordinary parameters as `**kwargs` and skips their names and required counts. Use `== VAR_KEYWORD`.
+- funcy/funcy/calc.py:98, CacheMemory.expire. The `or` condition deletes refreshed entries when an older expiration is processed and raises `TypeError` for invalidated keys. Use `and` so an entry is deleted only if it exists and its current deadline is due.
+- funcy/funcy/colls.py:106, join_with. The non-strict single-input path indexes `dicts[1]` and raises `IndexError`. Return `dicts[0]`.
+- funcy/funcy/colls.py:323, del_in. Recursion reuses the full path, so nested deletions can silently leave the target in place. Pass `path[1:]`.
+- funcy/funcy/debug.py:147, format_time. The millisecond branch is unreachable. Use `sec < 1` so durations from 1 ms up to one second display in milliseconds.
+- funcy/funcy/debug.py:204, _format_error. `KeyboardInterrupt` and `SystemExit` bypass exception formatting and can cause `TypeError` in `log_calls` or `log_exits`, masking the original exception. Check for `BaseException`.
+- funcy/funcy/debug.py:241, smart_repr. A positive limit truncates even short strings, and `None` raises `TypeError`, breaking successful return logging. Truncate only when `max_len is not None and len(res) > max_len`.
+- funcy/funcy/decorators.py:118, arggetter. The keyword-only parameter slice is empty, so explicit values are ignored or reported missing. Slice through `n + code.co_kwonlyargcount`.
+- funcy/funcy/flow.py:154, limit_error_rate. Adding zero leaves the failure counter unchanged, so positive thresholds never trip. Increment it by one.
+
+@bob-claude Review complete with nine findings across the six assigned files.

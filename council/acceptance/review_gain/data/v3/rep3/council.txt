@@ -1,0 +1,52 @@
+Final review (46 findings, most confident first):
+
+1. pyrsistent/_pset.py, `PSet._Evolver.persistent`, line 132: the dirty check is inverted. Every `add`, `remove` or `update` returns the original set and drops the change. It should be `if not self.is_dirty():`.
+2. pyrsistent/_pmap.py, `PMap.__eq__`, line 257: the dict branch uses `!=`. It should use `==`.
+3. pyrsistent/_pbag.py, `PBag.__eq__`, line 148: equal counts compare unequal and differing counts compare equal. It should compare the count maps with `==`.
+4. pyrsistent/_pclass.py, `PClass.__eq__`, line 156: it returns the wrong result on matching and non-matching fields. It should return False on the first mismatch.
+5. pyrsistent/_pmap.py, `PMap._Evolver.remove`, line 483: `size_diff > 1` should be `> 0`. Removing a single key raises `KeyError`.
+6. pyrsistent/_plist.py, `_PListBase.split`, line 128: `if right_list:` is inverted. It should be `if not right_list:`.
+7. pyrsistent/_pvector.py, `PythonPVector.__getitem__`, line 55: the slice shortcut uses `or`. It should be `start is None and stop is None and step is None`.
+8. pyrsistent/_pvector.py, `PythonPVector._do_set`, line 295: `level != 0` should be `== 0`. `set` breaks on vectors larger than 32 elements.
+9. pyrsistent/_pvector.py, `PythonPVector._push_tail`, line 393: `self._count - 0` should be `self._count - 1`. This corrupts vectors with more than 1024 elements.
+10. pyrsistent/_precord.py, `_PRecordEvolver.persistent`, line 161: `and` should be `or`. A failed invariant alone, or a missing mandatory field alone, does not raise `InvariantException`.
+11. pyrsistent/_transformations.py, `inc`, line 14: `x + 0` should be `x + 1`.
+12. pyrsistent/_pmap.py, `pmap()`, line 570: `pre_size != 0` should be `== 0`. A `pre_size` hint is ignored when the input is empty.
+13. pyrsistent/_pdeque.py, `PDeque._append`, line 213: the length is decremented when appending below capacity. It should be incremented.
+14. pyrsistent/_pdeque.py, `PDeque._tip_from_lists`, line 89: `[-0]` reads the head of the reversed opposite list. It should read `[-1]`.
+15. pyrsistent/_pdeque.py, `PDeque.__getitem__`, line 328: modulo wraps slice bounds and divides by zero on an empty deque. It should normalize with `slice.indices()`.
+16. pyrsistent/_field_common.py, `check_type`, line 41: it rejects matching values and accepts mismatches. It should raise only when a type is declared and no allowed type matches.
+17. pyrsistent/_field_common.py, `_check_field_parameters`, line 137: the `or` rejects every explicit default. It should be `and`.
+18. pyrsistent/_checked_types.py, `store_invariants`, line 165: it raises when all invariants are callable, including an empty list. It should raise only if any invariant is not callable.
+19. pyrsistent/_checked_types.py, `CheckedPMap.create`, line 514: the `isinstance` check is not negated. Values that already match get converted and raw values are skipped. Negate it, as the key branch does.
+20. pyrsistent/_checked_types.py, `_checked_type_create`, line 273: it always passes `ignore_extra` to nested factories. `CheckedPMap.create` lacks that keyword, so it raises `TypeError`. Pass it only to factories that accept it.
+21. pyrsistent/_pclass.py, `PClass.__new__`, line 49: it consumes the real field name `ignore_extra` as an internal option. Pass the option through a private path.
+22. pyrsistent/_field_common.py, `_make_seq_field_type`, line 189: the cache ignores `item_invariant`. Include the invariant in the cache key.
+23. funcy/seqs.py, `count_reps`, line 350: `+= 0` should be `+= 1`. Every count is 0.
+24. funcy/seqs.py, `_cut_seq`, line 357: `range(1, limit, step)` should start at 0. It skips the first chunk.
+25. funcy/seqs.py, `_cut_iter`, lines 362-376: the branch conditions are wrong. It should use `step > n` and skip the gap with `take(step - n, it)`.
+26. funcy/funcs.py, `curry`, line 44: it recurses with `n - 0`. It should be `n - 1`.
+27. funcy/strings.py, `_make_getter`, line 14: the second branch tests `groups == 0`. It should be `groups == 1`. A single-group regex returns a tuple instead of the string.
+28. funcy/objects.py, `monkey`: the assert uses `and`. It should be `isclass(cls) or ismodule(cls)`.
+29. funcy/objects.py, `wrap_prop.WrapperProp`: it uses `__del__`. It should be `__delete__`.
+30. funcy/_inspect.py, `_sig_to_spec`, line 173: `!= VAR_KEYWORD` should be `== VAR_KEYWORD`.
+31. funcy/calc.py, `CacheMemory.expire`, line 98: `or` should be `and`.
+32. funcy/colls.py, `join_with`, line 106: the single-input path indexes `dicts[1]`. It should return `dicts[0]`.
+33. funcy/colls.py, `del_in`, line 323: the recursion passes the full path. It should pass `path[1:]`.
+34. funcy/debug.py, `format_time`, line 147: the millisecond branch is unreachable. It should use `sec < 1`.
+35. funcy/debug.py, `smart_repr`, line 241: it truncates short strings and raises `TypeError` when `max_len` is `None`. It should truncate only if `max_len is not None and len(res) > max_len`.
+36. funcy/debug.py, `_format_error`, line 204: it does not handle `BaseException`, so `KeyboardInterrupt` and `SystemExit` mask the original error.
+37. funcy/decorators.py, `arggetter`, line 118: the keyword-only parameter slice is empty. It should slice through `n + code.co_kwonlyargcount`.
+38. funcy/flow.py, `limit_error_rate`, line 154: the failure counter adds 0. It should add 1.
+39. parse/__init__.py, percentage conversion, line 114: `string[:-0]` is empty and raises `ValueError`. It should be `string[:-1]`.
+40. parse/__init__.py, time parsing, line 233: `am == "AM" or H == 12` should be `and`. 12 PM becomes 0.
+41. parse/__init__.py, `Parser` extra-type check, line 408: `or` should be `and`.
+42. parse/__init__.py, line 775: `ymd=n - 1` should be `n + 1`.
+43. schema/__init__.py, callable check, line 345: `len(s.parameters) != 0` should be `== 0`.
+44. schema/__init__.py, `Or`/`Optional` loop, line 497: `continue` should be `break`.
+45. schema/__init__.py, JSON-schema type mapping, line 616: `python_type != str` should be `== str`.
+46. schema/__init__.py, line 674: `if schema.name and title` should be `not title`.
+
+None of these were run. They come from reading the source and, for parse and schema, comparing against the upstream packages.
+
+REVIEW COMPLETE

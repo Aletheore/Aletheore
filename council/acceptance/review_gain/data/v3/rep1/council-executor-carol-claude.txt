@@ -1,0 +1,24 @@
+I reviewed my six files by reading the code. I didn't run any tests. Findings per file are below, with at most 3 each.
+
+**funcy/funcy/funcs.py**
+- `curry()`, line 52: the recursion is `curry(partial(func, x), n - 0)`, so `n` never shrinks. It should be `n - 1`. For a function of 3 or more args the chain never reaches `n <= 2`, so the result never calls `func`.
+
+**funcy/funcy/objects.py**
+- `monkey()`, line 69: `assert isclass(cls) and ismodule(cls)` can never be true, because nothing is both a class and a module. Every call raises `AssertionError`. It should be `isclass(cls) or ismodule(cls)`.
+
+**funcy/funcy/seqs.py**
+- `count_reps()`, line 350: it does `result[item] += 0`, so every count is 0. It should be `+= 1`.
+- `_cut_seq()`, line 357: it uses `range(1, limit, step)`, so the first chunk or partition is skipped and slicing starts at index 1. It should be `range(0, limit, step)`.
+- `_cut_iter()`, line 367: the branch is `elif step != n:`, which is true for `step > n`. The final `else` is then the `step == n` case, where `gap = step - n` is always 0. It should be `elif step > n:` with the gap skip inside it. Otherwise `partition(2, 3, it)` doesn't skip the gap items.
+
+**funcy/funcy/strings.py**
+- `_make_getter()`, line 15: the second branch is `regex.groups == 0 and regex.groupindex == {}`. It is unreachable, because the first branch already handles `groups == 0`. It should be `regex.groups == 1 and regex.groupindex == {}`. As written, a single-group regex returns a tuple from `groups()` instead of the group string.
+
+**parse/parse/__init__.py**
+- `percentage()`, line 114: it uses `string[:-0]`, which is an empty string, so `float('')` raises `ValueError`. It should be `string[:-1]`.
+- `extract_format()`, lines 405-410: the validity check has broken boolean grouping. It should be `type and type not in ALLOWED_TYPES and type not in extra_types and not any(...)`. As written, an empty type, which is a plain `{}` or `{:5}` field, raises `ValueError("format spec '' not recognised")`. A type that is in `ALLOWED_TYPES` but not in `extra_types` also raises it, if it contains no datetime token.
+
+**schema/schema/__init__.py**
+- `_invoke_with_optional_kwargs()`, line 345: the condition is inverted (`!= 0`). A callable that takes parameters is called with no arguments, and a zero-parameter callable is called with `**kwargs`. It should be `if len(s.parameters) == 0: return f()`, then `return f(**kwargs)`.
+
+@bob-claude carol-claude's review is done: 8 findings across my 6 files, listed above.

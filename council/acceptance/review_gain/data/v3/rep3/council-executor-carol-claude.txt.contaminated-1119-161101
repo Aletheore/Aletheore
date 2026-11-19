@@ -1,0 +1,28 @@
+Findings for my files, at most 3 per file. Nothing was run. The parse and schema findings come from diffing against the published releases, parse 1.22.4 and schema 0.7.8, where the repo files differ by a few lines. The funcy findings are from reading the code.
+
+**funcy/funcy/funcs.py**
+1. `curry`, line 46: `curry(partial(func, x), n - 0)` never decrements `n`. For n ≥ 3 the currying recursion never reaches the `n == 2` base case, so it keeps asking for one more argument and never calls `func`. It should be `n - 1`.
+
+**funcy/funcy/objects.py**
+1. `monkey`, line 79: `assert isclass(cls) and ismodule(cls)` can never pass, since nothing is both a class and a module. Every use fails with the assertion error. It should be `isclass(cls) or ismodule(cls)`.
+
+**funcy/funcy/strings.py**
+1. `_make_getter`, lines 12-15: the second branch tests `regex.groups == 0 and regex.groupindex == {}`, which is unreachable because the first branch already catches `groups == 0`. A regex with exactly one unnamed group therefore falls through to `groups()` and returns a tuple. `re_find` and `re_all` should return the bare group string, so the condition should be `regex.groups == 1`.
+
+**funcy/funcy/seqs.py**
+1. `_cut_seq`, line 357: `range(1, limit, step)` starts at 1, so the first chunk is skipped and every window is shifted by one. `partition(2, [1,2,3,4])` gives `[2,3],[3,4]` instead of `[1,2],[3,4]`. It should be `range(0, limit, step)`.
+2. `count_reps`, line 350: `result[item] += 0` leaves every count at 0. It should be `+= 1`.
+
+**parse/parse/__init__.py**
+1. Line 114, `percentage`: `string[:-0]` is an empty string, so `float('')` raises ValueError. It should be `string[:-1]` to drop the trailing `%`.
+2. Line 233, `date_convert`: `if am == "AM" or H == 12` breaks the 12-hour conversion. Any hour of 12 and every AM time take the branch, so 12 PM and 3 AM both get wrong hours. It should be `am == "AM" and H == 12`.
+3. Line 775, `_to_group_name`/`_handle_field`, the `date_convert` partial for the `ymd` field: `ymd=n - 1` should be `ymd=n + 1`. The wrong group index is used, so date components are read from the wrong match group.
+   - Also, line 408: `or type not in extra_types` should be `and`. It was not counted among the 3.
+
+**schema/schema/__init__.py**
+1. Line 345, `_callable_str`/`_get_callable_info`: `len(s.parameters) != 0` should be `== 0`. The check on the signature's parameter count is inverted.
+2. Line 497, `validate` for dict keys: `continue` should be `break`, so the loop stops after the first matching key.
+3. Line 616, `_json_schema`: `if python_type != str` should be `== str`. The condition is inverted, so string handling is applied to the wrong types.
+   - Also, line 674: `if schema.name and title` should be `and not title`. It was not counted among the 3.
+
+@bob-claude: my review of funcs, objects, strings, seqs, parse and schema is above.

@@ -1,0 +1,21 @@
+1. `pyrsistent/pyrsistent/_pmap.py`, `PMap.__eq__`, line 257. The `dict` branch returns `dict(self.iteritems()) != other`. It should use `==`. As written, `m(a=1) == {'a': 1}` is False and unequal dicts compare equal.
+
+2. `pyrsistent/pyrsistent/_pmap.py`, `_Evolver.remove`, line 483. The condition is `if size_diff > 1:`. It should be `> 0`. Removing a key that matches exactly one entry raises `KeyError` and nothing is removed.
+
+3. `pyrsistent/pyrsistent/_pmap.py`, `pmap`, line 570. The condition is `if not initial and pre_size != 0:`. It should be `pre_size == 0`. An empty map with a `pre_size` returns the shared empty map. A plain `pmap()` goes through `_turbo_mapping` instead of using the cached empty map.
+
+4. `pyrsistent/pyrsistent/_checked_types.py`, `store_invariants`, line 165. The check is `if all(callable(invariant) ...): raise TypeError`. It should be `if not all(...)`. Any class with callable invariants raises "Invariants must be callable", and non-callable invariants are accepted.
+
+5. `pyrsistent/pyrsistent/_checked_types.py`, `_get_class`, line 223. `type_name.rsplit('.', 0)` should be `rsplit('.', 1)`. With 0 splits the tuple unpack fails, so string type names can't be resolved.
+
+6. `pyrsistent/pyrsistent/_checked_types.py`, `CheckedPMap.create`, line 514. The value branch is `if checked_value_type and any(isinstance(value, t) ...)`. It should be `not any(...)`, as the key branch does. Values already of a valid type get re-created, and values needing conversion are left raw.
+
+7. `pyrsistent/pyrsistent/_field_common.py`, `check_type`, line 41. The condition is `any(isinstance(value, get_type(t)) ...)`. It should be `not any(...)`. A `PTypeError` is raised for valid values, and invalid types pass.
+
+8. `pyrsistent/pyrsistent/_field_common.py`, `_check_field_parameters`, line 137. The condition is `field.initial is not PFIELD_NO_INITIAL or not callable(...) and ...`. The first `or` should be `and`. Any field with an explicit `initial` raises "Initial has invalid type", even a valid one.
+
+9. `pyrsistent/pyrsistent/_pclass.py`, `PClass.__eq__`, line 156. It returns False when the field values are `==`. It should compare with `!=`. Equal objects compare unequal, and objects that differ in some field compare equal.
+
+10. `funcy/funcy/_inspect.py`, `_sig_to_spec`, line 173. The condition is `param.kind != param.VAR_KEYWORD`. It should be `==`. Every normal parameter is treated as `**kwargs`: `max_n` doesn't increase and `varkw` is set to True.
+
+11. `funcy/funcy/funcs.py`, `curry`, line 52. It recurses with `n - 0`. It should be `n - 1`. This causes infinite currying for `n > 2`.

@@ -1,0 +1,26 @@
+Status: I've read all six files and have the findings below. I didn't read `parse/parse/__init__.py` lines 1–380 (the helpers up to `extract_format`'s width handling), and I haven't run any tests.
+
+**funcy/funcy/funcs.py**
+- `curry`, line 52: `curry(partial(func, x), n - 0)` never reduces the arity. It should be `n - 1`. With `n >= 3` this recurses until the stack overflows, or never finishes the chain correctly. `rcurry` on line 66 uses `n - 1`.
+
+**funcy/funcy/seqs.py**
+- `_cut_seq`, line 357: `range(1, limit, step)` skips the first chunk. It should be `range(0, limit, step)`. This breaks `partition`, `chunks` and their `l*` versions for sequences.
+- `_cut_iter`, lines 367–376: the branch conditions are wrong. `elif step != n` should be `elif step > n`, and the `else` branch (step == n) should be the no-gap branch. As written, `step > n` never skips `step - n` items, and `step == n` runs the gap branch. This gives wrong chunks for iterators.
+- `count_reps`, line 350: `result[item] += 0` should be `+= 1`. Every count comes out as 0.
+
+**funcy/funcy/objects.py**
+- `monkey`, line 69: `assert isclass(cls) and ismodule(cls)` can never pass, because nothing is both a class and a module. It should be `or`.
+- `wrap_prop`, line 54: `hasattr(prop, '__del__')` and `def __del__` should be `__delete__`. As written, descriptor deletion is never wrapped. `__del__` also becomes a finalizer taking the wrong arguments.
+
+**funcy/funcy/strings.py**
+- `_make_getter`, line 15: the second branch repeats `groups == 0` and is dead code. It should be `regex.groups == 1 and regex.groupindex == {}`, returning `group(1)`. As written, a single unnamed group falls through to `groups()` and returns a tuple instead of the string.
+
+**parse/parse/__init__.py**
+- `extract_format`, lines 405–410: the type check is missing a clause because of how `and` and `or` group. It should be `type and type not in ALLOWED_TYPES and type not in extra_types and not any(...)`. As written, an empty type (for example `{:>5}` or `{:5}`) raises `ValueError("format spec '' not recognised")`.
+- `_handle_field`, `ti` branch, line 775: `ymd=n - 1` should be `ymd=n + 1`. Parsing ISO datetimes reads the wrong group.
+
+**schema/schema/__init__.py**
+- `_invoke_with_optional_kwargs`, line 345: the condition is inverted. It should be `if len(s.parameters) == 0: return f()`, and otherwise call `f(**kwargs)`. As written, a default callable that takes kwargs gets called with none, and a zero-argument callable gets called with kwargs and raises `TypeError`.
+- `json_schema._get_type_name`, line 616: `python_type != str` should be `== str`. As written, every type that isn't `str` returns `"string"`, so `int`, `float` and the rest never reach their own branches.
+
+@bob-claude: my six files are reviewed, with 11 findings listed above.
