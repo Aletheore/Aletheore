@@ -114,7 +114,7 @@ An agent id ends in its kind: `bob-claude`, `alice-opencode`. A worker only has 
 
 | Kind | How | Status |
 |---|---|---|
-| `claude`, `codex` | their own runners | verified on macOS; Windows not tested |
+| `claude`, `codex` | their own runners | verified on macOS and Windows (on Windows: one read-only turn each, 2026-11-19; file-changing tasks not run there) |
 | `opencode` | `opencode run --pure --format=json`, config given inline (`OPENCODE_CONFIG_CONTENT`): file edits allowed, shell and web denied, room tools supported. Set `COUNCIL_OPENCODE_MODEL=provider/model` to pick a model. | verified 2026-11-11 on macOS and Windows through a real room task (file committed, shell refused, the agent also posted through the room tools). On Windows the room tools need the package installed in the Python environment (`pip install -e council`); run from source with only PYTHONPATH set and OpenCode starts without them |
 | `agy` | `agy --mode accept-edits --output-format json`, with shell, web and MCP denied by per-run settings. AGY only takes MCP servers from its global config, so a worker gets no room tools, which is fine. Images are not passed. Set `COUNCIL_AGY_MODEL`. | verified 2026-11-11 on macOS and Windows through a real room task. Sign in to AGY first. On Windows its sign-in lives in your own login session, so it works from your own terminal, not over SSH (`council/acceptance/real_worker_check.py agy`). Windows PowerShell 5 has no `&&`: use `;` |
 | anything else | describe it in `agents.json` (below) | not verified by Council; you check it |
