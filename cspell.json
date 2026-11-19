@@ -25,6 +25,8 @@
     "Litestar",
     "Fastify",
     "aiohttp",
+    "pynacl",
+    "platformdirs",
     "Sinatra",
     "httprouter",
     "Trendshift",
