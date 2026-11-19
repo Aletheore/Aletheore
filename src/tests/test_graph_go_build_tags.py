@@ -106,6 +106,10 @@ def test_edges_out_of_a_platform_file_are_inferred(tmp_path):
         ("x.go", "y_windows.go", False),
         ("x_linux.go", "y_linux_amd64.go", False),
         ("x_amd64.go", "y_windows.go", False),
+        ("x_linux_amd64.go", "y_linux_arm64.go", True),
+        ("x_amd64.go", "y_arm64.go", True),
+        ("x_linux_amd64.go", "y_android_arm64.go", True),
+        ("x_linux_amd64.go", "y_android_amd64.go", False),
     ],
 )
 def test_mutually_exclusive_platform_names(source, target, exclusive):
@@ -127,6 +131,24 @@ def test_go_import_does_not_link_files_for_incompatible_platforms(tmp_path):
     assert ("main_windows.go", "p/common.go") in edges
     assert ("main.go", "p/impl_linux.go") in edges
     assert _conf(modules, "main_windows.go", "p/impl_windows.go") == "inferred"
+
+
+def test_go_build_lines_and_arch_suffixes_also_separate_platform_files(tmp_path):
+    repo = go_repo(tmp_path, {
+        "main_linux_amd64.go": 'package m\nimport "example.com/m/p"\nfunc F() { p.F() }\n',
+        "main_unix.go": '//go:build windows\n\npackage m\nimport "example.com/m/p"\nfunc G() { p.F() }\n',
+        "p/impl_linux_amd64.go": "package p\nfunc F() {}\n",
+        "p/impl_linux_arm64.go": "package p\nfunc F() {}\n",
+        "p/impl_other.go": "//go:build !windows && cgo\n\npackage p\nfunc F() {}\n",
+        "p/impl_win.go": "//go:build windows\n\npackage p\nfunc F() {}\n",
+    })
+    _modules, edges = _scan(repo)
+    assert ("main_linux_amd64.go", "p/impl_linux_arm64.go") not in edges
+    assert ("main_linux_amd64.go", "p/impl_linux_amd64.go") in edges
+    assert ("main_linux_amd64.go", "p/impl_win.go") not in edges
+    assert ("main_linux_amd64.go", "p/impl_other.go") in edges   # cgo may be on, so it can share a build with this file
+    assert ("main_unix.go", "p/impl_win.go") in edges
+    assert ("main_unix.go", "p/impl_linux_amd64.go") not in edges
 
 
 def test_plain_files_stay_exact(tmp_path):

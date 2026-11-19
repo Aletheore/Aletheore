@@ -5090,7 +5090,7 @@ def _extract_module(
                 resolved_imports.append(target)
         resolved_imports = [
             target for target in resolved_imports
-            if not go_resolve.mutually_exclusive_platforms(rel_path, target)
+            if not go_resolve.platforms_disjoint(repo_path, rel_path, target)
         ]
         # Files only built under some tags/platforms are alternatives (all variants are linked): mark them.
         if go_resolve.ENABLED:
