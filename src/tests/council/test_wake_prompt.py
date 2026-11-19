@@ -107,3 +107,13 @@ def test_a_message_to_you_longer_than_the_limit_is_clipped_but_still_comes_last(
     d.run_once()
     from aletheore.council.wake import WAKE_PROMPT_CHARS
     assert len(runner.calls[0]) <= WAKE_PROMPT_CHARS + 200 and "THE-VERY-END" not in runner.calls[0]
+
+
+def test_a_message_that_arrives_after_the_one_that_woke_the_agent_is_still_shown_and_the_trigger_is_not_repeated(world):
+    say(world, "alice", "@claude please review x")                       # woke the agent ...
+    say(world, "alice", "also, the deadline moved to friday")            # ... and a later message landed in the same poll
+    d, runner = daemon(world, "bob")
+    d.run_once()
+    (p,) = runner.calls
+    assert "deadline moved to friday" in p                              # the newest message is not dropped from the context
+    assert p.count("@claude please review x") == 1                      # and the message to the agent appears once, not also as "earlier"

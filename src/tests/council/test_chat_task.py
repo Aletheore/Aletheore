@@ -65,6 +65,30 @@ def test_once_only_across_polls_and_restarts(world):
     assert len(requests(world)) == 1
 
 
+def test_a_restarted_worker_does_not_call_a_task_that_already_ran_too_old(world):
+    say(world, "alice", "@claude /task add the table")
+    a, _ = daemon(world, "alice")
+    a.run_once()
+    assert len(requests(world)) == 1
+    later, _ = daemon(world, "alice", clock=lambda: time.time() + 5000)       # a restart long after: the whole log is read again
+    later.run_once()
+    assert len(requests(world)) == 1 and skips(world, "too_old") == []        # the task exists, so there is nothing to report
+
+
+def test_a_connection_error_while_starting_the_task_does_not_lose_the_command(world):
+    say(world, "alice", "@claude /task add the table")
+    a, _ = daemon(world, "alice")
+    real = a.room.request_task
+    a.room.request_task = lambda *args, **kw: (_ for _ in ()).throw(ConnectionError("the room server is unreachable"))
+    try:
+        with pytest.raises(ConnectionError):
+            a.run_once()
+    finally:
+        a.room.request_task = real
+    a.run_once()                                                                   # the server is back: the command is still waiting
+    assert len(requests(world)) == 1
+
+
 def test_a_guest_cannot_start_work_this_way(world):
     say(world, "bob", "@codex /task delete everything")
     a, runner = daemon(world, "alice", wake_from={"bob"})

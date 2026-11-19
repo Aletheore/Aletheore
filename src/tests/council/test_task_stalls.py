@@ -3,6 +3,8 @@ runner that crashed left its task 'running' for the claim's whole hour. Now: a r
 (once), and a crashed run is a failed task."""
 import time
 
+import pytest
+
 from aletheore.council.protocol import EventDraft, EventType
 from aletheore.council.runners import ScriptedRunner
 from aletheore.council.state import load_state
@@ -159,6 +161,27 @@ def test_a_runner_that_raises_fails_the_task_instead_of_leaving_it_running(world
     assert st.status == "failed"
     failed = [e for e in all_events(world) if e.type is EventType.TASK and e.body.get("op") == "failed"]
     assert "vanished" in failed[0].body.get("note", "")
+
+
+def test_a_connection_error_while_posting_the_result_does_not_fail_the_task_for_good(world):
+    tid = world["alice"].request_task("schema", "design the table")
+    b, _ = daemon(world, "bob", runner=Slow(final_text="ok"))
+    real_append = b.store.append
+
+    def flaky(draft):
+        if draft.type is EventType.RESULT:
+            raise ConnectionError("the room server is unreachable")      # a blip right after the agent finished
+        return real_append(draft)
+
+    b.store.append = flaky
+    try:
+        with pytest.raises(ConnectionError):
+            b.run_once()
+    finally:
+        b.store.append = real_append
+    failed = [e for e in all_events(world) if e.type is EventType.TASK and e.body.get("op") == "failed"]
+    assert failed == []                                                  # a network blip is not a failed task: the unfinished claim is picked up again
+    assert load_state(world["store"], world["alice"].room_id).tasks[tid].status != "failed"
 
 
 # -- the host's wait hears about it ----------------------------------------------------------------------------------------------------

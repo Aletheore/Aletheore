@@ -20,7 +20,6 @@ from aletheore.council.worktrees import _git, integration_branch
 
 MAX_ROUNDS = 4
 MAX_STEPS = 16
-_FINAL_TASK = ("done", "failed", "blocked")
 
 
 def stop_room(store, room_id: str, participant: str) -> None:

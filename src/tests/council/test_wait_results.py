@@ -196,3 +196,33 @@ def test_the_author_of_another_prompt_is_not_told(world):
     put(world, "alice", EventType.TASK, {"op": "finished", "task_id": "plan-p2-1"}, thread="plan-p2-1", agent="codex")
     assert [e.body.get("op") for e in wait(world, "carol") if e.type is EventType.TASK] == ["finished"]
     assert [e for e in wait(world, "bob") if e.type is EventType.TASK] == []
+
+
+def test_remembering_a_reported_join_request_does_not_invent_a_position(tmp_path):
+    c = Cursor(tmp_path / "cursor.json")
+    c.set(joins={"jr_1"})                                    # no position was ever saved (for example a wait started with --since)
+    assert c.get() is None                                   # still "not known": the next wait starts at the end of the log, not at event 0
+    assert c.joins() == {"jr_1"}
+    c.set(7)
+    assert c.get() == 7 and c.joins() == {"jr_1"}            # saving a position keeps the reported requests
+
+
+def test_a_notice_is_printed_with_its_reason_and_a_task_result_with_its_task(world):
+    from aletheore.council.cli import describe_event
+    put(world, "alice", EventType.SYSTEM, {"subtype": "wake_skipped", "to": "alice", "reason": "not_allowed", "note": "codex did not answer: bob may not wake it"},
+        thread="room", agent="codex")
+    put(world, "alice", EventType.TASK, {"op": "finished", "task_id": "chat-11"}, thread="chat-11", agent="claude")
+    put(world, "alice", EventType.TASK, {"op": "blocked", "task_id": "chat-12", "note": "touched files outside its area"}, thread="chat-12", agent="claude")
+    skipped, finished, blocked = wait(world, "alice")
+    assert describe_event(skipped) == ("wake_skipped", "codex did not answer: bob may not wake it")
+    assert describe_event(finished) == ("finished", "finished chat-11")
+    assert describe_event(blocked) == ("blocked", "blocked chat-12: touched files outside its area")
+
+
+def test_a_task_handed_over_to_another_area_still_belongs_to_the_prompt_that_started_it():
+    from aletheore.council.waiting import _prompt_of
+    assert _prompt_of("plan-th-5-3") == "th-5"                # unchanged: the last number is the position in the plan
+    assert _prompt_of("plan-T-1") == "T"
+    assert _prompt_of("plan-T-1-re1") == "T"                  # `council handover` adds -re1 to the id
+    assert _prompt_of("plan-T-1-re1-re2") == "T"
+    assert _prompt_of("chat-11") == ""                        # not from a plan

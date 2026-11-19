@@ -290,3 +290,30 @@ def test_an_error_message_longer_than_the_limit_is_kept_to_its_tail(tmp_path, mo
     out = json.dumps({"type": "result", "is_error": True, "result": "x" * 5000 + " THE-REASON"})
     res = _run_with_output(tmp_path, monkeypatch, out)
     assert len(res.final_text) <= 2000 and res.final_text.endswith("THE-REASON")
+
+
+def test_a_read_only_run_cannot_post_to_the_room_with_the_tools(tmp_path, monkeypatch, mcp_config):
+    """A woken agent answers in text and the worker posts it. If the tool stayed available, a message could talk the agent into posting
+    itself, with no hand-off depth, and two agents could then call each other past the depth limit."""
+    import aletheore.council.runners as r
+    seen = {}
+
+    def fake(argv, cwd, env, timeout_s):
+        seen["argv"] = argv
+        return 0, '{"type":"result","result":"ok","is_error":false}\n{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}', "", False
+
+    monkeypatch.setattr(r, "_run_process", fake)
+    monkeypatch.setattr(r, "_resolve", lambda b: f"/bin/{b}")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    ClaudeRunner().run("look", wt, mcp_config, {}, 5, read_only=True)
+    tools = seen["argv"][seen["argv"].index("--allowedTools") + 1:]
+    assert "mcp__council__council_post" not in tools and "Write" not in tools and "Edit" not in tools
+    assert "mcp__council__council_read" in tools                        # it can still read the room
+    ClaudeRunner().run("work", wt, mcp_config, {}, 5)
+    assert "mcp__council__council_post" in seen["argv"]                 # a work run keeps it
+
+    CodexRunner().run("look", wt, mcp_config, {}, 5, read_only=True)
+    assert not any("mcp_servers.council" in a for a in seen["argv"])    # no council tools at all for a read-only Codex run
+    CodexRunner().run("work", wt, mcp_config, {}, 5)
+    assert any("mcp_servers.council" in a for a in seen["argv"])

@@ -43,6 +43,8 @@ def board_rows(state: RoomState, events: list[Event], now: float,
         tid = e.body.get("task_id") if e.type in (EventType.TASK, EventType.SYSTEM, EventType.RESULT) else None
         if not isinstance(tid, str):
             continue
+        if e.type is EventType.SYSTEM and e.body.get("subtype") != "task_progress":
+            continue  # only a beat from the running task is the task moving: the host's own "stalled" notice, or an acknowledgement, is not
         last[tid] = max(last.get(tid, 0.0), _ts(e))
         if e.type is EventType.TASK and e.body.get("op") in ("request", "assign"):
             instruction.setdefault(tid, str(e.body.get("instruction", "")))

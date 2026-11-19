@@ -21,7 +21,7 @@ from aletheore.council.wake import mentions
 
 _CHAT = ("chat", "ask", "prompt")
 _RESULT = ("finished", "failed", "blocked")
-_PLAN_TASK = re.compile(r"plan-(.+)-\d+$")
+_PLAN_TASK = re.compile(r"plan-(.+?)-\d+(?:-re\d+)*$")      # plan-<thread>-<position>, and -reN once `council handover` has given the task to another area
 
 
 class Cursor:
@@ -52,7 +52,7 @@ class Cursor:
         keep = self.joins() if joins is None else joins
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps({"seq": seq if seq is not None else 0, "joins": sorted(keep)[-200:]}))
+        tmp.write_text(json.dumps({"seq": seq, "joins": sorted(keep)[-200:]}))   # no known position stays null: 0 would mean "replay the room"
         os.replace(tmp, self.path)
 
 

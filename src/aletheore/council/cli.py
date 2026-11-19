@@ -30,7 +30,7 @@ from aletheore.council.board import board_rows, render_board
 from aletheore.council.daemon import WorkerDaemon, run_guarded
 from aletheore.council.dispatcher import Dispatcher, send_ask, send_message, send_task
 from aletheore.council.worker_lock import WorkerAlreadyRunning, WorkerLock
-from aletheore.council.protocol import EventDraft, EventType, ProtocolError, clip_text
+from aletheore.council.protocol import Event, EventDraft, EventType, ProtocolError, clip_text
 from aletheore.council.wake import MAX_WAKE_DEPTH, MAX_WAKES, WAKE_COOLDOWN_S
 from aletheore.council.waiting import Cursor, wait_for
 from aletheore.council.resume import ResumeStore
@@ -912,8 +912,26 @@ def wait(
         return
     for e in events:
         who = e.sender_participant + (f"/{e.sender_agent}" if e.sender_agent else "")
-        text = e.body.get("text") or e.body.get("instruction") or e.body.get("op") or e.type.value
-        console.print(f"#{e.seq} {who} [{e.body.get('kind') or e.body.get('op') or e.type.value}]: {clip_text(str(text), 4000)}", highlight=False, markup=False)
+        label, text = describe_event(e)
+        console.print(f"#{e.seq} {who} [{label}]: {clip_text(text, 4000)}", highlight=False, markup=False)
+
+
+def describe_event(e: Event) -> tuple[str, str]:
+    """The label and the text `council wait` prints for an event. A chat message or request shows what was written; a notice shows why (its
+    note); a task result shows which task it is about and any note, so a waiting agent knows what to act on."""
+    body = e.body
+    sub = body.get("subtype") if e.type is EventType.SYSTEM else None
+    label = str(body.get("kind") or sub or body.get("op") or e.type.value)
+    text = body.get("text") or body.get("instruction")
+    if text:
+        return label, str(text)
+    note, op, tid = body.get("note"), body.get("op"), body.get("task_id")
+    if sub:
+        return label, str(note or sub)
+    if op:
+        head = f"{op} {tid}" if tid else str(op)
+        return label, f"{head}: {note}" if note else head
+    return label, e.type.value
 
 
 @app.command(help="every task in the room: who has it, where it stands, how long since it moved, and whether it looks stuck")

@@ -127,13 +127,15 @@ class WorkerDaemon:
         self._wake_pending: dict[str, tuple[Event, str]] = {}
         self._wake_notified: dict[tuple[str, str, str], float] = {}  # (reason, agent, sender) -> when we last said "skipped": one notice per window
         self._jobs: dict[str, str] = {}                   # agent -> its standing job
-        self._recent: deque[tuple[str, str]] = deque(maxlen=RECENT_MESSAGES)
+        self._recent: deque[tuple[str, str, str]] = deque(maxlen=RECENT_MESSAGES)   # (who, text, event id)
         self.unclaimed_after_s, self.silent_after_s, self.progress_every_s = unclaimed_after_s, silent_after_s, progress_every_s
         self._task_req: dict[str, float] = {}             # task id -> when it was requested
         self._task_last: dict[str, float] = {}            # task id -> when its owner last did or said anything about it
         self._stalled: set[tuple[str, str]] = set()       # (task id, reason) already reported
         self._wake_claims: dict[str, dict] = {}           # wake key -> the claim this participant made (to notice one that was never answered)
         self._chat_tasks: set[str] = set()                # chat task commands this worker already looked at
+        self._chat_retry: dict[str, Event] = {}           # host '/task' commands whose request could not be written yet
+        self._post_retry_pause_s = 1.0
         self._wake_answered: set[str] = set()             # wake keys that got an answer or a failure notice
         self._reported_errors: set[str] = set()           # errors this worker already told the room about
 
@@ -324,6 +326,8 @@ class WorkerDaemon:
             stop_beat = self._start_progress(task_id, area.agent_id)
             try:
                 self.room.execute_task(task_id, area.name, body.get("instruction", ""), runner, self.task_timeout_s, images=images, notes=notes)
+            except ConnectionError:
+                raise  # the server could not be reached (for example while posting the result): the claim is picked up again, the task is not failed for good
             except Exception as exc:  # noqa: BLE001  a run that crashed is a failed task, not one that stays "running" until its claim goes stale
                 self.store.append(EventDraft(self.room.room_id, f"{task_id}:failed", task_id, EventType.TASK, self.me, area.agent_id, None,
                                              {"op": "failed", "task_id": task_id, "note": clip_text(f"{type(exc).__name__}: {exc}", 500)}))
@@ -370,7 +374,9 @@ class WorkerDaemon:
         """The host typed '@agent /task <what to do>' in the room: ask that agent's area to do it, exactly as `council request` would. Only the
         host's own words count (not an agent writing in the host's name), and only while the message is fresh."""
         posted = 0
-        for e in fresh:
+        retry = list(self._chat_retry.values())
+        self._chat_retry.clear()
+        for e in retry + list(fresh):
             if e.type is not EventType.QUESTION or e.body.get("kind") != "chat" or e.sender_participant != self.me or e.sender_agent is not None:
                 continue
             parsed = parse_chat_task(e.body.get("text", "")) if isinstance(e.body.get("text"), str) else None
@@ -381,6 +387,8 @@ class WorkerDaemon:
             if key in self._wake_done or key in self._chat_tasks:
                 continue
             self._chat_tasks.add(key)
+            if f"chat-{e.seq}" in state.tasks:
+                continue  # already turned into a task (this worker or an earlier one): nothing to run and nothing to report
             age = self._age_s(e)
             area = next((a for a in state.areas.values() if a.agent_id.lower() == name), None)
             if age > self.max_wake_age_s:
@@ -391,10 +399,13 @@ class WorkerDaemon:
                 posted += self._notify_skipped(e, name, self.clock(), "unknown_agent",
                                                f"no agent named {name} in this room, so no task was started")
             else:
-                task_id = f"chat-{e.seq}"
-                if task_id not in state.tasks:
-                    self.room.request_task(area.name, instruction, task_id=task_id)
-                    posted += 1
+                try:
+                    self.room.request_task(area.name, instruction, task_id=f"chat-{e.seq}")
+                except ConnectionError:
+                    self._chat_tasks.discard(key)
+                    self._chat_retry[key] = e  # the server could not be reached: the command is tried again at the next poll, not lost
+                    raise
+                posted += 1
         return posted
 
     def _interrupted_step(self) -> int:
@@ -548,7 +559,7 @@ class WorkerDaemon:
             key = (str(e.body.get("reason", "")), e.sender_agent, str(e.body.get("to", "") if e.body.get("reason") != "budget" else ""))
             self._wake_notified[key] = max(self._wake_notified.get(key, 0.0), at)  # a restarted worker keeps the rate limit
         if e.type is EventType.QUESTION and e.body.get("kind") in ("chat", "ask") and isinstance(e.body.get("text"), str):
-            self._recent.append((e.sender_agent or e.sender_participant, clip_text(e.body["text"], RECENT_MESSAGE_CHARS)))
+            self._recent.append((e.sender_agent or e.sender_participant, clip_text(e.body["text"], RECENT_MESSAGE_CHARS), e.event_id))
         elif e.type is EventType.SYSTEM and e.body.get("subtype") == "standing_job" and isinstance(e.body.get("agent"), str):
             area = next((a for a in self._proj.state.areas.values() if a.agent_id == e.body["agent"]), None)
             owner = area.owner_participant if area is not None else None
@@ -570,6 +581,8 @@ class WorkerDaemon:
             return float("inf")
 
     def _wake_step(self, fresh: list[Event], state: RoomState) -> int:
+        if self._gate.max_wakes <= 0:
+            return 0  # waking is switched off (`council worker --no-wake`): mentions are not even considered, so nothing is claimed and no budget notice is posted
         owned = self._owned_agents(state)
         allowed = {state.host, self.me} | self.wake_from
         actions = 0
@@ -616,15 +629,16 @@ class WorkerDaemon:
             verdict = self._gate.check(agent, now)
             if verdict == "cooldown":
                 continue
-            del self._wake_pending[key]
             if verdict == "budget":
+                del self._wake_pending[key]
                 self._wake_done.add(key)
                 actions += self._notify_skipped(e, agent, now)
                 continue
-            claim = self.store.append(EventDraft(
+            claim = self.store.append(EventDraft(      # a ConnectionError here leaves the request pending: it is tried again at the next poll
                 self.room.room_id, f"wakeclaim:{key}", e.thread_id, EventType.SYSTEM, self.me, agent, e.event_id,
                 {"subtype": "wake_claimed", "instance": self.instance, "for": e.event_id, "to": e.sender_participant},
             ))
+            del self._wake_pending[key]
             self._wake_done.add(key)
             if claim.body.get("instance") != self.instance:
                 continue  # another worker of this participant took it
@@ -666,7 +680,7 @@ class WorkerDaemon:
         tail = f"\nThe message to you:\n{clip_text(e.body['text'], OWN_MESSAGE_CHARS)}\n"
         header = "\nRecent room messages, oldest first:\n"
         left = WAKE_PROMPT_CHARS - len(head) - len(tail) - len(header) - 60
-        earlier = [f"- {who}: {text}" for who, text in list(self._recent)[:-1]]
+        earlier = [f"- {who}: {text}" for who, text, event_id in self._recent if event_id != e.event_id]     # every message but the one being answered, which is shown last
         kept: list[str] = []
         for line in reversed(earlier):           # newest first, until the budget is used
             if len(line) + 1 > left:
@@ -694,11 +708,23 @@ class WorkerDaemon:
         except Exception as exc:  # noqa: BLE001  a tool that fails must cost one wake, never the worker
             ok, text = False, str(exc)
         if not ok or not text.strip():
-            self.store.append(EventDraft(self.room.room_id, f"wakefail:{key}", e.thread_id, EventType.SYSTEM, self.me, agent, e.event_id,
-                                         {"subtype": "wake_failed", "to": e.sender_participant, "note": clip_text(text or "no answer", 500), "for": e.event_id}))
+            self._append_retrying(EventDraft(self.room.room_id, f"wakefail:{key}", e.thread_id, EventType.SYSTEM, self.me, agent, e.event_id,
+                                             {"subtype": "wake_failed", "to": e.sender_participant, "note": clip_text(text or "no answer", 500), "for": e.event_id}))
             return 1
-        self.store.append(EventDraft(
+        self._append_retrying(EventDraft(
             self.room.room_id, f"wake:{key}", e.thread_id, EventType.QUESTION, self.me, agent, e.event_id,
             {"text": clip_text(text), "kind": "chat", "wake_depth": wake_depth(e.body) + 1, "wake_for": e.event_id},
         ))
         return 1
+
+    def _append_retrying(self, draft: EventDraft, attempts: int = 3) -> None:
+        """The agent's answer is the expensive part of a wake: a brief connection error after the run must not throw it away. The event id makes a
+        repeat harmless, so this tries a few times and then lets the error through."""
+        for attempt in range(attempts):
+            try:
+                self.store.append(draft)
+                return
+            except ConnectionError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(self._post_retry_pause_s * (attempt + 1))

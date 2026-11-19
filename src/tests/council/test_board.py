@@ -1,5 +1,7 @@
 """`council board`: every task in the room on one screen, with who owns it, where it stands, how long since it moved, and whether it is stuck."""
+import dataclasses
 import time
+from datetime import datetime, timedelta, timezone
 
 from aletheore.council.board import board_rows, render_board
 from aletheore.council.protocol import EventDraft, EventType
@@ -32,6 +34,18 @@ def test_a_task_nobody_started_is_marked_stuck_after_a_while(world):
     world["alice"].request_task("schema", "design the table")
     assert rows(world)[0].stuck == ""
     assert rows(world, time.time() + 1200)[0].stuck == "unclaimed"
+
+
+def test_the_hosts_own_stall_notice_does_not_count_as_the_task_moving(world):
+    tid = world["alice"].request_task("schema", "design the table")
+    world["store"].append(EventDraft(world["alice"].room_id, "stall:1", tid, EventType.SYSTEM, "alice", None, None,
+                                     {"subtype": "task_stalled", "task_id": tid, "reason": "unclaimed", "note": "nobody started it"}))
+    rid = world["alice"].room_id
+    events = read_all(world["store"], rid)
+    later = (datetime.now(timezone.utc) + timedelta(seconds=1000)).isoformat()
+    events = [dataclasses.replace(e, created_at=later) if e.body.get("subtype") == "task_stalled" else e for e in events]
+    (r,) = board_rows(load_state(world["store"], rid), events, time.time() + 1200)
+    assert r.stuck == "unclaimed"                       # the notice that said so must not make the board say otherwise
 
 
 def test_a_running_task_that_stopped_reporting_is_marked_stuck(world):

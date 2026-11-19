@@ -58,6 +58,10 @@ _ENV_ALLOW = (
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
 )
 
+# A read-only run answers in text (the worker posts the answer for it): it may read the room but not write files or post with the tool, which would
+# skip the hand-off depth that keeps agents from waking each other without end.
+READ_ONLY_DENIED_TOOLS = ("Write", "Edit", "mcp__council__council_post")
+
 DEFAULT_CLAUDE_TOOLS = (
     "Read", "Write", "Edit", "Glob", "Grep",
     "mcp__council__council_status", "mcp__council__council_read", "mcp__council__council_post",
@@ -189,7 +193,7 @@ class ClaudeRunner:
         image_dirs = list(dict.fromkeys(str(Path(i).parent) for i in images))
         if image_dirs:
             argv += ["--add-dir", *image_dirs]  # lets the agent's Read tool open the attached images
-        tools = [t for t in self.allowed_tools if t not in ("Write", "Edit")] if read_only else list(self.allowed_tools)
+        tools = [t for t in self.allowed_tools if t not in READ_ONLY_DENIED_TOOLS] if read_only else list(self.allowed_tools)
         argv += ["--allowedTools", *tools]  # variadic: must come last
         code, out, err, timed_out = _run_process(argv, worktree, build_child_env(identity_env), timeout_s)
         events = _parse_events(out)
@@ -216,7 +220,7 @@ class CodexRunner:
             images: tuple[Path, ...] = (), read_only: bool = False) -> RunResult:
         entry = json.loads(Path(mcp_config).read_text(encoding="utf-8")).get("mcpServers", {}).get("council")
         overrides = []
-        if entry:
+        if entry and not read_only:  # a read-only run gets no council tools: it cannot post, and everything it needs is in its prompt
             mcp_env = {**entry.get("env", {}), **identity_env}
             overrides = [
                 f"mcp_servers.council.command={json.dumps(entry['command'])}",
