@@ -40,7 +40,6 @@ import re
 
 _ORACLE = [
     (re.compile(r"(^|[\s;|&])find\s+/(?!tmp\b)"), "searches the whole disk"),
-    (re.compile(r"git\s+remote"), "asks where the clone came from"),
     (re.compile(r"git\s+-C\s+\S+"), "looks at another repository"),
     (re.compile(r"manifest"), "reaches for the answer key"),
     (re.compile(r"site-packages|dist-packages"), "looks for an installed copy"),
@@ -52,6 +51,14 @@ _ORACLE = [
 
 
 _OWN_TOOL_RESULT = re.compile(r"^Read \S*/\.claude/projects/[^/\s]+/[0-9a-f-]{36}/tool-results/[\w.-]+$")
+
+
+_NOTES = [(re.compile(r"git\s+remote"), "asks where the clone came from (the clones have no remote, so nothing is revealed)")]
+
+
+def audit_notes(commands):
+    """Habits worth logging that cannot reveal anything in this setup, so they do not make a run contaminated."""
+    return [(c, why) for c in commands for rx, why in _NOTES if rx.search(c)]
 
 
 def audit_commands(commands):

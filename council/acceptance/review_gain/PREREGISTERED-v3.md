@@ -22,3 +22,9 @@ Gain is claimed only as follows (a screen with 3 replicates, not a significance 
   B. Speed gain at equal accuracy: the council mean is within 2 bugs of the better single agent's mean AND its mean wall-clock is at most 70 percent of that agent's.
   Neither: reported as no evidence of a gain. Attribution: if split is within 2 bugs of the council on mean, any gain is from splitting work in parallel, not from the planner.
 A run that fails is retried up to three times; no replicate is dropped for a poor score.
+
+## Addendum, 2026-11-19, written before any condition's score was examined
+The first Codex run showed a habit: its first orientation command includes `git remote -v`. The corpus clones have no remote (checked), so the command returns nothing and cannot
+reveal an answer. The audit now logs `git remote` as a note and it does not make a run contaminated. Every other oracle-seeking pattern still does (searching the disk, reading
+outside the corpus, installed copies, the network, the agent's memory, the answer key, another repository). Claude Code reading back its own saved tool output was also removed from
+the flags (a false alarm). Both changes came from reading flagged commands, not from any score. All saved command logs are re-audited with the final rule before anything is reported.

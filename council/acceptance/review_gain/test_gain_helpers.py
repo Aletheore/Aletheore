@@ -110,7 +110,7 @@ def test_the_judge_gives_up_after_many_cli_failures_and_says_so():
 # ---- v3 safeguards: log what agents do, flag oracle-seeking, keep the answer key encrypted ------------------------------------------------------------
 def test_normal_reading_is_not_flagged_and_oracle_seeking_is_():
     ok = ["sed -n '1,80p' funcy/colls.py", "cat parse.py", "rg -n 'if .* == ' funcy", "ls funcy", "python3 -c \"print(1)\"", "git log -3 --oneline"]
-    bad = ["find / -name 'funcy' -type d", "git remote -v", "cat /Users/x/dev/council-gain-data/v3/manifest.json", "ls /opt/homebrew/lib/python3.12/site-packages/funcy",
+    bad = ["find / -name 'funcy' -type d", "cat /Users/x/dev/council-gain-data/v3/manifest.json", "ls /opt/homebrew/lib/python3.12/site-packages/funcy",
            "pip download funcy", "curl -s https://pypi.org/simple/funcy/", "rg -n review ~/.codex/memories/MEMORY.md", "git -C /somewhere/else log", "cat ../manifest.enc"]
     assert gainlib.audit_commands(ok) == []
     flagged = gainlib.audit_commands(bad)
@@ -186,3 +186,11 @@ def test_claude_reading_back_its_own_saved_tool_output_is_not_oracle_seeking():
     for bad in ("Read /Users/x/.claude/projects/-private-var-gain-claude-abc-repo/memory/MEMORY.md", "Read /Users/x/.claude/CLAUDE.md",
                 "Read /Users/x/.claude/projects/-Users-x-Aletheore/abc/notes.md", "cat ~/.claude/settings.json"):
         assert gainlib.audit_commands([bad]), bad
+
+
+def test_git_remote_is_a_note_not_a_contamination_flag_because_the_clones_have_no_remote():
+    cmd = "ls funcy parse; git remote -v; for f in funcy/*.py; do nl -ba $f; done"
+    assert gainlib.audit_commands([cmd]) == []
+    assert gainlib.audit_notes([cmd]) == [(cmd, "asks where the clone came from (the clones have no remote, so nothing is revealed)")]
+    assert gainlib.audit_notes(["cat parse.py"]) == []
+    assert gainlib.audit_commands(["git -C /elsewhere remote -v"]) != []            # looking at another repository is still a flag

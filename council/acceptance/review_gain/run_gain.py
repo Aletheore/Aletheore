@@ -298,9 +298,10 @@ def main():
         if LOG:   # what every agent ran or read, and whether any of it looks like a search for an oracle (a condition with flags is not to be reported as a result)
             (out / f"{cond}-commands.json").write_text(json.dumps([{"agent": a, "commands": c} for a, c in LOG]))
         flags = [(a, c, why) for a, cmds in LOG for c, why in gainlib.audit_commands(cmds)]
+        notes = [(a, c, why) for a, cmds in LOG for c, why in gainlib.audit_notes(cmds)]
         if flags:
             print(f"  AUDIT: {len(flags)} command(s) look like oracle-seeking in {cond}, for example: {flags[0][2]}: {flags[0][1][:120]}", flush=True)
-        record = {"condition": cond, "rep": REP, "secs": res["secs"], "ok": res["ok"], "audit_flags": len(flags), "audit_examples": [[a, c[:200], why] for a, c, why in flags[:5]]}
+        record = {"condition": cond, "rep": REP, "secs": res["secs"], "ok": res["ok"], "audit_flags": len(flags), "audit_notes": len(notes), "audit_examples": [[a, c[:200], why] for a, c, why in flags[:5]]}
         if cond == "council":
             for a, t in res["executor_reports"].items():
                 (out / f"council-executor-{a}.txt").write_text(t)
