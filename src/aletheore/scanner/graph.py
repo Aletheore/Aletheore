@@ -27,6 +27,8 @@ from tree_sitter import Language, Node, Parser, Tree
 
 from aletheore.safe_io import read_text_lenient
 from aletheore.repo_config import is_ignored
+from aletheore.scanner.csharp_receivers import ReceiverTypes, definitely_not, normalize_type
+from aletheore.scanner.kotlin_members import MemberResolver, collect_classes, member_files
 from aletheore.scanner.detect import IGNORED_DIRS, _nested_git_roots, git_visible_paths, is_ignored_dir_name, visible_key
 
 PY_LANGUAGE = Language(tspython.language())
@@ -2264,11 +2266,56 @@ def _java_source_root_for(file_path: Path, package: str | None) -> Path | None:
     return root
 
 
+@lru_cache(maxsize=16384)
+def _dir_names_at(path: str, stamp: int) -> frozenset[str]:
+    try:
+        return frozenset(os.listdir(path))
+    except OSError:
+        return frozenset()
+
+
+def _dir_names(directory: Path) -> frozenset[str]:
+    """The entry names of a directory, as spelled on disk. Cached per directory modification time, so an edit to the
+    directory (a file added, renamed or removed) is seen on the next call."""
+    try:
+        stamp = os.stat(directory).st_mtime_ns
+    except OSError:
+        return frozenset()
+    return _dir_names_at(str(directory), stamp)
+
+
+def _exact_case_file(root: Path, parts: list[str]) -> Path | None:
+    """`root/parts...` when that file exists spelled exactly so. A case-insensitive filesystem (macOS, Windows) answers
+    yes for `a.java` when the file is `A.java`; the resolvers must not, or the graph would differ from the one a
+    case-sensitive filesystem gives and name a path that is not any scanned file."""
+    current = root
+    for index, part in enumerate(parts):
+        if not part or "\x00" in part:
+            return None
+        if part not in _dir_names(current):
+            return None
+        current = current / part
+        if index == len(parts) - 1:
+            return current if current.is_file() else None
+    return None
+
+
+def _exact_case_dir(root: Path, parts: list[str]) -> Path | None:
+    """The directory `root/parts...`, only when it exists spelled exactly so (see _exact_case_file)."""
+    current = root
+    for part in parts:
+        if not part or "\x00" in part:
+            return None
+        if part not in _dir_names(current):
+            return None
+        current = current / part
+    return current if current.is_dir() else None
+
+
 def _java_class_file(root: Path, segments: list[str]) -> Path | None:
     if not segments:
         return None
-    candidate = root.joinpath(*segments[:-1], f"{segments[-1]}.java")
-    return candidate if candidate.is_file() else None
+    return _exact_case_file(root, [*segments[:-1], f"{segments[-1]}.java"])
 
 
 def _path_closeness(a: Path, b: Path) -> int:
@@ -2352,7 +2399,7 @@ def _resolve_java_import(
         # the same "import the whole package" fan-out Go's package-level
         # imports need.
         matching_roots = _nearest_first(
-            importer, [root for root in source_roots if root.joinpath(*segments).is_dir()], coverage
+            importer, [root for root in source_roots if _exact_case_dir(root, segments) is not None], coverage
         )
         if not matching_roots:
             # `import a.b.Outer.*;` names the nested types of a class, not a package directory.
@@ -3647,6 +3694,7 @@ _CSHARP_TYPE_DECLS = (
 # start in practice, and a wrong edge is worse than a missing one: it invents a
 # dependency the wiki will then explain.
 _CSHARP_MIN_TYPE_NAME = 4
+_CSHARP_USING_STATIC_RE = re.compile(r"\busing\s+static\b")
 
 # Bounded so one file referencing hundreds of types cannot dominate the graph or
 # the importance ranking. Ordered by first appearance, so what survives the cap
@@ -3714,6 +3762,12 @@ def _csharp_partial_facts(type_node: Node, source: bytes) -> dict:
     return {"nested": sorted(nested), "members": sorted(m for m in members if len(m) >= 5 and m not in _CSHARP_COMMON_MEMBER_NAMES)}
 
 
+_CSHARP_TYPE_KIND = {
+    "class_declaration": "class", "struct_declaration": "struct", "interface_declaration": "interface",
+    "enum_declaration": "enum", "record_declaration": "record", "record_struct_declaration": "record",
+}
+
+
 def _csharp_file_summary(root: Node, source: bytes) -> dict:
     """Namespaces this file declares, its TOP-LEVEL types (name -> namespace; nested types are reachable only
     through their outer type), whether it defines extension methods, and its `global using` namespaces."""
@@ -3727,6 +3781,34 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
     bases: dict[str, set[str]] = {}
     partial: dict[str, dict] = {}  # top-level `partial` type name -> {ns, nested, members}
     nested_partial: set[str] = set()  # "namespace|Outer.Inner" of every nested `partial` type declared in this file
+    arity: dict[str, set[int]] = {}  # top-level type name -> generic arities declared (`Mock` is 0, `Mock<T>` is 1)
+    ext_decls: dict[str, list[dict]] = {}  # extension method name -> [{type, recv, tp}]: containing type, receiver type, type parameters
+    type_kinds: dict[str, str] = {}  # top-level type name -> class / struct / interface / enum / record
+    method_returns: dict[str, dict[str, list[str]]] = {}  # top-level type name -> method name -> declared return types
+    members_sig: dict[str, dict[str, str]] = {}  # the same two tables, externally visible members only: what the cache fingerprint sees
+    returns_sig: dict[str, dict[str, list[str]]] = {}
+
+    def collect_extension_methods(type_node: Node, type_name: str) -> None:
+        body = type_node.child_by_field_name("body")
+        for member in (body.children if body is not None else []):
+            if member.type != "method_declaration":
+                continue
+            method_name = member.child_by_field_name("name")
+            params = member.child_by_field_name("parameters")
+            first = next((prm for prm in (params.children if params is not None else []) if prm.type == "parameter"), None)
+            if method_name is None or first is None or not any(m.type == "modifier" and text(m) == "this" for m in first.children):
+                continue
+            type_children = [child for child in first.children if child.type != "modifier"]
+            recv = type_children[0] if len(type_children) >= 2 else None
+            tparams = member.child_by_field_name("type_parameters")
+            tp_names = [
+                text(next((g for g in tp.children if g.type == "identifier"), tp))
+                for tp in (tparams.children if tparams is not None else []) if tp.type == "type_parameter"
+            ]
+            ext_decls.setdefault(text(method_name), []).append(
+                {"type": type_name, "recv": text(recv) if recv is not None else "", "tp": tp_names,
+                 "ret": text(member.child_by_field_name("returns")) if member.child_by_field_name("returns") is not None else ""}
+            )
 
     def collect_nested_partial(type_node: Node, ns: str, path: str) -> None:
         body = type_node.child_by_field_name("body")
@@ -3737,6 +3819,7 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
             if name_node is None:
                 continue
             inner = f"{path}.{text(name_node)}"
+            type_kinds.setdefault(text(name_node), _CSHARP_TYPE_KIND.get(member.type, "other"))
             if any(m.type == "modifier" and text(m) == "partial" for m in member.children):
                 nested_partial.add(f"{ns}|{inner}")
             collect_nested_partial(member, ns, inner)
@@ -3775,8 +3858,19 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
                         else:
                             partial[type_name] = {"ns": ns, **facts}
                     collect_nested_partial(c, ns, type_name)
+                    collect_extension_methods(c, type_name)
+                    type_kinds.setdefault(type_name, _CSHARP_TYPE_KIND.get(c.type, "other"))
+                    type_params = next((child for child in c.children if child.type == "type_parameter_list"), None)
+                    arity.setdefault(type_name, set()).add(
+                        sum(1 for tp in (type_params.children if type_params is not None else []) if tp.type == "type_parameter")
+                    )
                     types.setdefault(type_name, ns)
                     members.setdefault(type_name, {}).update(_csharp_value_members(c, source))
+                    for method_name, returned in _csharp_method_returns(c, source).items():
+                        method_returns.setdefault(type_name, {}).setdefault(method_name, []).extend(returned)
+                    members_sig.setdefault(type_name, {}).update(_csharp_value_members(c, source, visible_only=True))
+                    for method_name, returned in _csharp_method_returns(c, source, visible_only=True).items():
+                        returns_sig.setdefault(type_name, {}).setdefault(method_name, []).extend(returned)
                     bases.setdefault(type_name, set()).update(_csharp_base_names(c, source))
             elif c.type == "declaration_list":
                 walk(c.children, ns)
@@ -3809,9 +3903,15 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
         "ext_ns": next(iter(types.values())) if types else "",
         "global_usings": _CSHARP_GLOBAL_USING_RE.findall(decoded),
         "members": members,
+        "method_returns": method_returns,
+        "members_sig": members_sig,
+        "returns_sig": returns_sig,
         "bases": {name: sorted(parents) for name, parents in bases.items()},
         "partial": partial,
         "nested_partial": sorted(nested_partial),
+        "arity": {name: sorted(values) for name, values in arity.items()},
+        "ext_decls": ext_decls,
+        "kinds": type_kinds,
     }
 
 
@@ -3849,6 +3949,105 @@ def _csharp_code_identifiers(root: Node, source: bytes) -> list[str]:
             continue
         stack.extend(reversed(n.children))
     return out
+
+
+_CSHARP_DECLARING_NODES = {
+    "variable_declarator", "parameter", "property_declaration", "method_declaration", "local_function_statement",
+    "enum_member_declaration", "type_parameter", "catch_declaration", "single_variable_designation",
+    "declaration_pattern", "foreach_statement", "event_field_declaration", "delegate_declaration",
+}
+
+
+def _csharp_name_uses(root: Node, source: bytes) -> dict[str, dict]:
+    """How each identifier is used in the code of one file, from the grammar alone (no type information):
+
+    kinds: "call" = the called name of `x.Name(...)` (a method group, never a type), "static" = the left side of
+    `Name.Member`, "generic" = `Name<...>`, "new" = `new Name(...)`, "decl" = the type of a declaration or
+    parameter, "other" = anything else; arities: the generic arity at each use (`Mock<T>` is 1, `Mock` is 0);
+    declared: the name is also declared here as a variable, parameter, member or type parameter."""
+    uses: dict[str, dict] = {}
+
+    def entry(name: str) -> dict:
+        return uses.setdefault(name, {"kinds": set(), "arities": set(), "declared": False})
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
+
+    def is_call_name(n: Node) -> bool:
+        parent = n.parent
+        if parent is None or parent.type != "member_access_expression":
+            return False
+        name_node = parent.child_by_field_name("name")
+        if name_node is None or name_node.id != n.id:
+            return False
+        grand = parent.parent
+        if grand is None or grand.type != "invocation_expression":
+            return False
+        func = grand.child_by_field_name("function")
+        return func is not None and func.id == parent.id
+
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        if n.type == "using_directive":
+            continue
+        if n.type in ("namespace_declaration", "file_scoped_namespace_declaration"):
+            name_node = n.child_by_field_name("name")
+            stack.extend(reversed([c for c in n.children if name_node is None or c.id != name_node.id]))
+            continue
+        if n.type == "generic_name":
+            ident = next((c for c in n.children if c.type == "identifier"), None)
+            args = next((c for c in n.children if c.type == "type_argument_list"), None)
+            if ident is not None:
+                count = 0
+                if args is not None:
+                    parts = [c for c in args.children if c.type not in ("<", ">", ",")]
+                    commas = sum(1 for c in args.children if c.type == ",")
+                    count = len(parts) if parts else commas + 1  # `Mock<>` (unbound) has only commas
+                item = entry(text(ident))
+                item["arities"].add(count)
+                item["kinds"].add("call" if is_call_name(ident) or (n.parent is not None and n.parent.type == "member_access_expression" and is_call_name(n)) else "generic")
+            for c in n.children:
+                if c.type == "type_argument_list":
+                    stack.append(c)
+            continue
+        if n.type == "identifier":
+            parent = n.parent
+            name = text(n)
+            item = entry(name)
+            if parent is not None and parent.type in _CSHARP_DECLARING_NODES and (
+                (parent.child_by_field_name("name") is not None and parent.child_by_field_name("name").id == n.id)
+                or parent.type in ("type_parameter", "single_variable_designation")
+            ):
+                item["declared"] = True
+            elif is_call_name(n):
+                item["kinds"].add("call")
+                item["arities"].add(0)
+            elif parent is not None and parent.type == "invocation_expression" and (
+                parent.child_by_field_name("function") is not None and parent.child_by_field_name("function").id == n.id
+            ):
+                item["kinds"].add("plain_call")  # `Name(...)` with no receiver: never an extension call, never a type
+                item["arities"].add(0)
+            elif parent is not None and parent.type == "member_access_expression" and (
+                parent.child_by_field_name("expression") is not None and parent.child_by_field_name("expression").id == n.id
+            ):
+                item["kinds"].add("static")
+                item["arities"].add(0)
+            elif parent is not None and parent.type == "object_creation_expression":
+                item["kinds"].add("new")
+                item["arities"].add(0)
+            elif parent is not None and parent.type in (
+                "variable_declaration", "parameter", "typeof_expression", "cast_expression", "as_expression",
+                "is_expression", "array_type", "nullable_type", "base_list",
+            ):
+                item["kinds"].add("decl")
+                item["arities"].add(0)
+            else:
+                item["kinds"].add("other")
+                item["arities"].add(0)
+            continue
+        stack.extend(reversed(n.children))
+    return uses
 
 
 _PROJECT_XML_MAX_BYTES = 2 * 1024 * 1024
@@ -3946,11 +4145,63 @@ def _build_csharp_index(repo_path: Path, summaries: dict[Path, dict]) -> dict:
     for path, summary in summaries.items():
         for type_name, facts in summary.get("partial", {}).items():
             partial_owners.setdefault((facts["ns"], type_name), set()).add(path)
+    ext_returns: dict[str, str] = {}
+    ext_return_seen: dict[str, set[str]] = {}
+    for summary in summaries.values():
+        for method, decls in summary.get("ext_decls", {}).items():
+            for decl in decls:
+                ret = normalize_type(decl.get("ret", ""))
+                if ret and ret not in ("void", "var") and ret not in decl.get("tp", ()):
+                    ext_return_seen.setdefault(method, set()).add(ret)
+                else:
+                    ext_return_seen.setdefault(method, set()).add("")  # unknown or generic: no single type
+    for method, rets in ext_return_seen.items():
+        if len(rets) == 1 and "" not in rets:
+            ext_returns[method] = next(iter(rets))
+    member_types: dict[str, dict[str, str]] = {}  # type -> property/field -> its type; "" when files disagree
+    returned_types: dict[str, dict[str, str]] = {}  # type -> method -> its return type; "" when overloads differ
+    for summary in summaries.values():
+        for type_name, table in summary.get("members", {}).items():
+            merged = member_types.setdefault(type_name, {})
+            for member, declared in table.items():
+                merged[member] = declared if merged.get(member, declared) == declared else ""
+        for type_name, table in summary.get("method_returns", {}).items():
+            merged = returned_types.setdefault(type_name, {})
+            for method, declared_list in table.items():
+                for declared in declared_list:
+                    merged[method] = declared if merged.get(method, declared) == declared else ""
+    kinds: dict[str, str] = {}
+    conflicting: set[str] = set()
+    base_names: dict[str, set[str]] = {}
+    for summary in summaries.values():
+        for type_name, kind in summary.get("kinds", {}).items():
+            if kinds.setdefault(type_name, kind) != kind:
+                conflicting.add(type_name)
+        for type_name, parents in summary.get("bases", {}).items():
+            base_names.setdefault(type_name, set()).update(parents)
+    for type_name in conflicting:
+        kinds.pop(type_name, None)  # the same simple name is a different kind of type in different files: do not guess
+    ancestor_cache: dict[str, set[str]] = {}
+
+    def ancestors(type_name: str) -> set[str]:
+        """Every base type name (transitively, by simple name) a repo type lists."""
+        if type_name in ancestor_cache:
+            return ancestor_cache[type_name]
+        ancestor_cache[type_name] = set()  # a cycle terminates here
+        found: set[str] = set()
+        for parent in base_names.get(type_name, ()):
+            found.add(parent)
+            found |= ancestors(parent)
+        ancestor_cache[type_name] = found
+        return found
+
     return {
         "files": summaries, "project_of": project_of, "visible": visible,
         "global_usings": global_usings, "ext_owners": ext_owners, "ext_short_generic": ext_short_generic,
         "partial_owners": partial_owners,
         "nested_partial_owners": nested_partial_owners,
+        "kinds": kinds, "ancestors": ancestors, "ext_returns": ext_returns,
+        "member_types": member_types, "returned_types": returned_types,
     }
 
 
@@ -3975,8 +4226,46 @@ def _csharp_visibility_scope(importer: Path, index: dict, usings: list[str] | No
     return {"chain": chain, "imported": imported}
 
 
+def _csharp_extension_winners(
+    chosen: list[Path], name: str, use: dict | None, receivers: ReceiverTypes, index: dict
+) -> list[Path]:
+    """Of the files declaring an extension method `name`, those a call `x.name(...)` can bind to.
+
+    The compiler picks one overload per call: those whose `this` type accepts the receiver are applicable, and an
+    overload declared on exactly the receiver's type beats the rest (`"s".Humanize()` binds `Humanize(this string)`,
+    not `Humanize<T>(this IEnumerable<T>)`). The result is the union over the calls in the file. Anything not decided by
+    the grammar (a receiver of unknown type, a name that is also a type or used outside a call) keeps every file."""
+    if use is None or use["kinds"] - {"call"}:
+        return chosen
+    recvs = receivers.calls.get(name)
+    if not recvs or any(r is None for r in recvs):
+        return chosen  # some call has a receiver we cannot type, and it could bind to any of them
+    files = index["files"]
+    decided: list[Path] = []
+    undecided: list[Path] = []
+    for owner in chosen:
+        facts = files.get(owner) or {}
+        if name in facts.get("types", {}) or not facts.get("ext_decls", {}).get(name):
+            undecided.append(owner)  # a type of that name, or overloads we did not see: leave it to the other rules
+        else:
+            decided.append(owner)
+    keep: set[Path] = set(undecided)
+    for recv in recvs:
+        applicable: list[Path] = []
+        exact: list[Path] = []
+        for owner in decided:
+            decls = files[owner]["ext_decls"][name]
+            if any(not definitely_not(recv, d["recv"], set(d.get("tp", ())), index["kinds"], index["ancestors"]) for d in decls):
+                applicable.append(owner)
+            if any(normalize_type(d["recv"]) == normalize_type(recv) for d in decls):
+                exact.append(owner)
+        keep.update(exact or applicable)
+    return [owner for owner in chosen if owner in keep]
+
+
 def _csharp_visible_owners(
-    name: str, owners: set[Path], importer: Path, index: dict, scope: dict, text: str
+    name: str, owners: set[Path], importer: Path, index: dict, scope: dict, text: str,
+    arities: set[int] | None = None,
 ) -> list[Path]:
     """The declaring files of `name` the importer can reach (see _csharp_type_reference_targets)."""
     best_rank: tuple[int, int] | None = None
@@ -3986,6 +4275,11 @@ def _csharp_visible_owners(
             continue
         owner_info = index["files"].get(owner) or {"types": {}, "ext_methods": []}
         ns = owner_info["types"].get(name)
+        if ns is not None and arities:
+            # `Mock<T>` and `Mock` are different types: a use with generic arity 1 does not name the arity-0 `Mock`
+            declared_arity = owner_info.get("arity", {}).get(name)
+            if declared_arity and not (set(declared_arity) & arities):
+                ns = None
         if ns is None and name in owner_info["ext_methods"]:
             ns = owner_info["ext_ns"]
         if ns is None:
@@ -4019,7 +4313,18 @@ def _csharp_simple_type_name(node: Node | None, source: bytes) -> str:
     return ""
 
 
-def _csharp_value_members(type_node: Node, source: bytes) -> dict[str, str]:
+def _csharp_member_visible(member: Node, type_node: Node, source: bytes) -> bool:
+    """Whether another file can observe the member: public, internal or protected, or any member of an interface.
+    A member with no modifier in a class or struct is private."""
+    if type_node.type == "interface_declaration":
+        return True
+    return any(
+        c.type == "modifier" and source[c.start_byte:c.end_byte].decode(errors="ignore") in ("public", "internal", "protected")
+        for c in member.children
+    )
+
+
+def _csharp_value_members(type_node: Node, source: bytes, visible_only: bool = False) -> dict[str, str]:
     """Properties and fields declared directly in a type body: name -> simple name of its declared type ("" unknown).
     Methods are left out: a call never makes a name stand for a type."""
     body = type_node.child_by_field_name("body")
@@ -4027,6 +4332,8 @@ def _csharp_value_members(type_node: Node, source: bytes) -> dict[str, str]:
     if body is None:
         return out
     for member in body.children:
+        if visible_only and member.type in ("property_declaration", "field_declaration") and not _csharp_member_visible(member, type_node, source):
+            continue
         if member.type == "property_declaration":
             name = member.child_by_field_name("name")
             if name is not None:
@@ -4046,6 +4353,33 @@ def _csharp_value_members(type_node: Node, source: bytes) -> dict[str, str]:
                 )
                 if name is not None:
                     out[source[name.start_byte:name.end_byte].decode(errors="ignore")] = declared
+    return out
+
+
+def _csharp_method_returns(type_node: Node, source: bytes, visible_only: bool = False) -> dict[str, list[str]]:
+    """Methods declared directly in a type body: name -> simple names of their declared return types ("" when the
+    return type is `void`, a method type parameter, or not a plain type name)."""
+    body = type_node.child_by_field_name("body")
+    out: dict[str, list[str]] = {}
+    if body is None:
+        return out
+    for member in body.children:
+        if member.type != "method_declaration" or (visible_only and not _csharp_member_visible(member, type_node, source)):
+            continue
+        name = member.child_by_field_name("name")
+        returns = member.child_by_field_name("returns")
+        if name is None or returns is None:
+            continue
+        declared = _csharp_simple_type_name(returns, source)
+        tparams = member.child_by_field_name("type_parameters")
+        generic = {
+            source[g.start_byte:g.end_byte].decode(errors="ignore")
+            for tp in (tparams.children if tparams is not None else []) if tp.type == "type_parameter"
+            for g in tp.children if g.type == "identifier"
+        }
+        if declared in generic or declared == "void":
+            declared = ""
+        out.setdefault(source[name.start_byte:name.end_byte].decode(errors="ignore"), []).append(declared)
     return out
 
 
@@ -4204,6 +4538,8 @@ def _csharp_type_reference_targets(
                     referenced.append((other, False))
                 elif member_used:
                     referenced.append((other, "inferred"))
+    uses = _csharp_name_uses(tree_root, source) if scope is not None and tree_root is not None else None
+    receivers: ReceiverTypes | None = None
     shadowing: set[str] = set()
     type_context: set[str] = set()
     if scope is not None and tree_root is not None:
@@ -4215,15 +4551,43 @@ def _csharp_type_reference_targets(
             continue
         if name in shadowing and name not in type_context:
             continue  # binds to an inherited or own member, not to the type of that name
+        use = uses.get(name) if uses is not None else None
+        if use is not None and not use["kinds"]:
+            continue  # the name is only declared in this file (a method, property or variable), never used
+        if use is not None and use["kinds"] == {"plain_call"} and not _CSHARP_USING_STATIC_RE.search(text):
+            continue  # only ever called without a receiver: binds to a method in scope, not to an extension or a type
+        short_type = False
+        short_ext = False
         if len(name) < _CSHARP_MIN_TYPE_NAME:
-            # only a unique generic extension called with explicit type arguments (see _build_csharp_index)
-            if (
+            # A short name is a type only where the grammar says so (`It.IsAny()`, `Foo<T>`, `new It()`, a declared
+            # type) and nothing in this file declares it as a variable, parameter, member or type parameter.
+            short_type = (
+                scope is not None and use is not None and len(name) >= 2 and not use["declared"]
+                and bool(use["kinds"] & {"static", "generic", "new", "decl"})
+            )
+            # or an extension method every call of which has a receiver of a known repo type that one overload is declared on
+            # exactly (an instance method of that type with the same name would win, so the edge is only inferred)
+            if not short_type and scope is not None and use is not None and use["kinds"] == {"call"} and index["ext_owners"].get(name):
+                if receivers is None and tree_root is not None:
+                    receivers = ReceiverTypes(tree_root, source, index["kinds"], index["ext_returns"], index)
+                recvs = receivers.calls.get(name) if receivers is not None else None
+                if recvs and all(r is not None for r in recvs):
+                    typed = {normalize_type(r) for r in recvs}
+                    short_ext = any(
+                        normalize_type(d["recv"]) in typed and normalize_type(d["recv"]) in index["kinds"]
+                        for owner in index["ext_owners"][name]
+                        for d in (index["files"].get(owner) or {}).get("ext_decls", {}).get(name, ())
+                    )
+            # or a unique generic extension called with explicit type arguments (see _build_csharp_index)
+            if not short_type and not short_ext and (
                 scope is None
                 or name not in index["ext_short_generic"]
                 or not re.search(r"\.\s*" + re.escape(name) + r"\s*<[^>()]*>\s*\(", text)
             ):
                 continue
-        owners = type_owners.get(name) if len(name) >= _CSHARP_MIN_TYPE_NAME else None
+        owners = type_owners.get(name) if len(name) >= _CSHARP_MIN_TYPE_NAME or short_type else None
+        if use is not None and use["kinds"] and use["kinds"] <= {"call"}:
+            owners = None  # only ever the called name of `x.Name(...)`: a method group, not a type
         if scope is not None:
             # an extension method is "owned" by the file that declares it and reached by calling it by name
             owners = (owners or set()) | index["ext_owners"].get(name, set())
@@ -4231,9 +4595,17 @@ def _csharp_type_reference_targets(
             continue
         seen.add(name)
         if scope is not None:
-            chosen = _csharp_visible_owners(name, owners, importer, index, scope, text)
+            chosen = _csharp_visible_owners(
+                name, owners, importer, index, scope, text, use["arities"] if use is not None else None
+            )
+            if receivers is None and tree_root is not None and any(
+                name in (index["files"].get(o) or {}).get("ext_decls", {}) for o in chosen
+            ):
+                receivers = ReceiverTypes(tree_root, source, index["kinds"], index["ext_returns"], index)
+            if receivers is not None:
+                chosen = _csharp_extension_winners(chosen, name, use, receivers, index)
             for owner in chosen:
-                referenced.append((owner, len(chosen) > 1))
+                referenced.append((owner, "inferred" if short_ext else len(chosen) > 1))
             if len(referenced) >= _CSHARP_MAX_TYPE_EDGES:
                 break
             continue
@@ -4918,6 +5290,8 @@ def _resolve_js_import(
     js_workspaces: dict[str, str] | None = None,
     ts_aliases: list[dict] | None = None,
 ) -> str | None:
+    if "\x00" in spec:
+        return None  # not a path any filesystem can name; resolving it would raise and abort the whole scan
     if not spec.startswith("."):
         # tsconfig `paths` / `baseUrl` win over a same-named package, as in TypeScript.
         if ts_aliases and not spec.startswith("/"):
@@ -6000,6 +6374,10 @@ def _swift_member_facts(root: Node, source: bytes) -> tuple[set[str], set[str]]:
             for name in (c for c in n.children if c.type == "simple_identifier"):
                 declared.add(text(name))
                 declaration_names.add(name.id)
+        elif t == "value_argument_label":
+            # `Config(dataCache: x)`: the label names a parameter of the callee, it is not a use of a member of that name
+            for name in (c for c in n.children if c.type == "simple_identifier"):
+                declaration_names.add(name.id)
         elif t == "simple_identifier" and n.id not in declaration_names:
             value = text(n)
             if value[:1].islower():
@@ -6053,6 +6431,64 @@ def _swift_type_facts(root: Node, source: bytes) -> tuple[set[str], set[str], se
     return top, declared, refs, imports
 
 
+def _swift_nested_facts(root: Node, source: bytes) -> tuple[set[tuple[str, str]], set[tuple[str, str]], dict[str, set[str]]]:
+    """Nested types and how they are named: (declared as (outer, name), written qualified as (outer, name),
+    unqualified uses of a name -> the types whose body or extension the use sits in).
+
+    `extension Logger { struct MetadataProvider }` declares `Logger.MetadataProvider`, which other files write as
+    `Logger.MetadataProvider`, or as plain `MetadataProvider` inside Logger's own body. The outer type of an extension
+    is the type it extends."""
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
+
+    declared: set[tuple[str, str]] = set()
+    qualified: set[tuple[str, str]] = set()
+    scoped: dict[str, set[str]] = {}
+
+    def walk(node: Node, chain: tuple[str, ...]) -> None:
+        kind = node.type
+        if kind in ("class_declaration", "protocol_declaration", "typealias_declaration"):
+            keyword = next((c.type for c in node.children if c.type in _SWIFT_DECL_KEYWORDS), None)
+            if keyword == "extension":
+                extended = next((c for c in node.children if c.type == "user_type"), None)
+                names = [text(c) for c in extended.children if c.type == "type_identifier"] if extended is not None else []
+                if extended is not None:
+                    for child in node.children:
+                        if child is not extended:
+                            walk(child, chain + tuple(names[-1:]))
+                    for left, right in zip(names, names[1:]):
+                        qualified.add((left, right))
+                return
+            name_node = next((c for c in node.children if c.type == "type_identifier"), None)
+            if name_node is not None:
+                name = text(name_node)
+                if chain:
+                    declared.add((chain[-1], name))
+                for child in node.children:
+                    if child is not name_node:
+                        walk(child, chain + (name,))
+                return
+        elif kind == "user_type":
+            names = [text(c) for c in node.children if c.type == "type_identifier"]
+            if len(names) >= 2:
+                for left, right in zip(names, names[1:]):
+                    qualified.add((left, right))
+                for child in node.children:
+                    if child.type != "type_identifier":
+                        walk(child, chain)
+                return
+            if names and chain:
+                scoped.setdefault(names[0], set()).update(chain)
+        elif kind == "import_declaration":
+            return
+        for child in node.children:
+            walk(child, chain)
+
+    walk(root, ())
+    return declared, qualified, scoped
+
+
 def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_files: dict[str, list[Path]]) -> None:
     """Edges between Swift files that name each other's types.
 
@@ -6078,6 +6514,8 @@ def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_fil
     owners: dict[str, dict[str, set[str]]] = {}
     member_facts: dict[str, tuple[set[str], set[str]]] = {}
     member_owners: dict[str, dict[str, set[str]]] = {}
+    nested_facts: dict[str, tuple[set[tuple[str, str]], set[tuple[str, str]], dict[str, set[str]]]] = {}
+    nested_owners: dict[str, dict[tuple[str, str], set[str]]] = {}
     for module in swift_modules:
         rel = module["path"]
         target = target_of.get(rel)
@@ -6091,12 +6529,15 @@ def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_fil
             tree_root = parser.parse(data).root_node
             facts[rel] = _swift_type_facts(tree_root, data)
             member_facts[rel] = _swift_member_facts(tree_root, data)
+            nested_facts[rel] = _swift_nested_facts(tree_root, data)
         except OSError:
             continue
         for name in facts[rel][0]:
             owners.setdefault(target, {}).setdefault(name, set()).add(rel)
         for name in member_facts[rel][0]:
             member_owners.setdefault(target, {}).setdefault(name, set()).add(rel)
+        for key in nested_facts[rel][0]:
+            nested_owners.setdefault(target, {}).setdefault(key, set()).add(rel)
     # A file too large to parse never becomes a module, but it is still part of its target: its type names are read from
     # the text so a same-named type in another file is not mistaken for the only owner of that name.
     for rel, target in target_of.items():
@@ -6136,6 +6577,24 @@ def _add_swift_type_edges(repo_path: Path, modules: list[dict], swift_target_fil
                     if other != target:
                         candidates |= owners.get(other, {}).get(name, set())
                 found = candidates
+            if len(found) != 1:
+                continue
+            dest = next(iter(found))
+            if dest != rel and dest not in present:
+                present.add(dest)
+                module.setdefault("imports", []).append(dest)
+        # Nested types: `Outer.Name` written out, or `Name` used inside Outer's own body, resolve to the one file that
+        # declares Name inside Outer (or an extension of Outer) in this target or an imported one.
+        _decl, written, scoped_uses = nested_facts[rel]
+        wanted: set[tuple[str, str]] = set(written)
+        for name, outers in scoped_uses.items():
+            wanted.update((outer, name) for outer in outers)
+        for key in sorted(wanted):
+            found = set(nested_owners.get(target, {}).get(key, ()))
+            if not found:
+                for other in imported:
+                    if other != target:
+                        found |= nested_owners.get(other, {}).get(key, set())
             if len(found) != 1:
                 continue
             dest = next(iter(found))
@@ -6422,7 +6881,10 @@ def _compute_resolution_signatures(
         ]
     if "csharp" in paths_by_language:
         extras["csharp"] = [
-            {rel(p): [s["ns"], sorted(s["types"].items()), s["ext_methods"], s["ext_generic"], s["global_usings"]]
+            {rel(p): [s["ns"], sorted(s["types"].items()), s["ext_methods"], s["ext_generic"], s["global_usings"],
+                      sorted(s["arity"].items()), sorted(s["ext_decls"].items()), sorted(s["kinds"].items()),
+                      sorted((k, sorted(v.items())) for k, v in s["members_sig"].items()),
+                      sorted((k, sorted((m, sorted(r)) for m, r in v.items())) for k, v in s["returns_sig"].items())]
              for p, s in sorted(csharp_summaries.items(), key=lambda kv: rel(kv[0]))},
             sorted((k, rel(v)) for k, v in csharp_prefix_map.items()),
             sorted((rel(p), rel(q) if q else None) for p, q in (csharp_index or {}).get("project_of", {}).items()),
@@ -7016,6 +7478,9 @@ def _add_kotlin_name_edges(repo_path: Path, modules: list[dict]) -> None:
     facts: dict[str, dict] = {}
     index: dict[tuple[str, str], set[str]] = {}
     value_index: dict[tuple[str, str], set[str]] = {}
+    parsed: dict[str, tuple[Node, bytes]] = {}
+    kotlin_classes: dict[str, dict[str, object]] = {}
+    class_table: dict[str, object] = {}
     for module in kotlin_modules:
         rel = module["path"]
         try:
@@ -7025,11 +7490,18 @@ def _add_kotlin_name_edges(repo_path: Path, modules: list[dict]) -> None:
             data = file_path.read_bytes()
         except OSError:
             continue
-        facts[rel] = _kotlin_type_facts(parser.parse(data).root_node, data)
+        tree_root = parser.parse(data).root_node
+        parsed[rel] = (tree_root, data)
+        facts[rel] = _kotlin_type_facts(tree_root, data)
+        for cls in collect_classes(tree_root, data, rel):
+            kotlin_classes.setdefault(rel, {}).setdefault(cls.name, cls)
+            class_table[cls.name] = None if cls.name in class_table else cls  # the same name in two places: unresolvable
         for name in facts[rel]["top"]:
             index.setdefault((facts[rel]["package"], name), set()).add(rel)
         for name in facts[rel]["top_values"]:
             value_index.setdefault((facts[rel]["package"], name), set()).add(rel)
+
+    resolver = MemberResolver(class_table)  # type: ignore[arg-type]
 
     def platform_owners(key: tuple[str, str], name: str, owners: set[str]) -> set[str]:
         """Kotlin Multiplatform: a name declared `expect` in a common source set and `actual` in platform ones. A
@@ -7095,9 +7567,18 @@ def _add_kotlin_name_edges(repo_path: Path, modules: list[dict]) -> None:
                 if facts[dest]["platform"].get(name) == "actual" and dest not in present:
                     present.add(dest)
                     module.setdefault("imports", []).append(dest)
+        # Members this file resolves through declared types (a property of an inherited class, `a.b.c` chains): the
+        # file that declares each one. Only the declared types in the source are followed, so these are guesses.
+        confidence = module.setdefault("import_confidence", {})
+        tree_data = parsed.get(rel)
+        if tree_data is not None:
+            for dest in sorted(member_files(tree_data[0], tree_data[1], rel, kotlin_classes.get(rel, {}), resolver)):
+                if dest not in present:
+                    present.add(dest)
+                    module.setdefault("imports", []).append(dest)
+                    confidence[dest] = "inferred"
         # Top-level functions and properties: named by an explicit import (exact), or used unqualified from the same
         # package / a wildcard-imported one (a guess: only a syntax tree, so a local of the same name is possible).
-        confidence = module.setdefault("import_confidence", {})
         explicit_values = {}
         for dotted, wildcard, alias in entry["imports"]:
             if wildcard or "." not in dotted:
