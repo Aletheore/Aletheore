@@ -239,3 +239,23 @@ def test_a_runs_own_temporary_worktree_counts_as_inside_the_corpus():
     assert gainlib.audit_commands(inside) == []
     assert gainlib.audit_commands(["Read /private/var/folders/p2/4x5y/T/something-else/x.py"]) != []
     assert gainlib.audit_commands(["Read /private/var/folders/p2/4x5y/T/gain-v3-work-abc/libs/funcy-2.1/funcy/seqs.py"]) != []      # the builder's workspace is not a run's worktree
+
+
+# ---- the audit follows the working folder across a run's commands and ignores regex text inside quotes -----------------------------------------------------
+def test_a_cd_in_an_earlier_command_carries_over_to_later_ones():
+    assert gainlib.audit_commands(["Bash cd funcy/funcy", "Bash ls ../../parse/parse"]) == []
+    assert gainlib.audit_commands(["Bash cd funcy", "Bash cd ../.."]) != []                   # climbing out of the corpus is still flagged
+    assert gainlib.audit_commands(["Bash cd funcy/funcy && cat colls.py", "Bash cd ../../schema/schema && cat __init__.py"]) == []
+
+
+def test_regex_text_inside_quotes_is_not_a_path():
+    ok = ["sed -n '/def \\|=\\|return\\|if \\|for /p' parse/parse/__init__.py", "sed 's/^ *\\([0-9]*\\)/\\1+419/' f.py", "awk '{ if ($1+0 > 0) print }' x.py",
+          "grep -n \"def validate\" -A135 schema/schema/__init__.py | sed -n 1,260p"]
+    assert gainlib.audit_commands(ok) == []
+    assert gainlib.audit_commands(['cat "/etc/hosts"']) != [] and gainlib.audit_commands(["cat '../manifest.enc'"]) != []
+
+
+def test_an_absolute_cd_into_the_runs_own_worktree_sets_the_folder():
+    run = "/private/var/folders/p2/4x5y/T/gain-claude-abc/repo"
+    assert gainlib.audit_commands([f"Bash cd {run}/parse/parse; sed -n 1,40p __init__.py", "Bash ls ../../funcy"]) == []
+    assert gainlib.audit_commands([f"Bash cd {run}/parse; ls ../../.."]) != []

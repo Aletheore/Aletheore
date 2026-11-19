@@ -67,42 +67,74 @@ _RUN_TREE = re.compile(r"^/(private/)?var/folders/[^/]+/[^/]+/T/gain-(claude|cod
 _SAFE_ABS = ("/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/usr/bin/", "/bin/", "/usr/local/bin/", "/opt/homebrew/bin/")
 
 
-def _leaves_corpus(command, root):
-    """Does any path in the command leave the corpus? Relative paths are resolved from the corpus root (or from the folder a `cd` moved to); absolute ones must be under `root`
-    when it is known. Paths to system programs and /dev/null are ignored."""
+_QUOTED = re.compile(r"'([^']*)'|\"([^\"]*)\"")
+_PATH_LIKE = re.compile(r"(~|\.\.?|/)[\w.@+\-/]*")
+
+
+def _tokens(command):
+    """Path-like tokens of a command, in order. Text inside quotes (sed and awk expressions, grep patterns) is not a path unless the whole quoted string looks like one."""
+    pieces = []
+
+    def keep(m):
+        text = m.group(1) if m.group(1) is not None else m.group(2)
+        pieces.append(text if _PATH_LIKE.fullmatch(text) else " ")
+        return f" \x00{len(pieces) - 1}\x00 "
+
+    stripped = _QUOTED.sub(keep, command)
+    out = []
+    for tok in _TOKENS.findall(stripped):
+        m = re.fullmatch(r"\x00(\d+)\x00", tok)
+        if m:
+            if pieces[int(m.group(1))].strip():
+                out.append(pieces[int(m.group(1))])
+        else:
+            out.append(tok.strip("`,"))
+    return out
+
+
+def _check(command, root, cwd):
+    """(leaves the corpus?, the working folder after this command). Relative paths are resolved from the working folder, which `cd` changes (it also carries over from earlier
+    commands of the same run); absolute paths must be in a run's own throwaway worktree or under `root`; system programs and /dev/null are ignored."""
     import posixpath
-    cwd = "."
-    m = _CD.search(command)
-    if m and not m.group(1).startswith(("/", "~")):
-        cwd = posixpath.normpath(m.group(1))
-    for tok in _TOKENS.findall(command):
-        tok = tok.strip("\"'`,")
+    toks = _tokens(command)
+    leaves, after_cd = False, False
+    for i, tok in enumerate(toks):
+        is_target = i > 0 and toks[i - 1] == "cd"
         if tok.startswith(_SAFE_ABS):
             continue
         if tok.startswith("~/") or tok == "~":
-            return True
+            leaves = True
+            continue
         if tok.startswith("/"):
             if _RUN_TREE.match(tok):
+                if is_target:   # an absolute cd into the run's own tree: the folder is whatever follows the repo folder's name
+                    m = re.search(r"/(?:repo|repo\d+|[\w-]+-repo)(/.*)?$", tok.rstrip("/"))
+                    cwd = posixpath.normpath((m.group(1) or "").lstrip("/") or ".") if m else "."
                 continue
-            if root is None or not (tok.rstrip("/") == root.rstrip("/") or tok.startswith(root.rstrip("/") + "/")):
-                return True
+            if root is not None and (tok.rstrip("/") == root.rstrip("/") or tok.startswith(root.rstrip("/") + "/")):
+                continue
+            leaves = True
             continue
-        if ".." in tok.split("/"):
+        if ".." in tok.split("/") or is_target:
             full = posixpath.normpath(posixpath.join(cwd, tok))
             if full == ".." or full.startswith("../"):
-                return True
-    return False
+                leaves = True
+                continue
+            if is_target:
+                cwd = full
+    return leaves, cwd
 
 
 def audit_commands(commands, root=None):
     """Commands (shell lines, or 'Read path' / 'Grep pattern path') that look like a search for an oracle: another copy of the code, the answer key, the clone's origin,
-    the network, or anything outside the corpus. `root` is the corpus folder when known (then absolute paths must stay under it). Returns [(command, reason)]."""
-    out = []
+    the network, or anything outside the corpus. The commands are one run's, in order, so a `cd` carries over. `root` is the corpus folder when known. Returns [(command, reason)]."""
+    out, cwd = [], "."
     for c in commands:
         if _OWN_TOOL_RESULT.search(c):
             continue   # Claude Code saves a large tool output to a file in its own session folder and reads it back: that is not a search for anything
         why = next((w for rx, w in _ORACLE if rx.search(c)), None)
-        if why is None and _leaves_corpus(c, root):
+        leaves, cwd = _check(c, root, cwd)
+        if why is None and leaves:
             why = "reads outside the corpus"
         if why:
             out.append((c, why))
