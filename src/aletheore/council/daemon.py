@@ -329,7 +329,7 @@ class WorkerDaemon:
                                              {"op": "failed", "task_id": task_id, "note": clip_text(f"{type(exc).__name__}: {exc}", 500)}))
                 return 1
             finally:
-                stop_beat.set()
+                stop_beat()
             try:
                 self._publish(task_id, area.agent_id)
             except ConnectionError:
@@ -338,22 +338,33 @@ class WorkerDaemon:
 
         return self._submit(f"task:{task_id}", area.agent_id, work)
 
-    def _start_progress(self, task_id: str, agent: str) -> threading.Event:
-        """While a task runs, say so every `progress_every_s`, so the host can tell a slow task from a stuck one. Returns the event that stops it."""
+    def _start_progress(self, task_id: str, agent: str) -> Callable[[], None]:
+        """While a task runs, say so every `progress_every_s`, so the host can tell a slow task from a stuck one. Returns the function that stops it:
+        it waits for the beat that may be mid-post, so no beat lands after the task is over."""
         stop = threading.Event()
+        thread: threading.Thread | None = None
         if self.progress_every_s > 0:
             def beat() -> None:
                 n = 0
                 while not stop.wait(self.progress_every_s):
                     n += 1
                     try:
+                        if stop.is_set():
+                            break  # the task ended while this beat was being prepared
                         self.store.append(EventDraft(self.room.room_id, f"progress:{task_id}:{self.instance}:{n}", task_id, EventType.SYSTEM, self.me, agent, None,
                                                      {"subtype": "task_progress", "task_id": task_id}))
                     except Exception:  # noqa: BLE001  a missed beat is not a failure  # nosec B110 - best effort: a failure here is expected and must not stop this path
                         pass
 
-            threading.Thread(target=beat, daemon=True, name=f"council-progress-{task_id}").start()
-        return stop
+            thread = threading.Thread(target=beat, daemon=True, name=f"council-progress-{task_id}")
+            thread.start()
+
+        def stop_beat() -> None:
+            stop.set()
+            if thread is not None:
+                thread.join(timeout=10)  # an unreachable store must not hold the task's own result back for long
+
+        return stop_beat
 
     def _chat_task_step(self, fresh: list[Event], state: RoomState) -> int:
         """The host typed '@agent /task <what to do>' in the room: ask that agent's area to do it, exactly as `council request` would. Only the

@@ -113,6 +113,31 @@ def test_a_running_task_sends_progress_and_stops_when_it_ends(world):
     assert len([e for e in all_events(world) if e.body.get("subtype") == "task_progress"]) == n     # no beat after the task is over
 
 
+def test_a_beat_that_is_still_being_posted_when_the_task_ends_is_not_left_to_land_afterwards(world):
+    class Brief(ScriptedRunner):
+        def run(self, *a, **k):
+            time.sleep(0.25)
+            return super().run(*a, **k)
+
+    world["alice"].request_task("schema", "design the table")
+    b, _ = daemon(world, "bob", runner=Brief(final_text="ok"), progress_every_s=0.1)
+    store, real_append = b.store, b.store.append
+
+    def slow_append(draft):
+        if draft.body.get("subtype") == "task_progress":
+            time.sleep(0.4)                                     # the store is slow: the beat is still in flight when the task ends
+        return real_append(draft)
+
+    store.append = slow_append
+    try:
+        b.run_once()
+    finally:
+        store.append = real_append
+    n = len([e for e in all_events(world) if e.body.get("subtype") == "task_progress"])
+    time.sleep(0.7)
+    assert len([e for e in all_events(world) if e.body.get("subtype") == "task_progress"]) == n     # nothing arrives once the task has returned
+
+
 def test_progress_can_be_turned_off(world):
     world["alice"].request_task("schema", "design the table")
     b, _ = daemon(world, "bob", runner=Slow(final_text="ok"), progress_every_s=0)
