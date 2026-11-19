@@ -266,3 +266,33 @@ def test_fragments_of_nested_quoting_that_cannot_be_paths_are_ignored():
     assert gainlib.audit_commands([cmd]) == []
     for bad in ("cat /etc/hosts", "cat ../manifest.enc", "ls ~/dev", "Read /Users/x/other/file.py"):
         assert gainlib.audit_commands([bad]), bad
+
+
+# ---- a finished run whose saved commands fail the final audit is not "done": it is archived as contaminated and run again -------------------------------
+def _record(tmp_path, cond="council", ok=True):
+    (tmp_path / "results.jsonl").write_text(json.dumps({"condition": cond, "ok": ok, "judge_failed": False}) + "\n")
+
+
+def test_a_clean_finished_condition_is_done(tmp_path):
+    _record(tmp_path)
+    (tmp_path / "council-commands.json").write_text(json.dumps([{"agent": "a", "commands": ["Read funcy/funcy/seqs.py", "Bash wc -l parse/parse/__init__.py"]}]))
+    assert gainlib.already_done(tmp_path, "council") is True
+
+
+def test_a_condition_whose_saved_commands_look_for_an_oracle_is_not_done(tmp_path):
+    _record(tmp_path)
+    (tmp_path / "council-commands.json").write_text(json.dumps([{"agent": "a", "commands": ["Bash pip download parse==0 2>&1 | head -0"]}]))
+    assert gainlib.already_done(tmp_path, "council") is False
+
+
+def test_a_condition_with_no_saved_commands_is_judged_on_its_record_alone(tmp_path):
+    _record(tmp_path)
+    assert gainlib.already_done(tmp_path, "council") is True
+
+
+def test_contaminated_files_are_archived_not_deleted(tmp_path):
+    for n in ("council.txt", "council-commands.json", "council-executor-x.txt", "split.txt"):
+        (tmp_path / n).write_text("data")
+    moved = gainlib.archive_contaminated(tmp_path, "council", "t1")
+    assert sorted(moved) == ["council-commands.json", "council-executor-x.txt", "council.txt"]
+    assert (tmp_path / "council.txt.contaminated-t1").read_text() == "data" and not (tmp_path / "council.txt").exists() and (tmp_path / "split.txt").exists()

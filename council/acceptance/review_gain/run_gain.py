@@ -277,6 +277,14 @@ def main():
             print(f"[rep {REP}] {cond}: already done, skipped", flush=True)
             continue
         prev = last_record(out, cond)
+        cmds_file = out / f"{cond}-commands.json"
+        if prev and prev.get("ok") and cmds_file.exists() and any(gainlib.audit_commands(e["commands"]) for e in json.loads(cmds_file.read_text())):
+            # finished, but what the agents did looked for an oracle: it does not count. Keep its files under another name and run the condition again.
+            moved = gainlib.archive_contaminated(out, cond, time.strftime("%m%d-%H%M%S"))
+            print(f"[rep {REP}] {cond}: the earlier run is contaminated (see the audit); archived {len(moved)} file(s) and running it again", flush=True)
+            with open(out / "results.jsonl", "a") as f:
+                f.write(json.dumps({"condition": cond, "rep": REP, "ok": False, "n_found": None, "found": None, "judge_failed": False, "contaminated": True}) + "\n")
+            prev = None
         res = load_saved(out, cond, prev) if prev and prev.get("ok") and prev.get("judge_failed") else None
         if res is not None:
             print(f"[rep {REP}] {cond}: scoring the saved review again (the run itself was fine)", flush=True)
@@ -287,6 +295,13 @@ def main():
                 print(f"[rep {REP}] {cond} ... (attempt {attempt})", flush=True)
                 LOG.clear()
                 res = runners[cond]()
+                run_flags = [(a, c, why) for a, cmds in LOG for c, why in gainlib.audit_commands(cmds)]
+                if run_flags and attempt < 3:
+                    print(f"[rep {REP}] {cond}: contaminated ({len(run_flags)} oracle-seeking command(s), for example {run_flags[0][2]}: {run_flags[0][1][:100]}); trying again", flush=True)
+                    with open(out / "results.jsonl", "a") as f:
+                        f.write(json.dumps({"condition": cond, "rep": REP, "secs": res["secs"], "ok": False, "n_found": None, "found": None, "judge_failed": False,
+                                            "contaminated": True, "attempt": attempt, "audit_examples": [[a, c[:200], why] for a, c, why in run_flags[:5]]}) + "\n")
+                    continue
                 if res["ok"] and res["text"].strip():
                     break
                 print(f"[rep {REP}] {cond}: failed ({res['secs']}s); {'trying again' if attempt < 3 else 'giving up'}", flush=True)

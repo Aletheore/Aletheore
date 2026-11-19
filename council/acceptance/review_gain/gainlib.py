@@ -21,18 +21,35 @@ def cap_for(n_files, mode, fixed=25, rate=1.5):
 
 
 def already_done(out_dir, condition):
-    """A condition recorded as run, judged, and ok is not run again on resume. One whose judge failed or whose run failed is."""
+    """A condition recorded as run, judged and ok is not run again on resume, UNLESS its saved commands fail the final audit (it looked for an oracle): that run is
+    contaminated and does not count. One whose judge failed or whose run failed is run again too."""
     f = Path(out_dir) / "results.jsonl"
     if not f.exists():
         return False
+    good = False
     for line in f.read_text().splitlines():
         try:
             r = json.loads(line)
         except ValueError:
             continue
         if r.get("condition") == condition and r.get("ok") and not r.get("judge_failed"):
-            return True
-    return False
+            good = True
+    if good:
+        cmds = Path(out_dir) / f"{condition}-commands.json"
+        if cmds.exists() and any(audit_commands(e["commands"]) for e in json.loads(cmds.read_text())):
+            return False
+    return good
+
+
+def archive_contaminated(out_dir, condition, tag):
+    """Keep the files of a contaminated run for the record, under a new name, so the rerun starts clean. Returns the names moved."""
+    moved = []
+    for p in sorted(Path(out_dir).glob(f"{condition}.txt")) + sorted(Path(out_dir).glob(f"{condition}-*")):
+        if ".contaminated-" in p.name:
+            continue
+        p.rename(p.with_name(p.name + f".contaminated-{tag}"))
+        moved.append(p.name)
+    return moved
 
 
 # ---- v3 safeguards ------------------------------------------------------------------------------------------------------------------------------------
