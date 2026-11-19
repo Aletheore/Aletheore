@@ -35,7 +35,16 @@ from score import JudgeFailed, found_ids
 
 CORPUS, OUT, REP = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve(), int(sys.argv[3])
 CONDITIONS = sys.argv[4:] or ["claude-alone", "codex-alone", "split", "council"]
-MANIFEST = json.load(open(CORPUS.parent / "manifest.json"))["bugs"]
+def _key():
+    """The key to the encrypted answer key: the environment (GAIN_KEY), else the macOS keychain item gain-key. Never a file next to the corpus."""
+    if os.environ.get("GAIN_KEY"):
+        return os.environ["GAIN_KEY"]
+    r = subprocess.run(["security", "find-generic-password", "-s", "gain-key", "-w"], capture_output=True, text=True)
+    return r.stdout.strip() or None
+
+
+MANIFEST = gainlib.load_manifest(CORPUS.parent, _key())["bugs"]
+LOG: list = []   # (agent id, commands) for every agent run in the condition being run; audited and saved after it
 FILES = sorted({b["file"] for b in MANIFEST})
 LINES = {f: len((CORPUS / f).read_text().split("\n")) for f in FILES}
 K = int(os.environ.get("GAIN_EXECUTORS", "3"))
@@ -64,6 +73,7 @@ def groups():
 
 def clone(dest):
     subprocess.run(["git", "clone", "-q", str(CORPUS), str(dest)], check=True)
+    subprocess.run(["git", "remote", "remove", "origin"], cwd=dest, check=True)   # a clone must not say where it came from: the folder beside the corpus held the answer key
     return dest
 
 
@@ -76,7 +86,7 @@ def empty_mcp(d, name="mcp.json"):
 def run_alone(kind):
     base = Path(tempfile.mkdtemp(prefix=f"gain-{kind}-"))
     wt = clone(base / "repo")
-    runner = {"claude": ClaudeRunner, "codex": CodexRunner}[kind]()
+    runner = gainlib.Recording({"claude": ClaudeRunner, "codex": CodexRunner}[kind](), LOG, f"{kind}-alone")
     t0 = time.time()
     r = runner.run(TASK.format(cap=CAP_ALONE, files="\n".join(f"- {f}" for f in FILES)), wt, empty_mcp(base), {}, TURN_TIMEOUT, read_only=True)
     return {"text": r.final_text, "secs": round(time.time() - t0), "ok": r.ok}
@@ -89,7 +99,7 @@ def run_split():
 
     def one(i):
         wt = clone(base / f"repo{i}")
-        runner = EXECUTORS[i][2]()
+        runner = gainlib.Recording(EXECUTORS[i][2](), LOG, EXECUTORS[i][0])
         r = runner.run(TASK.format(cap=cap_executor(len(g[i])), files="\n".join(f"- {f}" for f in g[i])), wt, empty_mcp(base, f"mcp{i}.json"), {}, TURN_TIMEOUT, read_only=True)
         return r.final_text, r.ok, round(time.time() - t0)
 
@@ -120,7 +130,7 @@ def run_council():
     for agent, person, kind in people:
         # the planner is woken once for the request and once for each executor's answer: its budget must cover K + 1 wakes (the default is 6 per ten minutes)
         extra = {"max_wakes": K + 6} if person == "bob" else {}
-        daemons[person] = WorkerDaemon(store, rooms[person], person, {agent: kind()}, bundles=bundles, task_timeout_s=TURN_TIMEOUT, claim_timeout_s=TURN_TIMEOUT + 900,
+        daemons[person] = WorkerDaemon(store, rooms[person], person, {agent: gainlib.Recording(kind(), LOG, agent)}, bundles=bundles, task_timeout_s=TURN_TIMEOUT, claim_timeout_s=TURN_TIMEOUT + 900,
                                        wake_cooldown_s=0.0, max_wake_depth=4, wake_from=wake_from.get(person, set()), poll_interval_s=0.5, **extra)
     pid, p_person = PLANNER[0], PLANNER[1]
     ex_ids = [a for a, _, _ in EXECUTORS]
@@ -268,6 +278,7 @@ def main():
             for attempt in range(1, 4):
                 wait_until_healthy()
                 print(f"[rep {REP}] {cond} ... (attempt {attempt})", flush=True)
+                LOG.clear()
                 res = runners[cond]()
                 if res["ok"] and res["text"].strip():
                     break
@@ -277,7 +288,12 @@ def main():
                                         "attempt": attempt, "notices": res.get("notices", [])}) + "\n")
         # the review text is saved first, so a scoring problem never costs a run
         (out / f"{cond}.txt").write_text(res["text"])
-        record = {"condition": cond, "rep": REP, "secs": res["secs"], "ok": res["ok"]}
+        if LOG:   # what every agent ran or read, and whether any of it looks like a search for an oracle (a condition with flags is not to be reported as a result)
+            (out / f"{cond}-commands.json").write_text(json.dumps([{"agent": a, "commands": c} for a, c in LOG]))
+        flags = [(a, c, why) for a, cmds in LOG for c, why in gainlib.audit_commands(cmds)]
+        if flags:
+            print(f"  AUDIT: {len(flags)} command(s) look like oracle-seeking in {cond}, for example: {flags[0][2]}: {flags[0][1][:120]}", flush=True)
+        record = {"condition": cond, "rep": REP, "secs": res["secs"], "ok": res["ok"], "audit_flags": len(flags), "audit_examples": [[a, c[:200], why] for a, c, why in flags[:5]]}
         if cond == "council":
             for a, t in res["executor_reports"].items():
                 (out / f"council-executor-{a}.txt").write_text(t)

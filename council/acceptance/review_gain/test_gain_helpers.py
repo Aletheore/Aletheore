@@ -105,3 +105,46 @@ def test_the_judge_gives_up_after_many_cli_failures_and_says_so():
     with pytest.raises(JudgeFailed):
         judge("alpha is wrong", [bug(1, fn="alpha")], runner, sleep=lambda s: None)
     assert len(runner.prompts) <= 8
+
+
+# ---- v3 safeguards: log what agents do, flag oracle-seeking, keep the answer key encrypted ------------------------------------------------------------
+def test_normal_reading_is_not_flagged_and_oracle_seeking_is_():
+    ok = ["sed -n '1,80p' funcy/colls.py", "cat parse.py", "rg -n 'if .* == ' funcy", "ls funcy", "python3 -c \"print(1)\"", "git log -3 --oneline"]
+    bad = ["find / -name 'funcy' -type d", "git remote -v", "cat /Users/x/dev/council-gain-data/v3/manifest.json", "ls /opt/homebrew/lib/python3.12/site-packages/funcy",
+           "pip download funcy", "curl -s https://pypi.org/simple/funcy/", "rg -n review ~/.codex/memories/MEMORY.md", "git -C /somewhere/else log", "cat ../manifest.enc"]
+    assert gainlib.audit_commands(ok) == []
+    flagged = gainlib.audit_commands(bad)
+    assert len(flagged) == len(bad)
+
+
+def test_commands_are_pulled_from_codex_and_claude_events():
+    codex = [{"type": "item.completed", "item": {"type": "command_execution", "command": "ls -la"}}, {"type": "item.completed", "item": {"type": "agent_message", "text": "x"}}]
+    claude = [{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "/a/b.py"}},
+                                                           {"type": "tool_use", "name": "Grep", "input": {"pattern": "foo", "path": "/a"}}, {"type": "text", "text": "hi"}]}}]
+    assert gainlib.commands_of(codex) == ["ls -la"]
+    assert gainlib.commands_of(claude) == ["Read /a/b.py", "Grep foo /a"]
+
+
+def test_the_manifest_round_trips_encrypted_and_the_file_does_not_contain_it(tmp_path):
+    data = {"bugs": [{"id": "M01", "file": "funcy/x.py", "line": 7, "function": "SECRET_FUNCTION_NAME"}]}
+    key = gainlib.new_key()
+    gainlib.save_manifest(tmp_path, data, key)
+    assert b"SECRET_FUNCTION_NAME" not in (tmp_path / "manifest.enc").read_bytes() and not (tmp_path / "manifest.json").exists()
+    assert gainlib.load_manifest(tmp_path, key) == data
+    with pytest.raises(Exception):
+        gainlib.load_manifest(tmp_path, gainlib.new_key())
+
+
+def test_a_plain_manifest_is_still_read_when_there_is_no_encrypted_one(tmp_path):
+    (tmp_path / "manifest.json").write_text(json.dumps({"bugs": [1]}))
+    assert gainlib.load_manifest(tmp_path, None) == {"bugs": [1]}
+
+
+def test_a_recording_runner_keeps_every_commands_for_the_audit():
+    from types import SimpleNamespace
+    inner = SimpleNamespace(name="codex", run=lambda *a, **k: SimpleNamespace(ok=True, final_text="x", exit_code=0,
+                                                                           raw_events=[{"type": "item.completed", "item": {"type": "command_execution", "command": "ls"}}]))
+    log = []
+    rec = gainlib.Recording(inner, log, "alice-codex")
+    rec.run("p", None, None, {}, 5)
+    assert log == [("alice-codex", ["ls"])]
