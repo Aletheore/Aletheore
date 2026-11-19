@@ -49,3 +49,17 @@ def test_include_search_root_is_inferred(tmp_path):
     importer = modules["src/main.c"]
     assert importer["imports"] == ["include/project.h"]
     assert importer["import_confidence"]["include/project.h"] == "inferred"
+
+
+def test_header_includers_get_the_same_treatment(tmp_path):
+    modules = _scan(tmp_path, {
+        "lib/a/util.h": '#include "mem.h"\n',
+        "contrib/kernel/mem.h": "int kernel;\n",
+        "lib/common/mem.h": "int common;\n",
+        "lib/a/other.h": '#include <project.h>\n',
+        "include/project.h": "int project;\n",
+    })
+    assert modules["lib/a/util.h"]["imports"] == []
+    other = modules["lib/a/other.h"]
+    assert other["imports"] == ["include/project.h"]
+    assert other["import_confidence"]["include/project.h"] == "inferred"

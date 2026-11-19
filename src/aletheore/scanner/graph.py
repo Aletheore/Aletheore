@@ -6267,6 +6267,8 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
     if not c_modules:
         return
     c_paths = {m["path"] for m in c_modules}
+    # `.h` is ambiguous between C and C++; a header counts as C only in a repository with no C++ source files.
+    has_cpp_sources = any(path.endswith((".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx")) for path in c_paths)
     known = {m["path"] for m in modules}
     by_base: dict[str, list[str]] = {}
     for path in known:
@@ -6276,7 +6278,9 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
 
     for module in c_modules:
         includer = module["path"]
-        c_source = module.get("language") == "c" and includer.endswith(".c")
+        c_source = (module.get("language") == "c" and includer.endswith(".c")) or (
+            includer.endswith(".h") and not has_cpp_sources
+        )
         includer_dir = includer.rsplit("/", 1)[0] if "/" in includer else ""
         try:
             source = (repo_path / includer).read_text(encoding="utf-8", errors="ignore")
