@@ -50,7 +50,8 @@ LINES = {f: len((CORPUS / f).read_text().split("\n")) for f in FILES}
 K = int(os.environ.get("GAIN_EXECUTORS", "3"))
 CAPS = os.environ.get("GAIN_CAPS", "fixed")
 TURN_TIMEOUT = int(os.environ.get("GAIN_TURN_TIMEOUT", "3000"))
-CAP_ALONE = gainlib.cap_for(len(FILES), CAPS, 25)
+RATE = float(os.environ.get("GAIN_CAP_RATE", "1.5"))
+CAP_ALONE = gainlib.cap_for(len(FILES), CAPS, 25, RATE)
 ALL_EXECUTORS = [("alice-codex", "alice", CodexRunner), ("carol-claude", "carol", ClaudeRunner), ("dave-codex", "dave", CodexRunner),
                  ("erin-claude", "erin", ClaudeRunner), ("finn-codex", "finn", CodexRunner), ("gwen-claude", "gwen", ClaudeRunner)]
 EXECUTORS = ALL_EXECUTORS[:K]
@@ -58,7 +59,7 @@ PLANNER = ("bob-claude", "bob", ClaudeRunner)
 
 
 def cap_executor(n_files):
-    return gainlib.cap_for(n_files, "per-file") if CAPS == "per-file" else 8
+    return gainlib.cap_for(n_files, "per-file", rate=RATE) if CAPS == "per-file" else 8
 
 
 TASK = ("Review the networkx modules listed below for bugs: code that does not do what its name, docstring or the surrounding logic says it should. Some of "
@@ -138,7 +139,7 @@ def run_council():
     def job(agent, text):
         store.append(EventDraft(rid, f"job:{agent}", "room", EventType.SYSTEM, "alice", None, None, {"subtype": "standing_job", "agent": agent, "text": text}))
 
-    cap_text = ("at most one and a half findings for each file assigned to it (rounded up)" if CAPS == "per-file" else f"at most {cap_executor(0)} findings")
+    cap_text = (f"at most {RATE:g} findings for each file assigned to it (rounded up)" if CAPS == "per-file" else f"at most {cap_executor(0)} findings")
     job(pid, f"You coordinate a code review done by {K} executor agents: {', '.join(ex_ids)}. When you are asked to review, do not read the code yourself first. Split the "
              f"files into {K} groups of roughly equal size and send ONE message that mentions all {K} executors (write each as @name), gives each its own group of files "
              f"and tells each to report {cap_text} (file, function, line, what is wrong and what it should be; real defects only). Executors answer one at a time "

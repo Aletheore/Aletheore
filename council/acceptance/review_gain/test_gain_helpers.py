@@ -148,3 +148,8 @@ def test_a_recording_runner_keeps_every_commands_for_the_audit():
     rec = gainlib.Recording(inner, log, "alice-codex")
     rec.run("p", None, None, {}, 5)
     assert log == [("alice-codex", ["ls"])]
+
+
+def test_the_cap_rate_is_a_setting():
+    assert gainlib.cap_for(23, "per-file", rate=3) == 69 and gainlib.cap_for(6, "per-file", rate=3) == 18 and gainlib.cap_for(5, "per-file", rate=2.5) == 13
+    assert gainlib.cap_for(23, "per-file") == 35          # the default is unchanged

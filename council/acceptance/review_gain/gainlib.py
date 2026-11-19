@@ -15,9 +15,9 @@ def groups(files, lines, k):
     return g
 
 
-def cap_for(n_files, mode, fixed=25):
-    """The most findings a condition may report for `n_files` files: 1.5 per file ("per-file", so the executors' caps add up to the single agent's), or a fixed number."""
-    return math.ceil(1.5 * n_files) if mode == "per-file" else fixed
+def cap_for(n_files, mode, fixed=25, rate=1.5):
+    """The most findings a condition may report for `n_files` files: `rate` (1.5) per file ("per-file", so the executors' caps add up to the single agent's), or a fixed number."""
+    return math.ceil(rate * n_files) if mode == "per-file" else fixed
 
 
 def already_done(out_dir, condition):
