@@ -51,6 +51,23 @@ class JudgeFailed(Exception):
 BATCH = 15
 
 
+def _last_object(text):
+    """The last JSON object in the text (a judge often answers, then corrects itself and answers again), as {id: bool}; None when there is none."""
+    dec, i, found = json.JSONDecoder(), 0, None
+    while True:
+        i = text.find("{", i)
+        if i < 0:
+            return found
+        try:
+            obj, end = dec.raw_decode(text, i)
+        except ValueError:
+            i += 1
+            continue
+        if isinstance(obj, dict) and obj and all(isinstance(k, str) for k in obj):
+            found = {k: bool(v) for k, v in obj.items()}
+        i = end
+
+
 def _ask(prompt, runner, sleep=time.sleep):
     """One judge call. A CLI that fails outright (missing for a moment because Claude Code updates itself in place, a rate limit) is waited out with growing pauses,
     up to 6 attempts; an answer that is there but unreadable gets one more try."""
@@ -64,12 +81,9 @@ def _ask(prompt, runner, sleep=time.sleep):
             if attempt < 5:
                 sleep(min(30 * (attempt + 1), 180))
             continue
-        m = re.search(r"\{.*\}", r.final_text or "", re.S)
-        if m:
-            try:
-                return {k: bool(v) for k, v in json.loads(m.group(0)).items()}
-            except (ValueError, AttributeError):
-                pass
+        verdict = _last_object(r.final_text or "")
+        if verdict is not None:
+            return verdict
         unreadable += 1
         if unreadable >= 2:
             break

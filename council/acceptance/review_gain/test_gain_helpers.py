@@ -194,3 +194,22 @@ def test_git_remote_is_a_note_not_a_contamination_flag_because_the_clones_have_n
     assert gainlib.audit_notes([cmd]) == [(cmd, "asks where the clone came from (the clones have no remote, so nothing is revealed)")]
     assert gainlib.audit_notes(["cat parse.py"]) == []
     assert gainlib.audit_commands(["git -C /elsewhere remote -v"]) != []            # looking at another repository is still a flag
+
+
+# ---- the judge sometimes corrects itself after its first answer: the last valid JSON object is the answer -------------------------------------------------
+def test_the_last_json_object_wins_when_the_judge_corrects_itself():
+    bugs = [bug(1, fn="alpha"), bug(2, fn="beta")]
+    reply = '{"M01": true, "M02": true}\n\nWait, correcting: beta is not really reported.\n\n{"M01": true, "M02": false}'
+    assert judge("alpha and beta", bugs, FakeRunner([reply])) == {"M01": True, "M02": False}
+
+
+def test_prose_with_braces_around_the_json_does_not_break_parsing():
+    bugs = [bug(1, fn="alpha")]
+    reply = 'Here is my answer {as requested}: {"M01": true} -- done {really}'
+    assert judge("alpha is wrong", bugs, FakeRunner([reply])) == {"M01": True}
+
+
+def test_json_that_is_not_an_object_of_ids_is_unreadable():
+    bugs = [bug(1, fn="alpha")]
+    with pytest.raises(JudgeFailed):
+        judge("alpha is wrong", bugs, FakeRunner(["[1, 2, 3]", "{broken"]))
