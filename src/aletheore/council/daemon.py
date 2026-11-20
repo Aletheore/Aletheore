@@ -25,7 +25,7 @@ from aletheore.council.room import WORKER_TIMEOUT_S, Room
 from aletheore.council.runners import WorkerRunner
 from aletheore.council.protocol import is_horizon
 from aletheore.council.snapshots import SNAPSHOT_EVERY, latest_snapshot, maybe_snapshot
-from aletheore.council.state import FINAL_TASK_STATUS, Projector, RoomState
+from aletheore.council.state import FINAL_TASK_STATUS, Projector, RoomState, load_state
 from aletheore.council.store import RoomStore, read_all
 from aletheore.council.wake import (
     MAX_WAKE_AGE_S, MAX_WAKE_DEPTH, MAX_WAKES, OWN_MESSAGE_CHARS, RECENT_MESSAGE_CHARS, RECENT_MESSAGES, STALE_REPORT_S, WAKE_PROMPT_CHARS, WAKE_WINDOW_S, WakeGate, mentions, parse_chat_task, wake_depth,
@@ -492,6 +492,9 @@ class WorkerDaemon:
     def _publish(self, task_id: str, agent: str) -> None:
         if self.bundles is None or self.room.base_sha is None:
             return
+        task = load_state(self.store, self.room.room_id).tasks.get(task_id)
+        if task is not None and task.no_changes:
+            return  # nothing was changed, so there is nothing to send (and no failure to report)
         branch = worker_branch(self.room.room_id, agent)
         out = self.room.state_dir / "bundles-out" / self.room.room_id / f"{agent}.bundle"
         try:

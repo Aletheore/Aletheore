@@ -24,6 +24,7 @@ class BoardRow:
     instruction: str
     idle_s: float     # seconds since anything was said about the task
     stuck: str        # "" | "unclaimed" (never started) | "silent" (running, but nothing for a while)
+    note: str = ""    # why it is blocked, or "no files changed" on a task that finished without changing anything
 
 
 def _ts(e: Event) -> float:
@@ -59,7 +60,7 @@ def board_rows(state: RoomState, events: list[Event], now: float,
         elif task.status == "running" and idle > silent_after_s:
             stuck = "silent"
         rows.append(BoardRow(tid, task.area, area.owner_participant if area else "?", area.agent_id if area else "?",
-                             _STATUS.get(task.status, task.status), task.branch or "", instruction.get(tid, ""), idle, stuck))
+                             _STATUS.get(task.status, task.status), task.branch or "", instruction.get(tid, ""), idle, stuck, task.note))
     rows.sort(key=lambda r: (r.status in _CLOSED, -order.get(r.task_id, 0)))
     return rows
 
@@ -74,6 +75,6 @@ def render_board(rows: list[BoardRow]) -> str:
     lines = [f"{'TASK':<14} {'AREA':<10} {'WHO':<18} {'STATUS':<9} {'IDLE':<5} WHAT"]
     for r in rows:
         status = r.status + (f" ({r.stuck})" if r.stuck else "")
-        lines.append(f"{r.task_id[:14]:<14} {r.area[:10]:<10} {(r.owner + '/' + r.agent)[:18]:<18} {status:<9} {_age(r.idle_s):<5} "
-                     f"{clip_text(' '.join(r.instruction.split()), 80)}")
+        what = clip_text(' '.join(r.instruction.split()), 80) + (f"  [{clip_text(r.note, 80)}]" if r.note else "")
+        lines.append(f"{r.task_id[:14]:<14} {r.area[:10]:<10} {(r.owner + '/' + r.agent)[:18]:<18} {status:<9} {_age(r.idle_s):<5} {what}")
     return "\n".join(lines)

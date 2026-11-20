@@ -24,10 +24,20 @@ from aletheore.council.state import FINAL_TASK_STATUS, Area, load_state
 from aletheore.council.store import RoomStore, read_all
 from aletheore.council.worktrees import (
     GitError, MergeResult, _git, branch_changed_files, changed_files, commit_all, create_worktree, files_outside_area, integration_branch,
-    merge_branch, worker_branch,
+    head_sha, merge_branch, worker_branch,
 )
 
 WORKER_TIMEOUT_S = 1800
+BLOCKED_MARKER = "BLOCKED:"  # an agent that cannot do a task starts its reply with this, so the task is not reported as finished
+NO_CHANGES_NOTE = "no files changed"
+
+
+def blocked_reason(text: str) -> str | None:
+    """The reason when an agent's reply starts with the BLOCKED: marker ('' if it gave none), else None."""
+    stripped = text.lstrip()
+    if stripped[:len(BLOCKED_MARKER)].upper() != BLOCKED_MARKER:
+        return None
+    return " ".join(stripped[len(BLOCKED_MARKER):].split())
 
 
 class Room:
@@ -186,20 +196,31 @@ class Room:
             f"Only create or change files matching: {', '.join(area.globs)}. "
             + ("Use the council_post tool to report claims, questions or challenges for the other agents." if self.agent_tools
                else "Finish by replying with a short summary of what you did and anything the other agents should know.")
+            + f" If you cannot do the task (the workspace is read-only, a tool is blocked, you lack access), change nothing and start your final reply with "
+              f"'{BLOCKED_MARKER}' and the reason: the task is then reported as blocked, not finished."
             + f"\n\nTask: {instruction}"
             + ("\n\nAttached images (open them with your file reading tool, do not copy them into the project):\n"
                + "\n".join(f"- {i}" for i in images) if images else "")
             + (f"\n\nNote: {notes}" if notes else "")
         )
+        head_before = head_sha(worktree)
         result = runner.run(prompt, worktree, self._mcp_config(owner, agent), self._identity(owner, agent), timeout_s, images=tuple(images))
         self._post(EventType.RESULT, f"{task_id}:result", {"text": clip_text(result.final_text), "ok": result.ok, "task_id": task_id}, owner, agent, thread=task_id)
         if not result.ok:
             self._post(EventType.TASK, f"{task_id}:failed", {"op": "failed", "task_id": task_id}, owner, agent, thread=task_id)
             return
-        commit_all(worktree, f"Council: {agent} work on {area_name}")
+        reason = blocked_reason(result.final_text)
+        if reason is not None:  # the agent says it could not do the work: say so, whatever else it wrote
+            self._post(EventType.TASK, f"{task_id}:blocked", {"op": "blocked", "task_id": task_id, "note": clip_text(reason or "no reason given", 300)},
+                       owner, agent, thread=task_id)
+            return
+        committed = commit_all(worktree, f"Council: {agent} work on {area_name}")
         outside = files_outside_area(changed_files(worktree, integration_branch(self.room_id)), area.globs)
         if outside:
             self._post(EventType.TASK, f"{task_id}:blocked", {"op": "blocked", "task_id": task_id, "files": outside}, owner, agent, thread=task_id)
+        elif not committed and head_sha(worktree) == head_before:
+            self._post(EventType.TASK, f"{task_id}:finished", {"op": "finished", "task_id": task_id, "no_changes": True, "note": NO_CHANGES_NOTE},
+                       owner, agent, thread=task_id)
         else:
             self._post(EventType.TASK, f"{task_id}:finished", {"op": "finished", "task_id": task_id}, owner, agent, thread=task_id)
 

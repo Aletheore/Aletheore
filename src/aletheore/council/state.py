@@ -41,6 +41,8 @@ class TaskState:
     blocked_files: list[str] = field(default_factory=list)
     acknowledged: bool = False
     replaced_by: str = ""  # a cancelled task the host handed to another area: the id of the task that took its place
+    note: str = ""  # why a task is blocked (the agent's own words), or "no files changed" on a task that finished without changing anything
+    no_changes: bool = False  # finished, but the agent changed no files: a result worth reading before trusting
 
 
 @dataclass
@@ -172,6 +174,8 @@ def _apply(state: RoomState, e: Event, host_fixed: bool) -> None:
             if task is None or area is None or sender != area.owner_participant or task.status == "cancelled":
                 return  # a cancelled task stays cancelled, whatever its old owner reports late
             task.status = _TASK_STATUS[op]
+            task.note = b["note"][:300] if isinstance(b.get("note"), str) else ""
+            task.no_changes = op == "finished" and b.get("no_changes") is True
             if isinstance(b.get("branch"), str) and b["branch"]:
                 task.branch = b["branch"]
             if op == "blocked":

@@ -101,7 +101,9 @@ class Conductor:
             if item.get("kind", "task") == "task":
                 t = state.tasks.get(f"{plan.plan_id}-{i}")
                 if t is not None and t.status == "blocked":
-                    problems.append(f"task {item['area']} is blocked: it changed files outside its area ({', '.join(t.blocked_files) or 'unknown'}); nothing from it was merged")
+                    why = (f"it changed files outside its area ({', '.join(t.blocked_files)}); nothing from it was merged" if t.blocked_files
+                           else f"the agent could not do it ({t.note or 'no reason given'})")
+                    problems.append(f"task {item['area']} is blocked: {why}")
                 elif t is not None and t.status == "failed":
                     problems.append(f"task {item['area']} failed")
             else:
@@ -112,7 +114,8 @@ class Conductor:
                 if rework is not None and rework.status == "failed":
                     problems.append(f"the rework of {rework.area} after verdict {v.verdict_id} failed")
                 elif rework is not None and rework.status == "blocked":
-                    problems.append(f"the rework of {rework.area} after verdict {v.verdict_id} is blocked: it changed files outside its area")
+                    why = ("it changed files outside its area" if rework.blocked_files else f"the agent could not do it ({rework.note or 'no reason given'})")
+                    problems.append(f"the rework of {rework.area} after verdict {v.verdict_id} is blocked: {why}")
                 if v is not None and v.winning_branch and v.status not in ("applied", "rejected"):
                     why = next((e.body.get("reason") for e in events if e.body.get("subtype") == "apply_blocked" and e.body.get("verdict_id") == v.verdict_id), "not merged")
                     problems.append(f"verdict {v.verdict_id} chose {v.winning_branch.split('/')[-1]} but it is not merged ({why})")
