@@ -12,6 +12,7 @@ import os
 
 import httpx
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError  # the library shows an agent a ToolError's text; any other exception is hidden as a crash
 
 from aletheore.council.agent_posts import MAX_READ_LIMIT, WORKER_POST_TYPES, build_post_draft, frame_event as _frame, neutralize as _neutralize, read_text
 from aletheore.council.store import RoomStore
@@ -45,7 +46,10 @@ def build_server(store: RoomStore, room_id: str, participant: str, agent_id: str
         evidence: list[dict] | None = None,
     ) -> str:
         """Post a question, claim, challenge, evidence, proposal or result to the room. Cite code with evidence refs."""
-        draft = build_post_draft(room_id, participant, agent_id, type, thread_id, text, reply_to, evidence)
+        try:
+            draft = build_post_draft(room_id, participant, agent_id, type, thread_id, text, reply_to, evidence)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc  # so the agent reads why, instead of a bare "Error executing tool"
         event = store.append(draft)
         return f"posted seq={event.seq}"
 
@@ -61,13 +65,13 @@ def build_broker_server(url: str, token: str) -> MCPServer:
         try:
             resp = client.request(method, path, **kw)
         except httpx.TransportError as exc:
-            raise ValueError("the Council broker for this run is not reachable (the run may be over)") from exc
+            raise ToolError("the Council broker for this run is not reachable (the run may be over)") from exc
         if resp.status_code >= 400:
             try:
                 detail = resp.json().get("detail", "")
             except ValueError:
                 detail = ""
-            raise ValueError(detail or f"the broker refused the request ({resp.status_code})")
+            raise ToolError(detail or f"the broker refused the request ({resp.status_code})")
         return resp.json()
 
     @server.tool()

@@ -14,13 +14,12 @@ import json
 from aletheore.council.dispatcher import Dispatcher, parse_plan
 from aletheore.council.mcp_tools import _frame
 from aletheore.council.protocol import EventDraft, EventType, clip_text
-from aletheore.council.state import load_state
+from aletheore.council.state import load_state, task_settled
 from aletheore.council.store import read_all
 from aletheore.council.worktrees import _git, integration_branch
 
 MAX_ROUNDS = 4
 MAX_STEPS = 16
-_FINAL_TASK = ("done", "failed", "blocked")
 
 
 def stop_room(store, room_id: str, participant: str) -> None:
@@ -102,7 +101,9 @@ class Conductor:
             if item.get("kind", "task") == "task":
                 t = state.tasks.get(f"{plan.plan_id}-{i}")
                 if t is not None and t.status == "blocked":
-                    problems.append(f"task {item['area']} is blocked: it changed files outside its area ({', '.join(t.blocked_files) or 'unknown'}); nothing from it was merged")
+                    why = (f"it changed files outside its area ({', '.join(t.blocked_files)}); nothing from it was merged" if t.blocked_files
+                           else f"the agent could not do it ({t.note or 'no reason given'})")
+                    problems.append(f"task {item['area']} is blocked: {why}")
                 elif t is not None and t.status == "failed":
                     problems.append(f"task {item['area']} failed")
             else:
@@ -113,7 +114,8 @@ class Conductor:
                 if rework is not None and rework.status == "failed":
                     problems.append(f"the rework of {rework.area} after verdict {v.verdict_id} failed")
                 elif rework is not None and rework.status == "blocked":
-                    problems.append(f"the rework of {rework.area} after verdict {v.verdict_id} is blocked: it changed files outside its area")
+                    why = ("it changed files outside its area" if rework.blocked_files else f"the agent could not do it ({rework.note or 'no reason given'})")
+                    problems.append(f"the rework of {rework.area} after verdict {v.verdict_id} is blocked: {why}")
                 if v is not None and v.winning_branch and v.status not in ("applied", "rejected"):
                     why = next((e.body.get("reason") for e in events if e.body.get("subtype") == "apply_blocked" and e.body.get("verdict_id") == v.verdict_id), "not merged")
                     problems.append(f"verdict {v.verdict_id} chose {v.winning_branch.split('/')[-1]} but it is not merged ({why})")
@@ -135,8 +137,7 @@ class Conductor:
             return False
         for i, item in enumerate(plan.tasks, 1):
             if item.get("kind", "task") == "task":
-                t = state.tasks.get(f"{plan.plan_id}-{i}")
-                if t is None or t.status not in _FINAL_TASK:
+                if not task_settled(state, f"{plan.plan_id}-{i}"):  # a task handed to another area is unfinished until its replacement is
                     return False
             elif not self._debate_over(f"{plan.plan_id}-d{i}", state, events):
                 return False
@@ -153,7 +154,7 @@ class Conductor:
         v = state.verdicts.get(str(decision.body.get("verdict_id")))
         if v is not None and v.status == "applied":
             rework = state.tasks.get(f"rework-{v.verdict_id}")
-            return rework is None or rework.status in _FINAL_TASK  # the loser's agent updates its files before the round is over
+            return rework is None or task_settled(state, rework.task_id)  # the loser's agent updates its files before the round is over
         if v is None or not v.winning_branch or v.status == "rejected":
             return True
         return any(e.body.get("subtype") == "apply_blocked" and e.body.get("verdict_id") == v.verdict_id for e in events)
