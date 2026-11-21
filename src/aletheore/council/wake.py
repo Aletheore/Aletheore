@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from collections import deque
 
-MAX_WAKE_DEPTH = 2        # a human message is depth 0; an agent's answer is one deeper; an agent message at this depth wakes nobody
+MAX_WAKE_DEPTH = 4        # a human message is depth 0; an agent's answer is one deeper; an agent message at this depth wakes nobody
 MAX_WAKES = 6             # wakes of one agent inside one window
 WAKE_WINDOW_S = 600.0
 WAKE_COOLDOWN_S = 3.0     # the least gap between two wakes of one agent (the CLI uses it; library users choose)

@@ -70,7 +70,7 @@ def test_the_worker_command_has_the_flag_and_passes_it_on(room, monkeypatch):
     assert seen["max_wake_depth"] == 4
 
 
-def test_the_default_is_unchanged(room, monkeypatch):
+def test_the_default_lets_a_planner_and_an_executor_talk_it_through(room, monkeypatch):
     seen = {}
 
     class FakeDaemon:
@@ -85,7 +85,7 @@ def test_the_default_is_unchanged(room, monkeypatch):
 
     monkeypatch.setattr(cli, "WorkerDaemon", FakeDaemon)
     assert runner.invoke(cli.app, ["worker", "--room", room, "--me", "alice"]).exit_code == 0
-    assert seen["max_wake_depth"] == 2
+    assert seen["max_wake_depth"] == 4
 
 
 @pytest.mark.parametrize("bad", ["0", "-1", "11", "abc"])

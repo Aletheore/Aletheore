@@ -81,7 +81,7 @@ def test_a_restart_does_not_repeat_the_too_old_notice(world):
 
 
 def test_a_chain_stopped_by_the_depth_limit_stays_silent(world):
-    say(world, "alice", "@claude deep", wake_depth=2)
+    say(world, "alice", "@claude deep", wake_depth=4)  # the default limit
     d, runner = daemon(world, "bob")
     d.run_once()
     assert runner.calls == [] and skips(world) == []               # the loop guard must not itself make noise
