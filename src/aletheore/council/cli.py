@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 import typer
@@ -25,10 +26,13 @@ from aletheore.council.bundle_transport import TransportError
 from aletheore.council.capabilities import inspect_agents as _inspect_builtin, inspect_user_agents
 
 from aletheore.council.conductor import MAX_ROUNDS, MAX_STEPS, Conductor, stop_room
-from aletheore.council.daemon import WorkerDaemon
+from aletheore.council.board import board_rows, render_board
+from aletheore.council.daemon import WorkerDaemon, run_guarded
 from aletheore.council.dispatcher import Dispatcher, send_ask, send_message, send_task
 from aletheore.council.worker_lock import WorkerAlreadyRunning, WorkerLock
-from aletheore.council.protocol import ProtocolError
+from aletheore.council.protocol import Event, EventDraft, EventType, ProtocolError, clip_text
+from aletheore.council.wake import MAX_WAKE_DEPTH, MAX_WAKES, WAKE_COOLDOWN_S
+from aletheore.council.waiting import Cursor, wait_for
 from aletheore.council.resume import ResumeStore
 from aletheore.council.remote_store import RemoteRoomStore
 from aletheore.council.room import Room
@@ -831,6 +835,11 @@ def worker(
     planner: str = typer.Option(None, "--planner", help="host only: also plan what people type, using this agent (claude or codex)"),
     max_rounds: int = typer.Option(MAX_ROUNDS, "--max-rounds", help="autonomous rooms: most plan rounds before the room stops"),
     max_steps: int = typer.Option(MAX_STEPS, "--max-steps", help="autonomous rooms: most tasks and debates in total before the room stops"),
+    wake_from: list[str] = typer.Option([], "--wake-from", help="besides the host and you, a person whose @mention may wake your agents (repeatable)"),
+    max_wakes: int = typer.Option(MAX_WAKES, "--max-wakes", help="most times one of your agents is woken by a mention inside ten minutes"),
+    max_wake_depth: int = typer.Option(MAX_WAKE_DEPTH, "--max-wake-depth", min=1, max=10,
+                                       help="how many agents may answer one another in a row after a person's message (default 2: one agent can hand over to another but not hear back; 4 lets a planner and an executor talk it through)"),
+    no_wake: bool = typer.Option(False, "--no-wake", help="do not wake your agents when they are mentioned"),
 ) -> None:
     r = _room(room)
     dispatcher = None
@@ -854,19 +863,18 @@ def worker(
             except typer.BadParameter:
                 return default
 
-    daemon = WorkerDaemon(r.store, r, me, _MyRunners(), bundles=bundle_store(r.store), parallel=True)
+    daemon = WorkerDaemon(r.store, r, me, _MyRunners(), bundles=bundle_store(r.store), parallel=True, wake_from=set(wake_from),
+                          max_wakes=0 if no_wake else max_wakes, wake_cooldown_s=WAKE_COOLDOWN_S, max_wake_depth=max_wake_depth)
     console.print(f"Worker for {me} running in room {room} (Ctrl+C to stop)", highlight=False, markup=False)
+    if not no_wake:
+        others = f", and {', '.join(sorted(set(wake_from)))}" if wake_from else ""
+        console.print(f"Your agents answer when the host or you mention them with @name{others} (at most {max_wakes} wakes per agent per 10 minutes, agents answering agents up to {max_wake_depth} deep)", highlight=False, markup=False)
     stop = threading.Event()
     if dispatcher is not None:
-        def plan_loop() -> None:
-            while not stop.is_set():
-                try:
-                    dispatcher.run_once()
-                except ConnectionError:
-                    pass
-                stop.wait(1.0)
+        def plan_failed(exc: Exception) -> None:
+            console.print(f"planner error (still running): {type(exc).__name__}: {exc}", highlight=False, markup=False)
 
-        threading.Thread(target=plan_loop, daemon=True).start()
+        threading.Thread(target=run_guarded, args=(dispatcher.run_once, stop, 1.0, plan_failed), daemon=True, name="council-planner").start()
         console.print(f"Planner ({planner}) is turning prompts into plans for approval", highlight=False, markup=False)
     try:
         daemon.run_forever(stop)
@@ -876,6 +884,102 @@ def worker(
     finally:
         daemon.close()
         lock.release()
+
+
+@app.command(help="wait until something is addressed to you (an @mention, a task, a debate turn; for the host also finished work, a plan to approve, someone waiting to join), print it, and exit: run it again to keep listening")
+@guarded
+def wait(
+    room: str = typer.Option(..., "--room"), me: str = typer.Option(..., "--me"),
+    timeout: float = typer.Option(300.0, "--timeout", help="seconds to wait; exit status 3 when nothing came"),
+    poll: float = typer.Option(1.0, "--poll", help="seconds between looks at the room"),
+    agent: list[str] = typer.Option([], "--agent", help="also treat @this-name as you (repeatable); your areas' agents are always included"),
+    show_all: bool = typer.Option(False, "--all", help="return any message from other people, not only those addressed to you"),
+    peek: bool = typer.Option(False, "--peek", help="do not move the place marker, so the next wait shows the same events again"),
+    since: int = typer.Option(None, "--since", help="start after this event number instead of where the last wait stopped"),
+    as_json: bool = typer.Option(False, "--json", help="print the events as JSON"),
+) -> None:
+    store = open_store()
+    verify_me(store, me)
+    events = wait_for(store, room, me, since=since, cursor=Cursor(home() / "wait" / f"{room}-{me}.json"), timeout_s=timeout, poll_s=max(0.05, poll),
+                      include_all=show_all, agents=set(agent), peek=peek,
+                      joins=(lambda: store.list_join_requests(room)) if hasattr(store, "list_join_requests") else None)
+    if not events:
+        console.print("nothing addressed to you yet", highlight=False, markup=False)
+        raise typer.Exit(3)
+    if as_json:
+        print(json.dumps([{"seq": e.seq, "from": e.sender_participant, "agent": e.sender_agent, "type": e.type.value, "thread": e.thread_id,
+                           "reply_to": e.reply_to, "body": e.body} for e in events], ensure_ascii=False))
+        return
+    for e in events:
+        who = e.sender_participant + (f"/{e.sender_agent}" if e.sender_agent else "")
+        label, text = describe_event(e)
+        console.print(f"#{e.seq} {who} [{label}]: {clip_text(text, 4000)}", highlight=False, markup=False)
+
+
+def describe_event(e: Event) -> tuple[str, str]:
+    """The label and the text `council wait` prints for an event. A chat message or request shows what was written; a notice shows why (its
+    note); a task result shows which task it is about and any note, so a waiting agent knows what to act on."""
+    body = e.body
+    sub = body.get("subtype") if e.type is EventType.SYSTEM else None
+    label = str(body.get("kind") or sub or body.get("op") or e.type.value)
+    text = body.get("text") or body.get("instruction")
+    if text:
+        return label, str(text)
+    note, op, tid = body.get("note"), body.get("op"), body.get("task_id")
+    if sub:
+        return label, str(note or sub)
+    if op:
+        head = f"{op} {tid}" if tid else str(op)
+        return label, f"{head}: {note}" if note else head
+    return label, e.type.value
+
+
+@app.command(help="every task in the room: who has it, where it stands, how long since it moved, and whether it looks stuck")
+@guarded
+def board(room: str = typer.Option(..., "--room"), me: str = typer.Option(..., "--me")) -> None:
+    store = open_store()
+    verify_me(store, me)
+    console.print(render_board(board_rows(load_state(store, room), read_all(store, room), time.time())), highlight=False, markup=False, soft_wrap=True)
+
+
+job_app = typer.Typer(help="standing jobs: what an agent does whenever it is woken", no_args_is_help=True)
+app.add_typer(job_app, name="job")
+
+
+@job_app.command("set", help="set an agent's standing job (the host, or the person who owns the agent); empty text clears it")
+@guarded
+def job_set(text: str = typer.Argument(...), room: str = typer.Option(..., "--room"), me: str = typer.Option(..., "--me"),
+            agent: str = typer.Option(..., "--agent")) -> None:
+    store = open_store()
+    verify_me(store, me)
+    state = load_state(store, room)
+    owner = next((a.owner_participant for a in state.areas.values() if a.agent_id == agent), None)
+    if me != state.host and me != owner:
+        raise PermissionError(f"only the host or {owner or 'the owner of that agent'} can set the job of {agent}")
+    store.append(EventDraft(room, f"job:{uuid.uuid4().hex}", "room", EventType.SYSTEM, me, None, None,
+                            {"subtype": "standing_job", "agent": agent, "text": clip_text(text.strip(), 2000)}))
+    console.print("job set" if text.strip() else "job cleared", highlight=False, markup=False)
+
+
+@job_app.command("show", help="show the standing job of each agent")
+@guarded
+def job_show(room: str = typer.Option(..., "--room"), me: str = typer.Option(..., "--me")) -> None:
+    store = open_store()
+    verify_me(store, me)
+    state = load_state(store, room)
+    owners = {a.agent_id: a.owner_participant for a in state.areas.values()}
+    jobs: dict[str, str] = {}
+    for e in read_all(store, room, 0):
+        if e.type is EventType.SYSTEM and e.body.get("subtype") == "standing_job" and isinstance(e.body.get("agent"), str):
+            if e.sender_participant == state.host or e.sender_participant == owners.get(e.body["agent"]):
+                if str(e.body.get("text", "")).strip():
+                    jobs[e.body["agent"]] = e.body["text"]
+                else:
+                    jobs.pop(e.body["agent"], None)
+    if not jobs:
+        console.print("no standing jobs", highlight=False, markup=False)
+    for agent, text in jobs.items():
+        console.print(f"{agent}: {text}", highlight=False, markup=False)
 
 
 @app.command(help="send a prompt: the host's planner turns it into a plan for the areas (needs host approval)")
@@ -996,6 +1100,20 @@ def request(
 ) -> None:
     task_id = _room(room).request_task(area, instruction)
     console.print(f"requested {task_id}", highlight=False, markup=False)
+
+
+@app.command(help="host only: stop a task that has not finished (for example its owner is gone); its owner's worker will not run it")
+@guarded
+def cancel(task: str = typer.Argument(...), room: str = typer.Option(..., "--room"), reason: str = typer.Option("", "--reason")) -> None:
+    _room(room).cancel_task(task, reason)
+    console.print(f"cancelled {task}", highlight=False, markup=False)
+
+
+@app.command("handover", help="host only: hand an unfinished task to another area (the old one is cancelled, the same instruction goes to the new owner)")
+@guarded
+def handover(task: str = typer.Argument(...), room: str = typer.Option(..., "--room"), area: str = typer.Option(..., "--area")) -> None:
+    new = _room(room).reassign_task(task, area)
+    console.print(f"{task} cancelled; the same work is now {new} for {area}", highlight=False, markup=False)
 
 
 @app.command(help="raise a conflict between two areas and run the debate")

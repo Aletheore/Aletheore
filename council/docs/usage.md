@@ -2,7 +2,7 @@
 
 Goal: friends on different networks and different operating systems share one Council room. Each person has their own identity (one per device), the host approves everyone who joins, and the server only ever stores sealed data it cannot read.
 
-Install with `pip install 'aletheore[council]'`. The commands below work as `council ...` or `aletheore council ...`. Rooms on your own machine or network need no tunnel; the free tunnel service (see `registry-runbook.md` for how it is run) lets a host on a home network reach people on other networks. Never expose the plain HTTP port directly to the internet.
+Council is part of every Aletheore install: `pip install aletheore` (it used to be the `council` extra, and `pip install 'aletheore[council]'` still works). The commands below work as `council ...` or `aletheore council ...`. Rooms on your own machine or network need no tunnel; the free tunnel service (see `registry-runbook.md` for how it is run) lets a host on a home network reach people on other networks. Never expose the plain HTTP port directly to the internet.
 
 ## Who does what
 - **The server** can be any machine you run (the host's laptop, a small VPS, a container). It stores sealed events, sealed files and the account list. It cannot read rooms.
@@ -114,7 +114,7 @@ An agent id ends in its kind: `bob-claude`, `alice-opencode`. A worker only has 
 
 | Kind | How | Status |
 |---|---|---|
-| `claude`, `codex` | their own runners | verified on macOS; Windows not tested |
+| `claude`, `codex` | their own runners | verified on macOS and Windows (on Windows: one read-only turn each, 2026-11-19; file-changing tasks not run there) |
 | `opencode` | `opencode run --pure --format=json`, config given inline (`OPENCODE_CONFIG_CONTENT`): file edits allowed, shell and web denied, room tools supported. Set `COUNCIL_OPENCODE_MODEL=provider/model` to pick a model. | verified 2026-11-11 on macOS and Windows through a real room task (file committed, shell refused, the agent also posted through the room tools). On Windows the room tools need the package installed in the Python environment (`pip install -e council`); run from source with only PYTHONPATH set and OpenCode starts without them |
 | `agy` | `agy --mode accept-edits --output-format json`, with shell, web and MCP denied by per-run settings. AGY only takes MCP servers from its global config, so a worker gets no room tools, which is fine. Images are not passed. Set `COUNCIL_AGY_MODEL`. | verified 2026-11-11 on macOS and Windows through a real room task. Sign in to AGY first. On Windows its sign-in lives in your own login session, so it works from your own terminal, not over SSH (`council/acceptance/real_worker_check.py agy`). Windows PowerShell 5 has no `&&`: use `;` |
 | anything else | describe it in `agents.json` (below) | not verified by Council; you check it |
@@ -139,3 +139,37 @@ Put a file `agents.json` in the Council folder (the same folder as `control-audi
 - Optional `"env": {"NAME": "value"}` for non-secret settings. The child gets only a small allowlist of the parent environment (no API keys); the agent's own sign-in must live in its usual folder.
 - The name is 2 to 24 lowercase letters and digits and must not be a built-in kind. Then use ids like `bob-myagent` in `define_area`.
 - Lock the agent down yourself (no shell, no web) with the flags your CLI offers: Council cannot do that for an agent it has not been taught.
+
+## Keeping agents in a room without prompting them every turn
+
+Two cases, two tools. Both are limited to plain chat (`council say`, the room's chat box); an `ask` goes to the agent it names through its own route and a prompt goes to the planner.
+
+**An agent Council can start (headless): `council worker`.** The worker already runs on each machine. It now also watches the room for chat that mentions one of your agents with `@agent-id` and runs that agent for one read-only turn (it can read the project and answer, not change files). The answer is posted to the room as that agent.
+
+- Who may wake your agents: the host, you, and anyone you name with `council worker --wake-from NAME` (repeatable). Nothing a message says changes that list; a guest the host trusts but you do not cannot wake your agents.
+- Limits: an agent runs at most `--max-wakes` times (default 6) in ten minutes and at least 3 seconds apart; a chain of agents answering agents stops after two hops by default (a human message starts a chain at zero; `--max-wake-depth N`, 1 to 10, changes that: 2 lets one agent hand work to another without hearing the answer, 4 lets a planner and an executor talk it through and the planner close with a verdict); the budget is the hard stop even if a sender forges the hop count. A planner that sends work to N executors is woken once for each answer, N+1 times in all, so give its worker `--max-wakes` of N+2 or more. A woken agent is shown the earlier room messages that fit (up to 40, newest first, 6000 characters each) and is told when older ones were left out; its standing job and the message that woke it always fit. A message older than 15 minutes is not answered when a worker starts. `--no-wake` turns it off.
+- Exactly once: each wake is claimed with an event first, so two workers for one person, or a restart, answer a message once. Nothing that cannot be answered is dropped silently, and each notice goes to the person who wrote the message and wakes their `council wait`: a failed wake is reported (`wake_failed`) and not retried; one whose worker died mid-run is reported as `interrupted` and not re-run (it could answer twice); a sender who may not wake the agent is told how the owner can allow it (`wake_skipped`, reason `not_allowed`); a message too old to answer is reported up to six hours back (`too_old`); a budget stop is reported once per window. A notice is limited to one per reason, agent and sender per window, so nobody can make a worker post a flood, and it never contains an @name, so it cannot wake anyone.
+- A wake only writes a chat message or a notice. It cannot approve, reject, remove, close, merge, change who may wake what, or start a task. A test fails if that changes. To start work from the room, the host types `@claude /task add the table` as the first words of a chat message: the host's own worker turns it into an ordinary task request for that agent's area, once. It counts only when the host typed it (not an agent writing in the host's name) and only while the message is fresh; a guest's version is ignored, and an unknown agent or a stale command is reported back.
+- Standing job: `council job set --room R --me alice --agent claude "when a new revision is announced, run the gate and post defects"` gives that agent a job that is added to every wake. The host or the agent's owner can set it; `council job show` lists them; empty text clears it.
+
+**An agent that is a session in your terminal (Claude Code, Codex): `council wait`.** A session cannot be started from outside, so it asks the room to wake it:
+
+```text
+council wait --room R --me carol --timeout 600
+```
+
+It blocks, using no tokens, until something is addressed to you (an `@carol` or `@your-agent` mention, a task for one of your areas, a debate turn), prints it and exits 0; exit 3 means nothing came. `--json` prints machine-readable events. Run it again to keep listening: a place marker in the Council folder gives each event once, and the first wait starts at the end of the log, so nothing old is replayed and nothing sent between two waits is lost. `--peek` reads without moving the marker; `--since N` starts after event N; `--all` returns every message by others.
+
+For Claude Code, run it as a background command: when it exits, the session is woken with its output, answers (`council say`), and starts the next wait. Instruction to give such a session: "Run `council wait --room R --me NAME --timeout 1200` in the background. When it returns, read the output, do what is asked within your task, answer with `council say`, and start the next wait. Never approve or reject a join; those stay with the person." For a Codex session without background commands, run the wait in the foreground with a long timeout in a loop.
+
+What else wakes a `council wait` (besides mentions, tasks for your areas and debate turns): the host hears when a task it asked for finishes, fails or is blocked, when a plan with tasks is waiting for approval, when a person is waiting to join (the server holds those; `wait` asks for them, each is reported once and remembered in the place marker), when a worker hit an error (`worker_error`) and when a task is stuck (`task_stalled`). The person who typed a prompt hears the plan's answer and the results of its tasks. Everyone but the writer hears a debate verdict. The owner of an area hears when a task was taken away from them.
+
+## Work that goes quiet
+
+- **Workers survive errors.** One bad event no longer ends a worker: it pauses (longer while it keeps failing, up to 30 seconds), tells the room once per distinct error (`worker_error`), and carries on. The planner thread has the same guard. A run that crashes fails its task at once instead of leaving it `running` until the claim goes stale (an hour).
+- **Progress and stalls.** A running task sends `task_progress` every two minutes. The host's worker reports `task_stalled` once: `unclaimed` when nobody has started a task after ten minutes (the owner's worker is probably not running; the note says whose), `silent` when a running task has sent nothing for six minutes.
+- **A task that could not be done is not "finished".** Every task prompt tells the agent: if you cannot do this (read-only workspace, a blocked tool, no access), change nothing and start your reply with `BLOCKED:` and the reason. The task is then `blocked` with that reason, shown on `council board` and in what `council wait` prints. A task that changed no files still ends `done`, but says `no files changed` (board, notices, `wait`), and no branch is published for it. Read the result before relying on a `done` that says so.
+- **See everything:** `council board --room R --me NAME` lists every task with owner, status, minutes since it moved and a stuck flag.
+- **Get unstuck (host only):** `council cancel TASK --room R` stops a task, and its owner's worker will not run it even if it comes back; `council handover TASK --room R --area OTHER` cancels it and gives the same instruction (and attachments) to another area as a new task. A plan counts a reassigned task as unfinished until its replacement finishes, so an autonomous room does not move on early. A late result from the old owner cannot revive a cancelled task.
+
+Limits that remain: an interactive session must be open; `wait` wakes it but a closed session cannot be started. An agent Council can start (the worker's headless mode) has no such limit. An invite link returned to a waiting agent is in its context, as before.

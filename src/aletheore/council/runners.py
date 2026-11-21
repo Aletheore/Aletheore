@@ -58,6 +58,10 @@ _ENV_ALLOW = (
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
 )
 
+# A read-only run answers in text (the worker posts the answer for it): it may read the room but not write files or post with the tool, which would
+# skip the hand-off depth that keeps agents from waking each other without end.
+READ_ONLY_DENIED_TOOLS = ("Write", "Edit", "mcp__council__council_post")
+
 DEFAULT_CLAUDE_TOOLS = (
     "Read", "Write", "Edit", "Glob", "Grep",
     "mcp__council__council_status", "mcp__council__council_read", "mcp__council__council_post",
@@ -148,10 +152,21 @@ def _parse_events(stdout: str) -> list[dict]:
     return events
 
 
+def _error_from_events(events: list[dict]) -> str:
+    """The agent CLIs often print why they failed (a usage limit, an expired sign-in) on stdout, as a final result or error event, and nothing on stderr."""
+    for e in reversed(events):
+        text = e.get("result") if e.get("type") == "result" and e.get("is_error") else (e.get("message") or e.get("error") if e.get("type") in ("error", "turn.failed") else None)
+        if isinstance(text, dict):
+            text = text.get("message")
+        if isinstance(text, str) and text.strip():
+            return text.strip()[-2000:]
+    return ""
+
+
 def _failure(code: int, stderr: str, events: list[dict], timed_out: bool, timeout_s: int) -> RunResult:
     if timed_out:
         return RunResult(False, f"agent run timed out after {timeout_s}s", code, events)
-    note = stderr.strip()[-2000:] or f"agent exited with code {code}"
+    note = stderr.strip()[-2000:] or _error_from_events(events) or f"agent exited with code {code}"
     return RunResult(False, note, code, events)
 
 
@@ -178,7 +193,7 @@ class ClaudeRunner:
         image_dirs = list(dict.fromkeys(str(Path(i).parent) for i in images))
         if image_dirs:
             argv += ["--add-dir", *image_dirs]  # lets the agent's Read tool open the attached images
-        tools = [t for t in self.allowed_tools if t not in ("Write", "Edit")] if read_only else list(self.allowed_tools)
+        tools = [t for t in self.allowed_tools if t not in READ_ONLY_DENIED_TOOLS] if read_only else list(self.allowed_tools)
         argv += ["--allowedTools", *tools]  # variadic: must come last
         code, out, err, timed_out = _run_process(argv, worktree, build_child_env(identity_env), timeout_s)
         events = _parse_events(out)
@@ -205,7 +220,7 @@ class CodexRunner:
             images: tuple[Path, ...] = (), read_only: bool = False) -> RunResult:
         entry = json.loads(Path(mcp_config).read_text(encoding="utf-8")).get("mcpServers", {}).get("council")
         overrides = []
-        if entry:
+        if entry and not read_only:  # a read-only run gets no council tools: it cannot post, and everything it needs is in its prompt
             mcp_env = {**entry.get("env", {}), **identity_env}
             overrides = [
                 f"mcp_servers.council.command={json.dumps(entry['command'])}",
@@ -223,6 +238,8 @@ class CodexRunner:
         argv += ["--json", "--sandbox", "read-only" if read_only else "workspace-write", "-C", str(worktree)]
         if self.model:
             argv += ["-m", self.model]
+        if sys.platform == "win32" and not read_only:  # without this Codex's Windows sandbox opens the workspace read-only and the agent cannot write (verified on Windows 11)
+            overrides.append('windows.sandbox="unelevated"')
         for o in overrides:
             argv += ["-c", o]
         argv.append(instruction)

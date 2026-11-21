@@ -223,3 +223,33 @@ def test_local_rooms_keep_the_direct_tool_path_without_a_broker(tmp_path):
     env = cfg["mcpServers"]["council"]["env"]
     assert "COUNCIL_STORE" in env and "COUNCIL_BROKER_URL" not in env
     room.close_brokers()
+
+
+def _tool_error(server, name, args):
+    """The text an agent sees when a tool refuses (the library's own message, as the agent's client receives it)."""
+    try:
+        result = asyncio.run(server.call_tool(name, args))
+    except Exception as exc:  # noqa: BLE001
+        return str(exc)
+    return result.content[0].text if getattr(result, "isError", False) and result.content else ""
+
+
+def test_a_refused_post_tells_the_agent_why_so_it_can_correct_itself(env):
+    """Seen with real Claude Code: it sent evidence as {"file": ...}, the broker refused, and the agent only saw 'Error executing tool council_post'."""
+    store, broker, url, clock = env
+    server = build_broker_server(url, broker.mint("alice-claude"))
+    wrong_type = _tool_error(server, "council_post", {"type": "decision", "thread_id": "t1", "text": "x"})
+    assert "may post only" in wrong_type and "claim" in wrong_type
+    bad_evidence = _tool_error(server, "council_post", {"type": "claim", "thread_id": "t1", "text": "x", "evidence": [{"file": "a.py"}]})
+    assert "commit_sha" in bad_evidence and "path" in bad_evidence and "start_line" in bad_evidence  # it says what an evidence ref needs
+    assert "characters" in _tool_error(server, "council_post", {"type": "claim", "thread_id": "t1", "text": "x" * 20000})
+    assert events(store) == []  # nothing was posted by any of the refused calls
+
+
+def test_an_expired_or_unreachable_broker_is_explained_to_the_agent(env):
+    store, broker, url, clock = env
+    token = broker.mint("alice-claude", ttl_s=60)
+    server = build_broker_server(url, token)
+    clock.now += 120
+    msg = _tool_error(server, "council_status", {})
+    assert "expired" in msg  # the broker's own words reach the agent, not just the bare "Error executing tool" prefix

@@ -185,6 +185,20 @@ def test_codex_runner_works_with_no_council_mcp_server(bin_dir, tmp_path):
     assert not any("mcp_servers" in a for a in json.loads(out.read_text()))
 
 
+def test_codex_gets_a_writable_sandbox_on_windows_only_for_write_runs(tmp_path, monkeypatch):
+    import aletheore.council.runners as runners
+    seen = []
+    monkeypatch.setattr(runners, "_resolve", lambda name: "codex")
+    monkeypatch.setattr(runners, "_run_process", lambda argv, *a, **k: (seen.append(argv), (0, '{"type": "item.completed", "item": {"type": "agent_message", "text": "fine"}}', "", False))[1])
+    cfg = tmp_path / "empty.json"
+    cfg.write_text(json.dumps({"mcpServers": {}}))
+    flag = 'windows.sandbox="unelevated"'
+    for platform, read_only, expected in (("win32", False, True), ("win32", True, False), ("linux", False, False)):
+        monkeypatch.setattr(runners.sys, "platform", platform)
+        CodexRunner().run("do it", tmp_path, cfg, {}, timeout_s=20, read_only=read_only)
+        assert (flag in seen[-1]) is expected, (platform, read_only)
+
+
 from aletheore.council.runners import _resolve
 
 
@@ -249,3 +263,71 @@ def test_scripted_runner_writes_nothing_when_read_only(tmp_path):
     assert not (tmp_path / "a.txt").exists() and r.read_only_calls == [True]
     r.run("i", tmp_path, tmp_path / "m.json", {}, 5)
     assert (tmp_path / "a.txt").exists() and r.read_only_calls == [True, False]
+
+
+# ---- a failed run says why: the CLI's own error, not just its exit code ----------------------------------------------------------------------------
+
+def _run_with_output(tmp_path, monkeypatch, out, err="", code=1, kind="claude"):
+    import aletheore.council.runners as r
+    monkeypatch.setattr(r, "_run_process", lambda argv, cwd, env, timeout_s: (code, out, err, False))
+    monkeypatch.setattr(r, "_resolve", lambda b: f"/bin/{b}")
+    cfg = tmp_path / "m.json"
+    cfg.write_text('{"mcpServers": {}}')
+    runner = ClaudeRunner() if kind == "claude" else CodexRunner()
+    return runner.run("go", tmp_path, cfg, {}, 5)
+
+
+def test_a_claude_failure_with_nothing_on_stderr_reports_the_error_from_its_output(tmp_path, monkeypatch):
+    out = '{"type":"system","subtype":"init"}\n{"type":"result","subtype":"error","is_error":true,"result":"You have reached your usage limit. It resets at 4pm."}'
+    res = _run_with_output(tmp_path, monkeypatch, out)
+    assert not res.ok and "usage limit" in res.final_text
+
+
+def test_stderr_still_wins_when_the_agent_wrote_there(tmp_path, monkeypatch):
+    out = '{"type":"result","is_error":true,"result":"from stdout"}'
+    res = _run_with_output(tmp_path, monkeypatch, out, err="from stderr")
+    assert "from stderr" in res.final_text and "from stdout" not in res.final_text
+
+
+def test_with_no_message_anywhere_the_exit_code_is_reported(tmp_path, monkeypatch):
+    res = _run_with_output(tmp_path, monkeypatch, "", code=3)
+    assert res.final_text == "agent exited with code 3"
+
+
+def test_a_codex_failure_reports_its_error_event(tmp_path, monkeypatch):
+    out = '{"type":"error","message":"rate limit exceeded, try again later"}'
+    res = _run_with_output(tmp_path, monkeypatch, out, kind="codex")
+    assert not res.ok and "rate limit" in res.final_text
+
+
+def test_an_error_message_longer_than_the_limit_is_kept_to_its_tail(tmp_path, monkeypatch):
+    out = json.dumps({"type": "result", "is_error": True, "result": "x" * 5000 + " THE-REASON"})
+    res = _run_with_output(tmp_path, monkeypatch, out)
+    assert len(res.final_text) <= 2000 and res.final_text.endswith("THE-REASON")
+
+
+def test_a_read_only_run_cannot_post_to_the_room_with_the_tools(tmp_path, monkeypatch, mcp_config):
+    """A woken agent answers in text and the worker posts it. If the tool stayed available, a message could talk the agent into posting
+    itself, with no hand-off depth, and two agents could then call each other past the depth limit."""
+    import aletheore.council.runners as r
+    seen = {}
+
+    def fake(argv, cwd, env, timeout_s):
+        seen["argv"] = argv
+        return 0, '{"type":"result","result":"ok","is_error":false}\n{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}', "", False
+
+    monkeypatch.setattr(r, "_run_process", fake)
+    monkeypatch.setattr(r, "_resolve", lambda b: f"/bin/{b}")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    ClaudeRunner().run("look", wt, mcp_config, {}, 5, read_only=True)
+    tools = seen["argv"][seen["argv"].index("--allowedTools") + 1:]
+    assert "mcp__council__council_post" not in tools and "Write" not in tools and "Edit" not in tools
+    assert "mcp__council__council_read" in tools                        # it can still read the room
+    ClaudeRunner().run("work", wt, mcp_config, {}, 5)
+    assert "mcp__council__council_post" in seen["argv"]                 # a work run keeps it
+
+    CodexRunner().run("look", wt, mcp_config, {}, 5, read_only=True)
+    assert not any("mcp_servers.council" in a for a in seen["argv"])    # no council tools at all for a read-only Codex run
+    CodexRunner().run("work", wt, mcp_config, {}, 5)
+    assert any("mcp_servers.council" in a for a in seen["argv"])
