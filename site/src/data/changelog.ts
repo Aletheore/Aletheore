@@ -30,6 +30,13 @@ export type ChangelogEntry = {
  */
 export const changelogEntries: ChangelogEntry[] = [
   {
+    date: "2026-11-21",
+    title: "Aletheore 0.14.0: Council agents stay in the room, Council in every install, and much better route and import maps",
+    tags: ["feature", "fix"],
+    body: "Aletheore 0.14.0 is on PyPI (pip install --upgrade aletheore). Council is now part of every install instead of an optional extra, and its agents stay in a room without being prompted every turn: an @mention wakes an agent for a read-only turn, and agents can hand work to each other up to four hops deep by default. A Council task whose agent could not do the work now reads blocked with the reason instead of finished, and Codex on Windows can write files in a task. The scanner maps many more web-framework routes (Actix, Gin, Rails, NestJS, Django, Spring, Laravel, ASP.NET, Flask, Rocket, Micronaut, Next.js, Symfony, JAX-RS, Sinatra and others) and follows more imports in Rust, Kotlin, Swift, C#, Go, JavaScript, TypeScript, PHP and Java. A JavaScript or TypeScript import specifier with a NUL byte no longer aborts a scan.",
+    link: { label: "Full changelog", href: "https://github.com/Aletheore/Aletheore/blob/master/CHANGELOG.md" },
+  },
+  {
     date: "2026-11-14",
     title: "Aletheore 0.13.0: Shield, Council, a smaller MCP tool set, and two fixes",
     tags: ["feature", "fix"],

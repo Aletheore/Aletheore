@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+## 0.14.0 - 2026-11-21
+
 - Changed: the default `--max-wake-depth` for Council workers is now 4 (was 2), so a planner and an executor can talk it through and the planner can close with a verdict without raising the flag. The per-agent wake budget (`--max-wakes`, 6 per 10 minutes) and the 3-second gap are unchanged.
 - Changed: Council is no longer an optional extra. Its packages (`fastapi`, `uvicorn`, `textual`, `psycopg`, `pynacl`, `platformdirs`) are ordinary dependencies, so `pip install aletheore` includes `aletheore council` and the `council` command. `pip install 'aletheore[council]'` still works (the extra is now empty). The Council code is still loaded only when a Council command runs, so other commands start as fast as before; a damaged install that lacks one of its packages now says what is missing and to reinstall.
 - Added: Council agents stay in a room without being prompted every turn. A mention (`@agent`) wakes that agent for one read-only turn (with limits, once only, and a notice to the sender when a mention cannot be answered); `council wait` lets a Claude Code or Codex session in a terminal listen for mentions, results, plans to approve, verdicts and join requests; the host can type `@agent /task ...` to start work from the room, cancel or hand over a stuck task, and see every task with `council board`; running tasks report progress and the host is told about tasks nobody started or that went quiet; a worker survives errors and tells the room once. See `council/docs/usage.md`.
