@@ -185,6 +185,20 @@ def test_codex_runner_works_with_no_council_mcp_server(bin_dir, tmp_path):
     assert not any("mcp_servers" in a for a in json.loads(out.read_text()))
 
 
+def test_codex_gets_a_writable_sandbox_on_windows_only_for_write_runs(tmp_path, monkeypatch):
+    import aletheore.council.runners as runners
+    seen = []
+    monkeypatch.setattr(runners, "_resolve", lambda name: "codex")
+    monkeypatch.setattr(runners, "_run_process", lambda argv, *a, **k: (seen.append(argv), (0, '{"type": "item.completed", "item": {"type": "agent_message", "text": "fine"}}', "", False))[1])
+    cfg = tmp_path / "empty.json"
+    cfg.write_text(json.dumps({"mcpServers": {}}))
+    flag = 'windows.sandbox="unelevated"'
+    for platform, read_only, expected in (("win32", False, True), ("win32", True, False), ("linux", False, False)):
+        monkeypatch.setattr(runners.sys, "platform", platform)
+        CodexRunner().run("do it", tmp_path, cfg, {}, timeout_s=20, read_only=read_only)
+        assert (flag in seen[-1]) is expected, (platform, read_only)
+
+
 from aletheore.council.runners import _resolve
 
 

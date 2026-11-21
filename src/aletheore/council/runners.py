@@ -238,6 +238,8 @@ class CodexRunner:
         argv += ["--json", "--sandbox", "read-only" if read_only else "workspace-write", "-C", str(worktree)]
         if self.model:
             argv += ["-m", self.model]
+        if sys.platform == "win32" and not read_only:  # without this Codex's Windows sandbox opens the workspace read-only and the agent cannot write (verified on Windows 11)
+            overrides.append('windows.sandbox="unelevated"')
         for o in overrides:
             argv += ["-c", o]
         argv.append(instruction)
