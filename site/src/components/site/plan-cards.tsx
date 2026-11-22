@@ -94,6 +94,9 @@ export function PlanCards() {
   const [failed, setFailed] = useState<Interval | null>(null);
 
   useEffect(() => {
+    // Monthly prices are the published dollar prices: Paddle's preview localizes by visitor country
+    // (adds local tax, converts), which flashed odd numbers over the real ones.
+    if (interval === "month") return;
     let cancelled = false;
     const items = previewItems(interval);
     (async () => {
@@ -114,7 +117,7 @@ export function PlanCards() {
   const shown = (plan: Plan): { price: string; note: string } => {
     if (plan.id === "community") return { price: plan.price, note: plan.priceNote };
     const eff = effectiveInterval(plan.id, interval);
-    const live = prices[eff]?.[plan.id];
+    const live = eff === "year" ? prices[eff]?.[plan.id] : undefined;
     // Monthly falls back to the published price; a yearly price is never guessed.
     const price = live ?? (eff === "month" ? plan.price : "…");
     return { price, note: eff === "month" ? "/month" : "/year" };
