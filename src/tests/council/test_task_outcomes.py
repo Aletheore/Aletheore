@@ -33,6 +33,14 @@ def test_the_marker_is_found_after_whitespace_and_in_any_case_but_not_in_the_mid
     assert state2.tasks[tid2].status == "done"
 
 
+def test_a_missing_council_post_tool_is_not_a_reason_to_stop(world):
+    # seen with Codex on Windows, which did not expose the room tools: the agent read the tool as required and blocked a task it could have done
+    runner = ScriptedRunner(final_text="ok", writes={"schema/a.sql": "1\n"})
+    run(world, runner)
+    prompt = runner.calls[0]
+    assert "council_post" not in prompt or ("if you have it" in prompt and "optional" in prompt)
+
+
 def test_the_agent_is_told_how_to_say_it_cannot_do_the_work(world):
     runner = ScriptedRunner(final_text="ok", writes={"schema/a.sql": "1\n"})
     run(world, runner)

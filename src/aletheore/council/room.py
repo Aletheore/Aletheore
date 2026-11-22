@@ -194,7 +194,7 @@ class Room:
         prompt = (
             f"You are {agent}, working in the '{area_name}' area of a shared project, inside this git worktree. "
             f"Only create or change files matching: {', '.join(area.globs)}. "
-            + ("Use the council_post tool to report claims, questions or challenges for the other agents." if self.agent_tools
+            + ("Use the council_post tool, if you have it, to report claims, questions or challenges for the other agents; it is optional, so if it is not available carry on with the task and put anything the other agents should know in your final reply." if self.agent_tools
                else "Finish by replying with a short summary of what you did and anything the other agents should know.")
             + f" If you cannot do the task (the workspace is read-only, a tool is blocked, you lack access), change nothing and start your final reply with "
               f"'{BLOCKED_MARKER}' and the reason: the task is then reported as blocked, not finished."
