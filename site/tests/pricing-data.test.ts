@@ -40,6 +40,11 @@ describe("pricing data", () => {
     expect(flat).toContain("about 55% of human-identified bugs");
     expect(flat).toContain("about 89%");
   });
+  it("says in the structured feature list that Flash Lite gets automatic reviews too", () => {
+    const features = (ld.featureList as string[]).join(" | ");
+    expect(features).toContain("Flash Lite");
+    expect(features).not.toMatch(/Flash tier and up/);
+  });
   it("keeps the footnote marks the cards refer to", () => {
     expect(footnotes.map((f) => f.mark)).toEqual(["*", "**"]);
   });
