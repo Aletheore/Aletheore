@@ -30,6 +30,20 @@ export type ChangelogEntry = {
  */
 export const changelogEntries: ChangelogEntry[] = [
   {
+    date: "2026-11-21",
+    title: "Aletheore Flash Lite: a $6 plan for small teams, and one-pass reviews on every paid plan",
+    tags: ["feature"],
+    body: "Aletheore Flash Lite is a new monthly plan at $6, with $3 of AI credit each month (about 750 PR reviews). It reviews every push to an open pull request like Flash does, with a lighter review that costs far less per review: it surfaces more findings with more noise, so Flash remains the choice for fewer, cleaner findings. It has the same credit page, review history and credit top-ups as Flash, and no AIRview or managed dashboard. Reviews on every paid plan now run as a single pass over the whole change instead of file by file, and a review's header names the plan it ran for.",
+    link: { label: "See the plans", href: "/pricing" },
+  },
+  {
+    date: "2026-11-21",
+    title: "Aletheore 0.14.0: Council agents stay in the room, Council in every install, and much better route and import maps",
+    tags: ["feature", "fix"],
+    body: "Aletheore 0.14.0 is on PyPI (pip install --upgrade aletheore). Council is now part of every install instead of an optional extra, and its agents stay in a room without being prompted every turn: an @mention wakes an agent for a read-only turn, and agents can hand work to each other up to four hops deep by default. A Council task whose agent could not do the work now reads blocked with the reason instead of finished, and Codex on Windows can write files in a task. The scanner maps many more web-framework routes (Actix, Gin, Rails, NestJS, Django, Spring, Laravel, ASP.NET, Flask, Rocket, Micronaut, Next.js, Symfony, JAX-RS, Sinatra and others) and follows more imports in Rust, Kotlin, Swift, C#, Go, JavaScript, TypeScript, PHP and Java. A JavaScript or TypeScript import specifier with a NUL byte no longer aborts a scan.",
+    link: { label: "Full changelog", href: "https://github.com/Aletheore/Aletheore/blob/master/CHANGELOG.md" },
+  },
+  {
     date: "2026-11-14",
     title: "Aletheore 0.13.0: Shield, Council, a smaller MCP tool set, and two fixes",
     tags: ["feature", "fix"],

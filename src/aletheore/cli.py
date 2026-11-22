@@ -449,7 +449,7 @@ _COMMAND_SUMMARIES = [
     ("hook", "commands for coding-agent hooks (read guard)"),
     ("tokens", "measure and reduce the tokens a coding agent re-reads every turn"),
     ("shield", "the local safety net for AI-written changes: setup, status, undo, off, check"),
-    ("council", "a sealed room where people and their coding agents work together (pip install 'aletheore[council]')"),
+    ("council", "a sealed room where people and their coding agents work together"),
     ("login", "authenticate and save a managed-audit API token"),
     ("logout", "clear the locally saved managed-audit and Hallbook tokens"),
     ("status", "installed version, update availability, and login state"),
@@ -2490,7 +2490,7 @@ def _council_flow(kwargs: dict, pause: Callable[[], None]) -> None:
     group = _click_command(["council"])
     commands = getattr(group, "commands", None)
     if not commands:
-        console.print(_COUNCIL_INSTALL_HINT.format(name="the council extra"), markup=False)
+        console.print(_COUNCIL_INSTALL_HINT.format(name="its packages"), markup=False)
         pause()
         return
     rows = [ui.MenuItem(key, label, description) for key, label, description in _COUNCIL_MENU if key in commands]
@@ -3574,7 +3574,7 @@ from aletheore.shield_cli import shield_app  # noqa: E402
 app.add_typer(shield_app, name="shield")
 
 
-_COUNCIL_INSTALL_HINT = "Council needs extra packages ({name}). Install them with: pip install 'aletheore[council]'"
+_COUNCIL_INSTALL_HINT = "Council could not load: {name} is missing from this install. Reinstall Aletheore: pip install --upgrade --force-reinstall aletheore"
 # What a person does first, in that order; the rest of Council's commands follow in the order Council defines them.
 _COUNCIL_FIRST = ("setup", "start", "rooms", "invite-link", "requests", "approve-join", "reject-join", "join-link", "join", "view",
                   "say", "ask", "discuss", "agents", "status")
@@ -3583,8 +3583,8 @@ _COUNCIL_FIRST = ("setup", "start", "rooms", "invite-link", "requests", "approve
 class _CouncilGroup(typer.core.TyperGroup):
     """`aletheore council ...`: Council's own commands, loaded only when something asks for them.
 
-    Importing Council costs about a second and needs the optional `council` extra, so the real command tree is built on first use.
-    Until then (and without the extra) this group has no subcommands, which the menus and --help handle."""
+    Importing Council costs about a second, so the real command tree is built on first use. Until then (and if its packages are
+    missing from a damaged install) this group has no subcommands, which the menus and --help handle."""
 
     _real = None
 
@@ -3603,8 +3603,8 @@ class _CouncilGroup(typer.core.TyperGroup):
             real = self._load().commands
         except ModuleNotFoundError as exc:
             if (exc.name or "").split(".")[0] == "aletheore":
-                raise  # a broken Aletheore install must show up, not look like a missing extra
-            return {}  # the extra is not installed: no subcommands, and --help still works
+                raise  # a broken Aletheore install must show up, not look like a missing package
+            return {}  # a package is missing from this install: no subcommands, and --help still works
         first = [name for name in _COUNCIL_FIRST if name in real]
         return {name: real[name] for name in [*first, *(n for n in real if n not in first)]}
 
@@ -3629,7 +3629,7 @@ class _CouncilGroup(typer.core.TyperGroup):
             if (exc.name or "").split(".")[0] == "aletheore":
                 raise
             hint = _COUNCIL_INSTALL_HINT.format(name=exc.name)
-            if ctx.args in ([], ["--help"], ["-h"]):  # asking what it is must work before the extra is installed
+            if ctx.args in ([], ["--help"], ["-h"]):  # asking what it is must work even when a package is missing
                 console.print("Usage: aletheore council [OPTIONS] COMMAND [ARGS]...", markup=False)
                 console.print(hint, markup=False)
                 raise typer.Exit(code=0)
@@ -3651,7 +3651,7 @@ def _council_callback() -> None:
     pass
 
 
-app.add_typer(council_app, name="council", help="a sealed room where people and their coding agents work together (needs: pip install 'aletheore[council]')")
+app.add_typer(council_app, name="council", help="a sealed room where people and their coding agents work together")
 
 
 @config_app.command(

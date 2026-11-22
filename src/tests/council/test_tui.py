@@ -280,8 +280,11 @@ def test_debate_command_posts_a_request_and_rejects_unknown_areas(store):
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             await pilot.press(*"/debate redis schema should ids be int or uuid", "enter")
-            await settle(pilot, 8)
-            reqs = [e.body for e in store.read_after("r1", 0) if e.type is EventType.QUESTION and e.body.get("kind") == "debate"]
+            for _ in range(60):  # wait for the post (a loaded machine can take a few seconds) instead of a fixed pause
+                await settle(pilot, 1)
+                reqs = [e.body for e in store.read_after("r1", 0) if e.type is EventType.QUESTION and e.body.get("kind") == "debate"]
+                if reqs:
+                    break
             assert reqs == [{"kind": "debate", "a": "redis", "b": "schema", "subject": "should ids be int or uuid",
                              "text": "debate redis vs schema: should ids be int or uuid"}]
             await pilot.press(*"/debate redis nowhere whatever", "enter")

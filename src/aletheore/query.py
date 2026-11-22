@@ -422,6 +422,11 @@ def find_blast_radius(
         "transitive_dependents": transitive_dependents,
         "transitive_dependents_truncated": truncated,
     }
+    # When some direct dependents are test files, say which are not: a caller asking for "the source files that import
+    # X" gets the list directly instead of filtering the mixed one (a cheap model drops or keeps the wrong entries).
+    non_test_direct = [path for path in direct_dependents if not _BLAST_TEST_PATH.search(path)]
+    if len(non_test_direct) != len(direct_dependents):
+        result["direct_dependents_non_test"] = non_test_direct[:_BLAST_RADIUS_MAX_DIRECT]
 
     if symbol:
         call_pattern = re.compile(r"\b" + re.escape(symbol) + r"\s*\(")

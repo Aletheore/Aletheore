@@ -101,6 +101,10 @@ def commit_all(worktree: Path, message: str) -> bool:
     return True
 
 
+def head_sha(worktree: Path) -> str:
+    return _git(worktree, "rev-parse", "HEAD").stdout.strip()
+
+
 def changed_files(worktree: Path, base_branch: str) -> list[str]:
     out = _git(worktree, "diff", "--name-only", "--no-renames", f"{base_branch}...HEAD").stdout
     return sorted(line.replace("\\", "/") for line in out.splitlines() if line.strip())
