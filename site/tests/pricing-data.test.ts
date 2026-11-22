@@ -53,3 +53,11 @@ describe("pricing data", () => {
     expect(installNote).toContain("Flash Lite");
   });
 });
+
+describe("yearly fallback", () => {
+  it("publishes the AIR yearly price as ten months of the monthly price", () => {
+    const air = plans.find((p) => p.id === "air");
+    expect(air?.yearlyPrice).toBe("$400");
+    expect(Number(air?.price.slice(1)) * 10).toBe(400);
+  });
+});

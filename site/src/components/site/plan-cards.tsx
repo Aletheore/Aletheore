@@ -118,8 +118,8 @@ export function PlanCards() {
     if (plan.id === "community") return { price: plan.price, note: plan.priceNote };
     const eff = effectiveInterval(plan.id, interval);
     const live = eff === "year" ? prices[eff]?.[plan.id] : undefined;
-    // Monthly falls back to the published price; a yearly price is never guessed.
-    const price = live ?? (eff === "month" ? plan.price : "…");
+    // Without a live preview, fall back to the published price for the interval.
+    const price = live ?? (eff === "month" ? plan.price : plan.yearlyPrice ?? "…");
     return { price, note: eff === "month" ? "/month" : "/year" };
   };
 
@@ -143,7 +143,7 @@ export function PlanCards() {
           ))}
         </div>
         <p className="min-h-4 text-[12px] text-faint" role="status">
-          {interval === "year" && failed === "year" ? "Yearly prices could not be loaded right now. Monthly prices are shown." : interval === "year" ? "Flash Lite and Flash are monthly only." : ""}
+          {interval === "year" && failed === "year" ? "Live yearly pricing could not be loaded right now. Published prices are shown." : interval === "year" ? "Flash Lite and Flash are monthly only." : ""}
         </p>
       </div>
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
