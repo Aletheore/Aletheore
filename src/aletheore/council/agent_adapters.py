@@ -62,7 +62,8 @@ class Adapter:
 
 # ---- OpenCode ---------------------------------------------------------------------------------------------------------------------------------
 def _opencode_build(s: Spec) -> Launch:
-    cfg: dict = {"permission": {"edit": "deny" if s.read_only else "allow", "bash": "deny", "webfetch": "deny"}}
+    # "task" is denied too: it starts a sub-agent that does not inherit "bash": "deny", so a worker could run shell commands through it (seen with OpenCode 1.19.3)
+    cfg: dict = {"permission": {"edit": "deny" if s.read_only else "allow", "bash": "deny", "webfetch": "deny", "task": "deny"}}
     if s.mcp_entry:
         cfg["mcp"] = {"council": {"type": "local", "command": [s.mcp_entry["command"], *s.mcp_entry.get("args", [])],
                                   "environment": s.mcp_entry.get("env", {}), "enabled": True}}

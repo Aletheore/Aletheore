@@ -6,6 +6,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 ## Unreleased
 
 - Fixed: Rust test, example, and benchmark imports no longer mistake an undeclared sibling target for a known workspace crate; ambiguous matches are marked inferred.
+- Fixed: C includes with multiple matching headers no longer pick one based on directory proximity, and resolutions that depend on build search paths are marked inferred.
+- Fixed: an OpenCode worker in Council could run shell commands despite the shell being denied, by asking OpenCode to start a sub-agent (its `task` tool), which does not inherit the denial. Council now denies that tool too. Found by re-running the real OpenCode worker check on OpenCode 1.19.3: it failed in 4 of 4 runs before, and the file is no longer created after the change.
 - Removed: the empty `council` extra. `pip install 'aletheore[council]'` still installs Council (it is part of every install) but pip now warns that the extra does not exist. The website and docs say `pip install aletheore`.
 
 ## 0.14.0 - 2026-11-21
