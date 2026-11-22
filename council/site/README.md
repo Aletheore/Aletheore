@@ -25,7 +25,7 @@ Deploy it as its own Vercel project with this folder as the root. `vercel.json` 
   Check changes by jumping the timeline to several points at 393x659, 390x844, 768x1024, 1024x768, 1280x720 and 1440x900, including
   the zoomed frames.
 - Open to search engines: no `noindex` anywhere, `robots.txt` allows crawling and names `sitemap.xml`, and aletheore.com links here from its footer and its Council page. To hide the site again, add the `noindex` meta tag to every page, `Disallow: /` to `robots.txt` and an `X-Robots-Tag` header in `vercel.json`.
-- The Install section gives the real command, `pip install 'aletheore[council]'` (Council shipped in Aletheore 0.13.0).
+- The Install section gives the real command, `pip install aletheore` (Council is part of every install since Aletheore 0.14.0).
 
 ## Before launch
 

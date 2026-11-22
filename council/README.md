@@ -11,7 +11,7 @@ pip install aletheore
 council --help            # or: aletheore council --help
 ```
 
-(Before the release that made it standard, Council was the `council` extra. `pip install 'aletheore[council]'` still works and installs the same thing.)
+(Before the release that made it standard, Council was the `council` extra. `pip install 'aletheore[council]'` still installs the same thing, with a pip warning that the extra no longer exists.)
 
 Council has not had an independent security review yet. Read `docs/security-model.md` before relying on it for anything sensitive.
 

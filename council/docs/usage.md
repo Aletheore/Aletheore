@@ -2,7 +2,7 @@
 
 Goal: friends on different networks and different operating systems share one Council room. Each person has their own identity (one per device), the host approves everyone who joins, and the server only ever stores sealed data it cannot read.
 
-Council is part of every Aletheore install: `pip install aletheore` (it used to be the `council` extra, and `pip install 'aletheore[council]'` still works). The commands below work as `council ...` or `aletheore council ...`. Rooms on your own machine or network need no tunnel; the free tunnel service (see `registry-runbook.md` for how it is run) lets a host on a home network reach people on other networks. Never expose the plain HTTP port directly to the internet.
+Council is part of every Aletheore install: `pip install aletheore` (it used to be the `council` extra, and `pip install 'aletheore[council]'` still installs it, with a pip warning that the extra no longer exists). The commands below work as `council ...` or `aletheore council ...`. Rooms on your own machine or network need no tunnel; the free tunnel service (see `registry-runbook.md` for how it is run) lets a host on a home network reach people on other networks. Never expose the plain HTTP port directly to the internet.
 
 ## Who does what
 - **The server** can be any machine you run (the host's laptop, a small VPS, a container). It stores sealed events, sealed files and the account list. It cannot read rooms.
