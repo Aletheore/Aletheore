@@ -1706,7 +1706,12 @@ def _rust_reexport_targets(
     item = segments[-1]
     if len(segments) < 2 or item in ("*", "self", "super", "crate"):
         return []
-    parent = _resolve_rust_path(repo_path, from_file, "::".join(segments[:-1]))
+    inferred_root = rust_resolve.target_crate_alias(repo_path, from_file, use_path)
+    parent = (
+        _rel(repo_path, inferred_root)
+        if len(segments) == 2 and inferred_root is not None
+        else _resolve_rust_path(repo_path, from_file, "::".join(segments[:-1]))
+    )
     if parent != target_rel:
         return []  # the last segment is itself a module, nothing to look through
     if len(segments) > 2:
@@ -1846,6 +1851,11 @@ def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | Non
         # Names relative to the current module (2018 uniform paths), then a workspace crate named in this
         # package's Cargo.toml (`use serde_core::de::Deserialize`).
         target = _walk_rust_segments(_rust_module_search_dir(repo_path, from_file), segments)
+        # A sibling test/example/bench file is a separate Cargo target, not an implicitly declared module.
+        # Prefer a known crate over that file unless this target declares or aliases the name locally.
+        lib_root = rust_resolve.target_crate_alias(repo_path, from_file, path) if target is not None else None
+        if lib_root is not None:
+            target = _walk_rust_segments(lib_root.parent, rest) or lib_root
         if target is None:
             aliases = rust_resolve.crate_aliases(repo_path, from_file)
             if head in aliases:
@@ -5480,17 +5490,30 @@ def _extract_module(
 
             # Macro-declared modules and inline `crate::a::b` / `workspace_crate::a::b` paths are not `use` items.
             extra_paths = rust_resolve.extra_imports(repo_path, path, source.decode(errors="ignore"))
+            inferred_targets: set[str] = set()
+            exact_targets: set[str] = set()
             for use_path in [*raw_imports, *extra_paths]:
                 target = _resolve_rust_path(repo_path, path, use_path)
+                # The edge is only inferred when this `use` reached the library through a shadowed Cargo-target name.
+                bucket = (
+                    inferred_targets if rust_resolve.target_crate_alias(repo_path, path, use_path) is not None
+                    else exact_targets
+                )
                 if target is not None and target != rel_path:
                     resolved_imports.append(target)
+                    bucket.add(target)
                 if target is not None:
                     for defining in _rust_reexport_targets(repo_path, path, use_path, target):
                         if defining != rel_path:
                             resolved_imports.append(defining)
+                            bucket.add(defining)
                 for module_file in _rust_module_reexport_targets(repo_path, path, use_path):
                     if module_file != rel_path:
                         resolved_imports.append(module_file)
+                        bucket.add(module_file)
+            # Another `use` that reached the same file exactly keeps the edge exact.
+            for target in inferred_targets - exact_targets:
+                import_confidence[target] = "inferred"
     elif language_name == "java":
         raw_imports, functions, classes = _extract_java(tree.root_node, source)
         java_refs = _java_type_references(tree.root_node, source) if java_package_types else None
@@ -6718,8 +6741,8 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
     """Resolve #include lines the per-file resolver (includer's directory only) cannot.
 
     Search order: the includer's directory (quoted form only), then include/, src/, the repo
-    root, then any scanned header whose path ends with the spec (only when exactly one does, or
-    one shares the longest directory prefix with the includer). A bare angle include (`<jansson.h>`) of a name that
+    root, then any scanned header whose path ends with the spec. For C sources, ambiguous suffixes are left unresolved,
+    and search-root and suffix matches are marked inferred. A bare angle include (`<jansson.h>`) of a name that
     is not a standard/POSIX header binds to the single in-repo header of that name, marked inferred. Angle includes skip the
     includer's directory and src/ (include/ and the root only), and only use the suffix fallback
     when the spec has a directory part (`<fmt/base.h>`), so `<stdio.h>`-style system headers
@@ -6730,6 +6753,8 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
     if not c_modules:
         return
     c_paths = {m["path"] for m in c_modules}
+    # `.h` is ambiguous between C and C++; a header counts as C only in a repository with no C++ source files.
+    has_cpp_sources = any(path.endswith((".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx")) for path in c_paths)
     known = {m["path"] for m in modules}
     by_base: dict[str, list[str]] = {}
     for path in known:
@@ -6739,6 +6764,9 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
 
     for module in c_modules:
         includer = module["path"]
+        c_source = (module.get("language") == "c" and includer.endswith(".c")) or (
+            includer.endswith(".h") and not has_cpp_sources
+        )
         includer_dir = includer.rsplit("/", 1)[0] if "/" in includer else ""
         try:
             source = (repo_path / includer).read_text(encoding="utf-8", errors="ignore")
@@ -6752,17 +6780,20 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
             # headers do not bind to a same-named file under src/.
             bases = [includer_dir, *_C_SEARCH_DIRS] if quoted else ["include", ""]
             target = None
-            for base in bases:
+            guessed = False
+            for index, base in enumerate(bases):
                 candidate = os.path.normpath(f"{base}/{spec}" if base else spec).replace(os.sep, "/")
                 if candidate in known and not candidate.startswith(".."):
                     target = candidate
+                    guessed = c_source and not (quoted and index == 0)
                     break
             if target is None and (quoted or "/" in spec):
                 suffix = os.path.normpath(spec).replace(os.sep, "/")
                 matches = [p for p in by_base.get(suffix.rsplit("/", 1)[-1], []) if p == suffix or p.endswith("/" + suffix)]
                 if len(matches) == 1:
                     target = matches[0]
-                elif len(matches) > 1:
+                    guessed = c_source
+                elif len(matches) > 1 and not c_source:
                     def shared(p: str) -> int:
                         n = 0
                         for a, b in zip(p.split("/")[:-1], includer_dir.split("/")):
@@ -6774,7 +6805,6 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
                     top = [p for p in matches if shared(p) == best]
                     if len(top) == 1:
                         target = top[0]
-            guessed = False
             if target is None and not quoted and "/" not in spec and spec not in _SYSTEM_HEADERS:
                 # `#include <jansson.h>` where jansson.h is the project's own public header under src/: a bare angle
                 # include that is not a standard/POSIX header binds to the single in-repo header of that name. It
