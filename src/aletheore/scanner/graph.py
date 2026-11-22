@@ -1706,7 +1706,12 @@ def _rust_reexport_targets(
     item = segments[-1]
     if len(segments) < 2 or item in ("*", "self", "super", "crate"):
         return []
-    parent = _resolve_rust_path(repo_path, from_file, "::".join(segments[:-1]))
+    inferred_root = rust_resolve.target_crate_alias(repo_path, from_file, use_path)
+    parent = (
+        _rel(repo_path, inferred_root)
+        if len(segments) == 2 and inferred_root is not None
+        else _resolve_rust_path(repo_path, from_file, "::".join(segments[:-1]))
+    )
     if parent != target_rel:
         return []  # the last segment is itself a module, nothing to look through
     if len(segments) > 2:
@@ -1846,6 +1851,11 @@ def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | Non
         # Names relative to the current module (2018 uniform paths), then a workspace crate named in this
         # package's Cargo.toml (`use serde_core::de::Deserialize`).
         target = _walk_rust_segments(_rust_module_search_dir(repo_path, from_file), segments)
+        # A sibling test/example/bench file is a separate Cargo target, not an implicitly declared module.
+        # Prefer a known crate over that file unless this target declares or aliases the name locally.
+        lib_root = rust_resolve.target_crate_alias(repo_path, from_file, path) if target is not None else None
+        if lib_root is not None:
+            target = _walk_rust_segments(lib_root.parent, rest) or lib_root
         if target is None:
             aliases = rust_resolve.crate_aliases(repo_path, from_file)
             if head in aliases:
@@ -5476,17 +5486,30 @@ def _extract_module(
 
             # Macro-declared modules and inline `crate::a::b` / `workspace_crate::a::b` paths are not `use` items.
             extra_paths = rust_resolve.extra_imports(repo_path, path, source.decode(errors="ignore"))
+            inferred_targets: set[str] = set()
+            exact_targets: set[str] = set()
             for use_path in [*raw_imports, *extra_paths]:
                 target = _resolve_rust_path(repo_path, path, use_path)
+                # The edge is only inferred when this `use` reached the library through a shadowed Cargo-target name.
+                bucket = (
+                    inferred_targets if rust_resolve.target_crate_alias(repo_path, path, use_path) is not None
+                    else exact_targets
+                )
                 if target is not None and target != rel_path:
                     resolved_imports.append(target)
+                    bucket.add(target)
                 if target is not None:
                     for defining in _rust_reexport_targets(repo_path, path, use_path, target):
                         if defining != rel_path:
                             resolved_imports.append(defining)
+                            bucket.add(defining)
                 for module_file in _rust_module_reexport_targets(repo_path, path, use_path):
                     if module_file != rel_path:
                         resolved_imports.append(module_file)
+                        bucket.add(module_file)
+            # Another `use` that reached the same file exactly keeps the edge exact.
+            for target in inferred_targets - exact_targets:
+                import_confidence[target] = "inferred"
     elif language_name == "java":
         raw_imports, functions, classes = _extract_java(tree.root_node, source)
         java_refs = _java_type_references(tree.root_node, source) if java_package_types else None
