@@ -8,6 +8,8 @@ export type Plan = {
   name: string;
   price: string;
   priceNote: string;
+  /** Published yearly price, shown when Paddle's live preview is unavailable. */
+  yearlyPrice?: string;
   desc: string;
   features: FeatureText[];
   flagship?: boolean;
@@ -84,6 +86,7 @@ export const plans: Plan[] = [
     name: "AIR",
     price: "$40",
     priceNote: "/month",
+    yearlyPrice: "$400",
     desc: "Up to 3 team seats, $24 of AI credit a month. Everything in Flash plus the managed dashboard.",
     features: [
       { parts: ["Everything in Flash, with $24 of AI credit each month shared across PR reviews, AIRview, Docs and managed audits."], mark: "**" },

@@ -5,8 +5,8 @@ export type TierKey = "lite" | "flash" | "air";
 // hosted backend maintains the corresponding server-side mapping.
 export const TIERS: Record<TierKey, { name: string; priceId: Partial<Record<Interval, string>> }> = {
   lite: { name: "Aletheore Flash Lite", priceId: { month: "pri_01m7zbvbsck8s6rnxpv66652cw" } },
-  flash: { name: "Aletheore Flash", priceId: { month: "pri_01m3xpabbam5t2gkzwzmg0y9eq" } },
-  air: { name: "Aletheore AIR", priceId: { month: "pri_01kyhevc8bkcghfpwjymz16y2h", year: "pri_01kyhevc9xn6z2nghmy8057jvp" } },
+  flash: { name: "Aletheore Flash", priceId: { month: "pri_01m7d0qgwddyg8rgbcj2ppm1ek" } },
+  air: { name: "Aletheore AIR", priceId: { month: "pri_01m7d0qgz9jv3dfye9jxvcv5n9", year: "pri_01m7d0qh2fgmr0nt92cj77nqva" } },
 };
 
 /** Tiers that can be priced for this interval. Flash Lite and Flash have no yearly price, so they are left out of a yearly preview. */
