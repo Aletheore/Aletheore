@@ -15,17 +15,24 @@
     },
     {
       "@type": "Offer",
+      "name": "Aletheore Flash Lite",
+      "price": "6",
+      "priceCurrency": "USD",
+      "description": "Automatic PR reviews on every push, powered by $3 of AI credit a month (about 750 reviews). A lighter review than Flash: more findings, more noise."
+    },
+    {
+      "@type": "Offer",
       "name": "Aletheore Flash",
       "price": "15",
       "priceCurrency": "USD",
-      "description": "Automatic PR reviews on every push, powered by $8 of AI credit a month (about 280 PRs), one model."
+      "description": "Automatic PR reviews on every push, powered by $8 of AI credit a month (about 280 PRs)."
     },
     {
       "@type": "Offer",
       "name": "Aletheore AIR",
       "price": "40",
       "priceCurrency": "USD",
-      "description": "Up to 3 team members, $24 of AI credit a month. Everything in Flash plus managed audits, and AIRview builds run on DeepSeek."
+      "description": "Up to 3 team members, $24 of AI credit a month. Everything in Flash plus managed audits and AIRview."
     }
   ],
   "featureList": [
@@ -37,7 +44,7 @@
     "MCP server for coding agents",
     "Multi-provider AI audit reports (Claude, OpenAI, Gemini, Mistral, Grok, DeepSeek, Ollama)",
     "GitHub App: automatic PR comments and branch-protection check runs",
-    "AI-powered managed audit reports on pull requests, written by DeepSeek",
+    "AI-powered managed audit reports on pull requests",
     "Automatic Flash reviews on every pull request push (Flash tier and up); AIR adds more AI credit, AIRview, Docs and managed audits",
     "Slack/Teams alerts on new findings",
     "Live API endpoint health monitoring across multiple targets, with a public status API",

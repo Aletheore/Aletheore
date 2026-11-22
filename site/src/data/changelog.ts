@@ -30,6 +30,13 @@ export type ChangelogEntry = {
  */
 export const changelogEntries: ChangelogEntry[] = [
   {
+    date: "2026-11-21",
+    title: "Aletheore Flash Lite: a $6 plan for small teams, and one-pass reviews on every paid plan",
+    tags: ["feature"],
+    body: "Aletheore Flash Lite is a new monthly plan at $6, with $3 of AI credit each month (about 750 PR reviews). It reviews every push to an open pull request like Flash does, with a lighter review that costs far less per review: it surfaces more findings with more noise, so Flash remains the choice for fewer, cleaner findings. It has the same credit page, review history and credit top-ups as Flash, and no AIRview or managed dashboard. Reviews on every paid plan now run as a single pass over the whole change instead of file by file, and a review's header names the plan it ran for.",
+    link: { label: "See the plans", href: "/pricing" },
+  },
+  {
     date: "2026-11-14",
     title: "Aletheore 0.13.0: Shield, Council, a smaller MCP tool set, and two fixes",
     tags: ["feature", "fix"],
