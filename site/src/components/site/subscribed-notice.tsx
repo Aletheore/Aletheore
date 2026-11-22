@@ -1,22 +1,22 @@
 "use client";
 import { X } from "lucide-react";
 import { useState, useSyncExternalStore } from "react";
-import { subscribedPlan } from "@/lib/subscribed";
+import { subscribedPlan, SUBSCRIBED_PLAN_NAMES } from "@/lib/subscribed";
 
 // Nothing to subscribe to on purpose: the customer arrives by a full page load from the hosted checkout (an external redirect), so the
 // query string is fixed for the life of the page. Client-side navigation to /?subscribed=flash is not a supported entry.
 const subscribe = () => () => {};
 
-/** Confirms a Flash checkout. The old site showed nothing after payment, so customers landed on the homepage with no sign it worked. */
+/** Confirms a Flash or Flash Lite checkout, naming the plan bought. The old site showed nothing after payment, so customers landed on the homepage with no sign it worked. */
 export function SubscribedNotice() {
   const plan = useSyncExternalStore(subscribe, () => subscribedPlan(window.location.search), () => null);
   const [dismissed, setDismissed] = useState(false);
-  if (plan !== "flash" || dismissed) return null;
+  if (plan === null || dismissed) return null;
   return (
     <div role="status" className="border-b border-success/40 bg-success/10">
       <div className="mx-auto flex max-w-[1080px] items-start gap-4 px-8 py-4">
         <div className="flex-1 text-[13.5px] leading-[1.6]">
-          <p className="font-display font-bold">Thanks for subscribing to Aletheore Flash.</p>
+          <p className="font-display font-bold">Thanks for subscribing to {SUBSCRIBED_PLAN_NAMES[plan]}.</p>
           <p className="text-muted">
             It can take a moment for the payment to be confirmed. Reviews then run on your next push to an open pull request in any repository where
             the Aletheore GitHub App is installed. Questions: <a className="text-ink underline" href="mailto:support@aletheore.com">support@aletheore.com</a>.

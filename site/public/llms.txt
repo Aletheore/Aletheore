@@ -86,9 +86,11 @@ This is a local process you start and stop. It is not a hosted service, and noth
 
 `aletheore dashboard` serves a local web UI over the same evidence: dependency graph, trend charts across scan history, and the live MCP tool list. No account, no data leaves the machine.
 
-## Hosted service - three tiers
+## Hosted service - four tiers
 
 A free **Community** tier covers the CLI, the GitHub Action, the MCP server, and the local dashboard, permanently and without an account.
+
+**Aletheore Flash Lite: $6/month** (monthly billing only). The same hosted GitHub App with a lighter automated PR review on every push to an open pull request, powered by $3 of AI credit each month (about 750 PR reviews; larger PRs use more, smaller ones less). It surfaces more findings with more noise than Flash; Flash is the choice for fewer, cleaner findings.
 
 **Aletheore Flash: $15/month** (monthly billing only, no annual price yet). Adds a hosted GitHub App:
 

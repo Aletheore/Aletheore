@@ -140,10 +140,10 @@ export function PlanCards() {
           ))}
         </div>
         <p className="min-h-4 text-[12px] text-faint" role="status">
-          {failed === "year" ? "Yearly prices could not be loaded right now. Monthly prices are shown." : interval === "year" ? "Flash is monthly only." : ""}
+          {failed === "year" ? "Yearly prices could not be loaded right now. Monthly prices are shown." : interval === "year" ? "Flash Lite and Flash are monthly only." : ""}
         </p>
       </div>
-      <div className="grid gap-6 md:grid-cols-3">
+      <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
         {plans.map((p) => {
           const s = shown(p);
           return <PlanCard key={p.id} plan={p} price={s.price} priceNote={s.note} interval={interval} />;
