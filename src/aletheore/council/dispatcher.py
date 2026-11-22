@@ -26,7 +26,7 @@ from aletheore.council.protocol import EventDraft, EventType, clip_text
 from aletheore.council.remote_turns import RemoteTurnRunner
 from aletheore.council.room import Room
 from aletheore.council.runners import WorkerRunner
-from aletheore.council.state import MAX_PLAN_TASKS, load_state
+from aletheore.council.state import MAX_PLAN_TASKS, load_state, task_settled
 from aletheore.council.store import read_all
 
 PLANNER_TIMEOUT_S = 300
@@ -270,7 +270,7 @@ class Dispatcher:
     def _start_debates(self, plan, state, events) -> int:
         """Debates in a plan argue about the work its tasks produce, so they start once those tasks are all finished."""
         task_ids = [f"{plan.plan_id}-{i}" for i, item in enumerate(plan.tasks, 1) if item.get("kind", "task") == "task"]
-        if any(state.tasks.get(t) is None or state.tasks[t].status not in ("done", "failed", "blocked") for t in task_ids):
+        if any(not task_settled(state, t) for t in task_ids):
             return 0
         started = 0
         for i, item in enumerate(plan.tasks, 1):

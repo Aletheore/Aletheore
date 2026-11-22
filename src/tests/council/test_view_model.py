@@ -173,3 +173,12 @@ def test_answers_summaries_asks_and_limits_are_labelled_clearly():
     assert any("limit" in t and "bob" in t and "25" in t for t in notices)
     assert any("not answered" in t and "zed" in t for t in notices)
     assert not any(t.startswith("ask done") for t in notices)  # a normal finish is not worth a line
+
+
+def test_a_cancelled_task_shows_up_in_the_stream():
+    events = base_events() + [
+        ev(10, EventType.TASK, "alice", {"op": "request", "task_id": "t1", "area": "schema", "instruction": "add the table"}),
+        ev(11, EventType.TASK, "alice", {"op": "cancelled", "task_id": "t1"}),
+    ]
+    items = build_stream(events, project(events, host="alice"), NOW)
+    assert any(i.kind == "notice" and "cancelled" in i.text and "schema" in i.text for i in items)       # the owner is told, like for a finished or failed task

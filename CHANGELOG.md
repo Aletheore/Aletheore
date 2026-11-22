@@ -6,6 +6,23 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 ## Unreleased
 
 - Fixed: Rust test, example, and benchmark imports no longer mistake an undeclared sibling target for a known workspace crate; ambiguous matches are marked inferred.
+- Removed: the empty `council` extra. `pip install 'aletheore[council]'` still installs Council (it is part of every install) but pip now warns that the extra does not exist. The website and docs say `pip install aletheore`.
+
+## 0.14.0 - 2026-11-21
+
+- Changed: the default `--max-wake-depth` for Council workers is now 4 (was 2), so a planner and an executor can talk it through and the planner can close with a verdict without raising the flag. The per-agent wake budget (`--max-wakes`, 6 per 10 minutes) and the 3-second gap are unchanged.
+- Changed: Council is no longer an optional extra. Its packages (`fastapi`, `uvicorn`, `textual`, `psycopg`, `pynacl`, `platformdirs`) are ordinary dependencies, so `pip install aletheore` includes `aletheore council` and the `council` command. `pip install 'aletheore[council]'` still works (the extra is now empty). The Council code is still loaded only when a Council command runs, so other commands start as fast as before; a damaged install that lacks one of its packages now says what is missing and to reinstall.
+- Added: Council agents stay in a room without being prompted every turn. A mention (`@agent`) wakes that agent for one read-only turn (with limits, once only, and a notice to the sender when a mention cannot be answered); `council wait` lets a Claude Code or Codex session in a terminal listen for mentions, results, plans to approve, verdicts and join requests; the host can type `@agent /task ...` to start work from the room, cancel or hand over a stuck task, and see every task with `council board`; running tasks report progress and the host is told about tasks nobody started or that went quiet; a worker survives errors and tells the room once. See `council/docs/usage.md`.
+- Fixed: a Council task whose agent could not do the work (a read-only workspace, a blocked shell) no longer reads "finished". The agent is told to start its reply with `BLOCKED:` and the reason, and the task is then blocked with that reason; a task that changed no files ends done but says "no files changed" on the board and in `council wait`, and no longer raises a `publish_failed` notice.
+- Fixed: Codex on Windows could not write files in a Council task (its sandbox opened the workspace read-only); Council now starts Codex write runs there with `windows.sandbox="unelevated"`. Also, a refused Council tool call (a post the token may not make, bad evidence, an expired broker) now tells the Claude agent why, instead of a bare "Error executing tool".
+- Added: C# types the receiver of a chained call or property access from the repository's declared members (and a table of well-known .NET methods), so an extension call binds to the overload for that type (macro F1 on the C# benchmark 0.902 to 0.912; humanizer 0.843 to 0.947).
+- Added: the blast-radius result lists `direct_dependents_non_test` when some direct importers are test files, so an agent asking for the source files that import a file does not have to filter them (router arm on the C# benchmark 0.47 to 0.68).
+- Fixed: a Swift call argument label no longer counts as a use of a member with the same name (macro F1 on the Swift benchmark 0.843 to 0.845).
+- Fixed: a JavaScript or TypeScript import specifier containing a NUL byte no longer aborts the whole scan, and Java imports now match class and package names in their exact case, so the graph is the same on macOS, Windows and Linux. Added: a property-based fuzz suite for the graph builder (every language).
+
+- Added: C# resolves generic arity (`Mock<T>` is not `Mock`), skips the called name of `x.Name()` as a type, links two- and three-letter types used in an unambiguous type position, and binds extension calls to the overload their receiver's type selects (macro F1 on the C# benchmark 0.880 to 0.902).
+- Added: Kotlin links the file that declares each member a file resolves through declared types (inherited properties, `a.b.c` chains), marked inferred (macro F1 on the Kotlin benchmark 0.915 to 0.923).
+- Added: Swift links nested types (`extension Logger { struct MetadataProvider }`) when a file writes `Logger.MetadataProvider` or uses the plain name inside `Logger` (macro F1 on the Swift benchmark 0.832 to 0.843).
 
 - Fixed: the license-lookup concurrency test no longer fails on slow CI runners (test-only; the limit is 2.0s, serial would be at least 3.0s).
 

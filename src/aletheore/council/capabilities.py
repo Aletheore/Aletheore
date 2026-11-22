@@ -23,7 +23,7 @@ def inspect_agents() -> list[AgentCapability]:
         if shutil.which(name) is None:
             caps.append(AgentCapability(name, False, "unavailable", ["not installed or not on PATH"]))
         elif verified:
-            note = "headless run verified on macOS and Windows" if name in ("opencode", "agy") else "headless run verified on macOS; Windows not tested"
+            note = "headless run verified on macOS and Windows"
             caps.append(AgentCapability(name, True, "worker", [note]))
         else:
             caps.append(AgentCapability(name, True, "advisor", ["headless driving not verified; can only join via MCP tools"]))

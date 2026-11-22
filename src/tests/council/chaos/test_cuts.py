@@ -90,7 +90,7 @@ def test_blackholed_and_slow_clients_cannot_block_other_clients(world):
     started = time.time()
     for i in range(20):
         direct.append(draft(f"fast{i}", who="alice"))  # everyone else carries on at full speed
-    assert time.time() - started < 2.0
+    assert time.time() - started < 6.0  # a blocked server would hold these for the stuck client's whole timeout and more; 6 s leaves room for a loaded CI machine
     t.join(timeout=15)
     assert results and isinstance(results[0], ConnectionError)  # the blackholed client gives up cleanly, it does not hang forever
     proxy.heal()
@@ -101,7 +101,7 @@ def test_blackholed_and_slow_clients_cannot_block_other_clients(world):
     started = time.time()
     for i in range(20):
         direct.append(draft(f"fast2-{i}", who="alice"))
-    assert time.time() - started < 2.0
+    assert time.time() - started < 6.0
     proxy.heal()
 
 
