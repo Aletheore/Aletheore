@@ -38,7 +38,7 @@ def test_a_missing_council_post_tool_is_not_a_reason_to_stop(world):
     runner = ScriptedRunner(final_text="ok", writes={"schema/a.sql": "1\n"})
     run(world, runner)
     prompt = runner.calls[0]
-    assert "council_post" not in prompt or ("if you have it" in prompt and "optional" in prompt)
+    assert "council_post" not in prompt or ("not available" in prompt and "do not stop" in prompt)
 
 
 def test_the_agent_is_told_how_to_say_it_cannot_do_the_work(world):
