@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Removed: the empty `council` extra. `pip install 'aletheore[council]'` still installs Council (it is part of every install) but pip now warns that the extra does not exist. The website and docs say `pip install aletheore`.
+
 ## 0.14.0 - 2026-11-21
 
 - Changed: the default `--max-wake-depth` for Council workers is now 4 (was 2), so a planner and an executor can talk it through and the planner can close with a verdict without raising the flag. The per-agent wake budget (`--max-wakes`, 6 per 10 minutes) and the 3-second gap are unchanged.
