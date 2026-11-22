@@ -46,7 +46,7 @@ jobs:
 
       - name: Install
         working-directory: src
-        run: pip install -e ".[dev,council]"
+        run: pip install -e ".[dev]"
 
       - name: Run Council tests
         working-directory: src

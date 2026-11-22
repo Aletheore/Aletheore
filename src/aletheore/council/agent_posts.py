@@ -64,7 +64,11 @@ def build_post_draft(room_id: str, participant: str, agent_id: str, type: str, t
     body: dict = {"text": text}
     try:
         if evidence:
-            body["evidence"] = [evidence_ref(e["commit_sha"], e["path"], e["start_line"], e["end_line"], e.get("symbol")) for e in evidence]
+            try:
+                body["evidence"] = [evidence_ref(e["commit_sha"], e["path"], e["start_line"], e["end_line"], e.get("symbol")) for e in evidence]
+            except (KeyError, TypeError, AttributeError) as exc:
+                raise ValueError("rejected: each evidence entry needs commit_sha, path, start_line and end_line (symbol is optional); "
+                                 "leave evidence out if you do not have them") from exc
         key = json.dumps([room_id, agent_id, thread_id, type, text, reply_to], ensure_ascii=False)
         return validate_draft(
             {"type": type, "client_event_id": hashlib.sha256(key.encode("utf-8")).hexdigest()[:32], "thread_id": thread_id,

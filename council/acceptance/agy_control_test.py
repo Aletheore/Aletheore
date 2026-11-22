@@ -1,7 +1,7 @@
 """Test the Council control tools through AGY (Antigravity CLI), headless, on this machine.
 
 Run it in YOUR OWN terminal (AGY's sign-in lives in your login session):
-    python council/acceptance/agy_control_test.py        (use the Python of the environment where `aletheore[council]` is installed)
+    python council/acceptance/agy_control_test.py        (use the Python of the environment where `aletheore` is installed)
 
 It starts a throwaway local Council server, registers a throwaway user, lets AGY use ONLY the six council-control tools
 (session-only settings; your AGY settings are never changed; shell commands stay blocked), then checks the audit log and

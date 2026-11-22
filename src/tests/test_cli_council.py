@@ -29,7 +29,8 @@ def test_council_command_without_the_extra_says_how_to_install_it(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     result = runner.invoke(app, ["council", "setup"])
     assert result.exit_code == 1
-    assert "aletheore[council]" in "".join(result.output.split())  # the brackets survive rich markup (the terminal may wrap the line)
+    flat = "".join(result.output.split())
+    assert "nacl" in flat and "force-reinstall" in flat  # a damaged install says what is missing and how to repair it (the terminal may wrap the line)
 
 
 def test_a_broken_aletheore_council_module_is_not_hidden_behind_the_install_hint(monkeypatch):
@@ -66,12 +67,12 @@ def test_council_help_works_before_the_extra_is_installed(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     result = runner.invoke(app, ["council", "--help"])
     assert result.exit_code == 0
-    assert "Usage:" in result.output and "aletheore[council]" in "".join(result.output.split())
+    assert "Usage:" in result.output and "force-reinstall" in "".join(result.output.split())
 
 
 def test_a_failing_council_command_exits_non_zero(monkeypatch, tmp_path):
     """Council's commands run with click's standalone_mode off, which returns their exit code; the wrapper must turn it back into one."""
-    pytest.importorskip("aletheore.council.cli")  # needs the optional `council` extra, which the ordinary test jobs do not install
+    pytest.importorskip("aletheore.council.cli")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))

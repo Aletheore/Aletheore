@@ -169,7 +169,7 @@ def build_stream(events: list[Event], state: RoomState, now: datetime) -> list[S
             if op == "request":
                 first = clean_text(b.get("instruction", "")).splitlines()[:1]
                 items.append(_notice(e, age, f"{e.sender_participant} asked {b.get('area')}: {first[0][:120] if first else ''}"))
-            elif op in ("finished", "failed", "blocked"):
+            elif op in ("finished", "failed", "blocked", "cancelled"):
                 task = state.tasks.get(str(b.get("task_id")))
                 items.append(_notice(e, age, f"{task.area if task else 'task'} {op}", muted=op == "finished"))
     stamps = {e.seq: e.created_at for e in events}

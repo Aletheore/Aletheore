@@ -14,8 +14,8 @@
   },
   "devDependencies": {
     "cspell": "10.4.1",
-    "markdownlint-cli2": "^0.24.0",
-    "prettier": "3.9.10"
+    "markdownlint-cli2": "^0.24.1",
+    "prettier": "3.10.1"
   },
   "overrides": {
     "js-yaml": "^5.4.2",

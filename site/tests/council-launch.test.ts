@@ -44,7 +44,7 @@ describe("Council launch switch", () => {
     expect(read("src/components/site/header.tsx")).not.toMatch(/nofollow/);
     const page = read("src/app/council/page.tsx");
     expect(page).not.toMatch(/nofollow/);
-    expect(page).toMatch(/ships in Aletheore 0\.13\.0/);
+    expect(page).toMatch(/part of every Aletheore install/);
     expect(page).toMatch(/not had an independent security review/);
   });
 });

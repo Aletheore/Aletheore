@@ -1,4 +1,5 @@
 """Shared two-machine fixture: a "Mac" repo, a "Windows" clone of it, one room store, one bundle store."""
+import itertools
 import subprocess
 
 import pytest
@@ -9,6 +10,15 @@ from aletheore.council.room import Room
 from aletheore.council.runners import ScriptedRunner
 from aletheore.council.sqlite_store import SqliteRoomStore
 from aletheore.council.state import Area
+
+
+_event_ids = itertools.count(1)
+
+
+def uid() -> int:
+    """A unique number for an event id. `time.monotonic_ns()` is not: on Windows with Python 3.12 the clock ticks about every 15 ms, so two events made
+    back to back got the same id and the store dropped the second one as a repeat."""
+    return next(_event_ids)
 
 def git(repo, *args):
     return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
