@@ -94,7 +94,7 @@ export function PlanCards() {
   const [failed, setFailed] = useState<Interval | null>(null);
 
   useEffect(() => {
-    // Monthly prices are the published dollar prices: Paddle's preview localizes by visitor country
+    // Monthly cards use the published dollar prices: Paddle's preview localizes by visitor country
     // (adds local tax, converts), which flashed odd numbers over the real ones.
     if (interval === "month") return;
     let cancelled = false;
