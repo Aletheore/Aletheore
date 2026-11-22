@@ -339,12 +339,47 @@ def _inside_function(node: Node) -> bool:
     return False
 
 
-_KNOWN_OS_ARCH = (
-    "aix|android|darwin|dragonfly|freebsd|hurd|illumos|ios|js|linux|nacl|netbsd|openbsd|plan9|solaris|wasip1|windows|zos|"
+_GOOS_NAMES = (
+    "aix|android|darwin|dragonfly|freebsd|hurd|illumos|ios|js|linux|nacl|netbsd|openbsd|plan9|solaris|wasip1|windows|zos"
+)
+_GOARCH_NAMES = (
     "386|amd64|amd64p32|arm|armbe|arm64|arm64be|loong64|mips|mipsle|mips64|mips64le|mips64p32|mips64p32le|ppc|ppc64|"
     "ppc64le|riscv|riscv64|s390|s390x|sparc|sparc64|wasm"
 )
+_KNOWN_OS_ARCH = f"{_GOOS_NAMES}|{_GOARCH_NAMES}"
 _GOOS_ARCH_SUFFIX = re.compile(rf"_({_KNOWN_OS_ARCH})(_({_KNOWN_OS_ARCH}))?(_test)?\.go$")
+# `name_GOOS.go`, `name_GOARCH.go` and `name_GOOS_GOARCH.go` (each with an optional `_test`): group 1 is the first suffix, group 2 the arch.
+_FILE_PLATFORM = re.compile(rf"_({_KNOWN_OS_ARCH})(?:_({_GOARCH_NAMES}))?(?:_test)?\.go$")
+_OS_SET = frozenset(_GOOS_NAMES.split("|"))
+_ARCH_SET = frozenset(_GOARCH_NAMES.split("|"))
+_OS_IMPLIES = {"android": "linux", "ios": "darwin", "illumos": "solaris"}  # a GOOS that also satisfies another GOOS's tag and name
+_UNIX_OS = _OS_SET - {"js", "nacl", "plan9", "wasip1", "windows", "zos"}
+
+
+def _file_platform(name: str) -> tuple[str | None, str | None]:
+    """The (GOOS, GOARCH) a file name restricts the file to; None for a part the name leaves open."""
+    match = _FILE_PLATFORM.search(name)
+    if not match:
+        return None, None
+    first, arch = match.group(1), match.group(2)
+    if arch:
+        return first, arch
+    return (first, None) if first in _OS_SET else (None, first)
+
+
+def _builds_on(goos: str, restriction: str | None) -> bool:
+    return restriction is None or goos == restriction or _OS_IMPLIES.get(goos) == restriction
+
+
+def mutually_exclusive_platforms(source: str, target: str) -> bool:
+    """Only reject filename-constrained pairs that cannot share a Go build target (GOOS and GOARCH suffixes)."""
+    (left_os, left_arch), (right_os, right_arch) = _file_platform(Path(source).name), _file_platform(Path(target).name)
+    if left_os and right_os and not (left_os == right_os or _OS_IMPLIES.get(left_os) == right_os
+                                      or _OS_IMPLIES.get(right_os) == left_os):
+        return True
+    return bool(left_arch and right_arch and left_arch != right_arch)
+
+
 _BUILD_LINE = re.compile(r"(?m)^\s*//\s*(?:go:build|\+build)\b")
 
 
@@ -355,10 +390,22 @@ _NEWEST_GO_MINOR = 30  # go1.N is satisfied by every toolchain up to a far-futur
 _BUILD_TOKEN = re.compile(r"\s*(\(|\)|!|&&|\|\||[A-Za-z0-9_.]+)")
 
 
-def _tag_value(tag: str) -> bool | None:
+def _tag_value(tag: str, platform: tuple[str, str] | None = None) -> bool | None:
     """One build tag under the default context: custom tags (`nomsgpack`, `ignore`, `appengine`, `race`) are false;
     GOOS, GOARCH, `unix` and `cgo` depend on the machine, so they stay unknown (a scan must give the same evidence on
-    every OS); `gc` and `go1.N` are true."""
+    every OS); `gc` and `go1.N` are true. With `platform` (a GOOS, GOARCH pair) the platform tags are decided for that
+    pair and custom tags stay unknown, which is how two files are checked for sharing a build target."""
+    if platform is not None:
+        goos, goarch = platform
+        if tag in _OS_SET:
+            return _builds_on(goos, tag)
+        if tag in _ARCH_SET:
+            return tag == goarch
+        if tag == "unix":
+            return goos in _UNIX_OS
+        if tag in _TRUE_TAGS or _GO_VERSION_TAG.match(tag):
+            return _tag_value(tag)
+        return None
     if tag in _UNKNOWN_TAGS:
         return None
     if tag in _TRUE_TAGS:
@@ -390,7 +437,7 @@ class _BuildSyntaxError(ValueError):
     pass
 
 
-def _eval_build_expression(expression: str) -> bool | None:
+def _eval_build_expression(expression: str, platform: tuple[str, str] | None = None) -> bool | None:
     """Three-valued value of a `//go:build` expression (`!`, `&&`, `||`, parentheses); None when unknown or malformed."""
     tokens: list[str] = []
     position = 0
@@ -438,7 +485,7 @@ def _eval_build_expression(expression: str) -> bool | None:
         if lexeme is None or lexeme in (")", "&&", "||"):
             raise _BuildSyntaxError(expression)
         index += 1
-        return _tag_value(lexeme)
+        return _tag_value(lexeme, platform)
 
     try:
         value = parse_or()
@@ -447,14 +494,14 @@ def _eval_build_expression(expression: str) -> bool | None:
     return value if index == len(tokens) else None
 
 
-def _eval_plus_build_line(line: str) -> bool | None:
+def _eval_plus_build_line(line: str, platform: tuple[str, str] | None = None) -> bool | None:
     """Legacy `// +build a,b !c` line: space-separated terms are ORed, comma-separated parts ANDed."""
     result: bool | None = False
     for term in line.split():
         part: bool | None = True
         for tag in term.split(","):
             negate = tag.startswith("!")
-            value = _tag_value(tag.lstrip("!"))
+            value = _tag_value(tag.lstrip("!"), platform)
             part = _and(part, _not(value) if negate else value)
         result = _or(result, part)
     return result
@@ -657,6 +704,53 @@ def same_package_targets(repo_path: Path, file_path: Path) -> list[str]:
 
 def clear_cache() -> None:
     _package_files.cache_clear()
+    _platform_constraint.cache_clear()
+
+
+def _expression_holds(before_package: str, platform: tuple[str, str]) -> bool:
+    """False only when the file's `//go:build` (or legacy `// +build`) lines rule out this GOOS/GOARCH pair."""
+    go_build = _GO_BUILD_LINE.search(before_package)
+    if go_build:
+        return _eval_build_expression(go_build.group(1), platform) is not False
+    value: bool | None = True
+    for line in _PLUS_BUILD_LINE.findall(before_package):
+        value = _and(value, _eval_plus_build_line(line, platform))
+    return value is not False
+
+
+@lru_cache(maxsize=4096)
+def _platform_constraint(path: str) -> frozenset | None:
+    """The (GOOS, GOARCH) pairs a Go file can be built for, or None when it is not restricted to any (no platform suffix and
+    no platform-deciding build line). Custom tags and cgo are treated as possibly true, so this only ever rules a pair out
+    by GOOS, GOARCH or `unix`."""
+    name = Path(path).name
+    file_os, file_arch = _file_platform(name)
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(2000).decode(errors="ignore")
+    except OSError:
+        head = ""
+    before_package = ("\n" + _BLOCK_COMMENT.sub("", head)).split("\npackage ", 1)[0]
+    has_expression = bool(_GO_BUILD_LINE.search(before_package) or _PLUS_BUILD_LINE.search(before_package))
+    if file_os is None and file_arch is None and not has_expression:
+        return None
+    pairs = frozenset(
+        (goos, goarch)
+        for goos in _OS_SET for goarch in _ARCH_SET
+        if _builds_on(goos, file_os) and (file_arch is None or goarch == file_arch)
+        and (not has_expression or _expression_holds(before_package, (goos, goarch)))
+    )
+    return pairs
+
+
+def platforms_disjoint(repo_path: Path, source: str, target: str) -> bool:
+    """True when the two files can never be built into the same binary: their filename suffixes or `//go:build` lines allow no
+    common GOOS/GOARCH pair. A file with no platform restriction never conflicts."""
+    left = _platform_constraint(str(Path(repo_path) / source))
+    if left is None:
+        return False
+    right = _platform_constraint(str(Path(repo_path) / target))
+    return right is not None and left.isdisjoint(right)
 
 
 def is_build_constrained(repo_path: Path, rel_target: str) -> bool:
