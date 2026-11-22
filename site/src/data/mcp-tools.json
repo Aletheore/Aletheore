@@ -1,6 +1,6 @@
 {
   "source": "aletheore package build_server() and cli.QUERY_KIND_GROUPS",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "default": [
     "aletheore_add_custom_skill",
     "aletheore_ask",
