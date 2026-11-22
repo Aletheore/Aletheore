@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+## 0.14.1 - 2026-11-22
+
 - Fixed: Go graph edges no longer connect files with incompatible OS filename constraints, while retaining portable and compatible platform variants.
 - Fixed: a Council task prompt no longer reads as if the `council_post` tool were required. Codex on Windows did not get the room tools (a Codex-on-Windows limitation, also true of a plain one-tool MCP server), and it blocked a task it could have done; the prompt now says the tool is optional and to put anything for the other agents in the final reply.
 - Fixed: Rust test, example, and benchmark imports no longer mistake an undeclared sibling target for a known workspace crate; ambiguous matches are marked inferred.

@@ -30,6 +30,13 @@ export type ChangelogEntry = {
  */
 export const changelogEntries: ChangelogEntry[] = [
   {
+    date: "2026-11-22",
+    title: "Aletheore 0.14.1: a Council shell-denial fix, and better Go, Rust and C import maps",
+    tags: ["fix"],
+    body: "Aletheore 0.14.1 is on PyPI (pip install --upgrade aletheore). A Council OpenCode worker could run shell commands despite the shell being denied, by starting a sub-agent; that is now blocked. A Council task no longer stops when an agent session has no room tools. Go, Rust and C import maps no longer link files they should not. The empty council extra is removed; pip install aletheore includes Council.",
+    link: { label: "Full changelog", href: "https://github.com/Aletheore/Aletheore/blob/master/CHANGELOG.md" },
+  },
+  {
     date: "2026-11-21",
     title: "Aletheore Flash Lite: a $6 plan for small teams, and one-pass reviews on every paid plan",
     tags: ["feature"],
