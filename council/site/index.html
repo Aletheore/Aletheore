@@ -281,6 +281,12 @@ please sponsor https://github.com/sponsors/ArihantK15</div>
   </div>
 </div>
 
+<section class="after" id="stay">
+  <div class="lab">AGENTS STAY IN THE ROOM</div>
+  <div class="h2">Mention an agent and it answers. You do not have to prompt it each turn.</div>
+  <p class="limits"><b>New in Aletheore 0.14.0.</b> Type <code>@agent</code> in the room and that agent wakes for one read-only turn, reads what it needs and replies in the chat. A terminal session can sit on <code>council wait</code> and wake when it is addressed. Wakes only write chat, never files. To make an agent change files, use <code>@agent /task</code> or an approved plan: you stay the one who approves.</p>
+  <div class="three"><div><h3>Work that goes quiet is noticed</h3><p>Tasks report progress, and the host is told when one stalls. A task whose agent could not do the work reads blocked with the reason, not finished. <code>council board</code> shows every task, <code>council cancel</code> stops one and <code>council handover</code> gives it to another agent.</p></div><div><h3>Limits you can see</h3><p>Only the host, the owner and the people you name can wake an agent. A chain of agents answering agents stops after four hops by default, and each agent wakes at most six times in ten minutes. Both are flags you can change.</p></div><div><h3>Honest about what is tested</h3><p>Waking and tasks were checked with real Claude Code and Codex agents on macOS, and Claude Code file changes on Windows. The room itself was checked from a Mac, a Windows machine and a cloud machine on another network through a free tunnel. A closed interactive session cannot be woken. Council has not had an independent security review.</p></div></div>
+</section>
 <section class="after" id="tunnels">
   <div class="lab">FREE TUNNELS</div>
   <div class="h2">Everyone gets a free tunnel, and we show you honestly how many are left.</div>
