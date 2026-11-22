@@ -6,9 +6,9 @@ import { subscribedPlan, SUBSCRIBED_PLAN_NAMES } from "@/lib/subscribed";
 // (plan, interval) pairs and price ids. A pair outside this set gets a 400 from /subscribe.
 const BACKEND: Record<string, string> = {
   "lite:month": "pri_01m7zbvbsck8s6rnxpv66652cw",
-  "air:month": "pri_01kyhevc8bkcghfpwjymz16y2h",
-  "air:year": "pri_01kyhevc9xn6z2nghmy8057jvp",
-  "flash:month": "pri_01m3xpabbam5t2gkzwzmg0y9eq",
+  "air:month": "pri_01m7d0qgz9jv3dfye9jxvcv5n9",
+  "air:year": "pri_01m7d0qh2fgmr0nt92cj77nqva",
+  "flash:month": "pri_01m7d0qgwddyg8rgbcj2ppm1ek",
 };
 
 describe("checkout wiring against the backend", () => {
