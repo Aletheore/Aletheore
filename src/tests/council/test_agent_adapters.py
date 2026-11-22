@@ -71,7 +71,7 @@ def test_opencode_runs_headless_with_inline_config_locked_to_file_edits_and_the_
     rec = record(wt)
     assert rec["argv"][:3] == ["run", "--pure", "--format=json"] and rec["argv"][-2:] == ["--", "do the thing"]
     cfg = json.loads(rec["cfg"])
-    assert cfg["permission"] == {"edit": "allow", "bash": "deny", "webfetch": "deny"}
+    assert cfg["permission"] == {"edit": "allow", "bash": "deny", "webfetch": "deny", "task": "deny"}  # task: a sub-agent would not inherit the shell denial
     council = cfg["mcp"]["council"]
     assert council["type"] == "local" and council["command"] == ["/py", "-m", "srv"] and council["enabled"] is True
     assert council["environment"] == {"COUNCIL_ROOM": "r1", "COUNCIL_TOKEN": "secret"}

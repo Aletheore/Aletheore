@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed: an OpenCode worker in Council could run shell commands despite the shell being denied, by asking OpenCode to start a sub-agent (its `task` tool), which does not inherit the denial. Council now denies that tool too. Found by re-running the real OpenCode worker check on OpenCode 1.19.3: it failed in 4 of 4 runs before, and the file is no longer created after the change.
+
 ## 0.14.0 - 2026-11-21
 
 - Changed: the default `--max-wake-depth` for Council workers is now 4 (was 2), so a planner and an executor can talk it through and the planner can close with a verdict without raising the flag. The per-agent wake budget (`--max-wakes`, 6 per 10 minutes) and the 3-second gap are unchanged.
