@@ -6714,8 +6714,8 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
     """Resolve #include lines the per-file resolver (includer's directory only) cannot.
 
     Search order: the includer's directory (quoted form only), then include/, src/, the repo
-    root, then any scanned header whose path ends with the spec (only when exactly one does, or
-    one shares the longest directory prefix with the includer). A bare angle include (`<jansson.h>`) of a name that
+    root, then any scanned header whose path ends with the spec. For C sources, ambiguous suffixes are left unresolved,
+    and search-root and suffix matches are marked inferred. A bare angle include (`<jansson.h>`) of a name that
     is not a standard/POSIX header binds to the single in-repo header of that name, marked inferred. Angle includes skip the
     includer's directory and src/ (include/ and the root only), and only use the suffix fallback
     when the spec has a directory part (`<fmt/base.h>`), so `<stdio.h>`-style system headers
@@ -6726,6 +6726,8 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
     if not c_modules:
         return
     c_paths = {m["path"] for m in c_modules}
+    # `.h` is ambiguous between C and C++; a header counts as C only in a repository with no C++ source files.
+    has_cpp_sources = any(path.endswith((".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx")) for path in c_paths)
     known = {m["path"] for m in modules}
     by_base: dict[str, list[str]] = {}
     for path in known:
@@ -6735,6 +6737,9 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
 
     for module in c_modules:
         includer = module["path"]
+        c_source = (module.get("language") == "c" and includer.endswith(".c")) or (
+            includer.endswith(".h") and not has_cpp_sources
+        )
         includer_dir = includer.rsplit("/", 1)[0] if "/" in includer else ""
         try:
             source = (repo_path / includer).read_text(encoding="utf-8", errors="ignore")
@@ -6748,17 +6753,20 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
             # headers do not bind to a same-named file under src/.
             bases = [includer_dir, *_C_SEARCH_DIRS] if quoted else ["include", ""]
             target = None
-            for base in bases:
+            guessed = False
+            for index, base in enumerate(bases):
                 candidate = os.path.normpath(f"{base}/{spec}" if base else spec).replace(os.sep, "/")
                 if candidate in known and not candidate.startswith(".."):
                     target = candidate
+                    guessed = c_source and not (quoted and index == 0)
                     break
             if target is None and (quoted or "/" in spec):
                 suffix = os.path.normpath(spec).replace(os.sep, "/")
                 matches = [p for p in by_base.get(suffix.rsplit("/", 1)[-1], []) if p == suffix or p.endswith("/" + suffix)]
                 if len(matches) == 1:
                     target = matches[0]
-                elif len(matches) > 1:
+                    guessed = c_source
+                elif len(matches) > 1 and not c_source:
                     def shared(p: str) -> int:
                         n = 0
                         for a, b in zip(p.split("/")[:-1], includer_dir.split("/")):
@@ -6770,7 +6778,6 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
                     top = [p for p in matches if shared(p) == best]
                     if len(top) == 1:
                         target = top[0]
-            guessed = False
             if target is None and not quoted and "/" not in spec and spec not in _SYSTEM_HEADERS:
                 # `#include <jansson.h>` where jansson.h is the project's own public header under src/: a bare angle
                 # include that is not a standard/POSIX header binds to the single in-repo header of that name. It
