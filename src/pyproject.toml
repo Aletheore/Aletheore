@@ -100,7 +100,7 @@ dependencies = [
     # one statement, not the whole file.
     "sqlglot>=30.0,<31.0",
     # `aletheore council`: a sealed room where people and their coding agents work together. Part of every install, not an extra.
-    "fastapi>=0.143,<0.163",
+    "fastapi>=0.143,<0.166",
     "uvicorn>=0.53,<1.0",
     "textual>=8,<9",
     "psycopg[binary,pool]>=3.2,<4",
