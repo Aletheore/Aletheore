@@ -19,6 +19,15 @@ describe("home content", () => {
     expect(home.proof.repos.map((r) => r.name)).toEqual(["Django", "Express", "Kubernetes"]);
     for (const r of home.proof.repos) expect(r.commit).toMatch(/^[0-9a-f]{7}$/);
   });
+  it("shows one approved user quote, credited to the project name only", () => {
+    // Wording and credit approved by the user in writing on 2026-11-24. Change either only with their approval.
+    expect(home.testimonial.quote).toBe(
+      "RustingStrata is growing fast, and contributors actually read the Aletheore review and fix what it flags, even before I say what's wrong.",
+    );
+    expect(home.testimonial.name).toBe("RustingStrata");
+    expect(home.testimonial.href).toBe("https://github.com/RustingStudio/RustingStrata");
+    expect(Object.keys(home.testimonial).sort()).toEqual(["eyebrow", "href", "meta", "name", "quote"]);
+  });
   it("states the Linux stress test numbers exactly", () => {
     const linux = Object.fromEntries(home.proof.linux.stats.map((s) => [s.label, s.value]));
     expect(linux["Files parsed"]).toBe("64,554");

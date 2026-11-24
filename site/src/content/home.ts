@@ -91,6 +91,14 @@ export const home = {
       stats: [{ value: "47.2%", label: "fewer tokens" }, { value: "53.8%", label: "smaller on disk" }],
     },
   },
+  // One user quote. Wording and credit were approved in writing by its author on 2026-11-24; change either only with their approval.
+  testimonial: {
+    eyebrow: "From a user",
+    quote: "RustingStrata is growing fast, and contributors actually read the Aletheore review and fix what it flags, even before I say what's wrong.",
+    name: "RustingStrata",
+    meta: "A pure-Rust inference engine for GGUF models",
+    href: "https://github.com/RustingStudio/RustingStrata",
+  },
   cta: {
     title: "Humanist tools for a technical world.",
     body: "The deterministic local scan does not upload your code. The CLI sends a small crash report only if it crashes, and one command turns that off. Bring your own API key for AI-assisted audit reports, or skip them entirely: the evidence pipeline stands on its own.",

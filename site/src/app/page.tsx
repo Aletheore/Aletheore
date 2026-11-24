@@ -8,6 +8,7 @@ import { Docs } from "@/components/sections/docs";
 import { Proof } from "@/components/sections/proof";
 import { Surfaces } from "@/components/sections/surfaces";
 import { Teams } from "@/components/sections/teams";
+import { Testimonial } from "@/components/sections/testimonial";
 import { Why } from "@/components/sections/why";
 import { home } from "@/content/home";
 import ld from "@/data/jsonld.json";
@@ -34,6 +35,7 @@ export default function Home() {
       <Docs />
       <Teams />
       <Proof />
+      <Testimonial />
       <Cta />
     </>
   );
