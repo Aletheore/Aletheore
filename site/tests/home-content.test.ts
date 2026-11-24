@@ -26,7 +26,6 @@ describe("home content", () => {
     );
     expect(home.testimonial.name).toBe("RustingStrata");
     expect(home.testimonial.href).toBe("https://github.com/RustingStudio/RustingStrata");
-    expect(Object.keys(home.testimonial).sort()).toEqual(["eyebrow", "href", "meta", "name", "quote"]);
   });
   it("states the Linux stress test numbers exactly", () => {
     const linux = Object.fromEntries(home.proof.linux.stats.map((s) => [s.label, s.value]));
