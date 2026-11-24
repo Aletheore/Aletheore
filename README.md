@@ -40,6 +40,10 @@
   <a href="#see-the-evidence">Explore the evidence</a>
 </p>
 
+<p align="center">
+  Used by <a href="https://github.com/RustingStudio/RustingStrata">RustingStrata</a>, a pure-Rust inference engine for GGUF models.
+</p>
+
 ## See the workflow
 
 ![Scan → Evidence graph → Coding agent → PR review](assets/readme-workflow.svg)
