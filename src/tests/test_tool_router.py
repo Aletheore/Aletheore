@@ -214,3 +214,146 @@ def test_wanted_count_only_reads_explicit_ranking_cues():
     assert tr._wanted_count("which 3 files import auth the most") == 10
     assert tr._wanted_count("top 3 files") == 3
     assert tr._wanted_count("the 10 most imported") == 10
+
+
+# --- semantic fallback for open-ended questions ---------------------------------------------------
+
+_CONCEPT_QUESTION = (
+    "What is the semantic relationship between the expiration threshold computed in the test setup "
+    "and the early exit optimization tested across multiple methods?"
+)
+_NONE_QUESTION = "How does the template loader decide which engine to use when several are configured?"
+_EMPTY_EVIDENCE = {"repository": {"modules": []}, "git": {}}
+
+
+def _hit(path="pkg/core.py", symbol="auto_open", start=10, end=20, text="x" * 2000):
+    return {"module_path": path, "symbol_name": symbol, "start_line": start, "end_line": end, "text": text, "score": 0.7}
+
+
+def _answer(question, **kwargs):
+    from pathlib import Path
+
+    return tr.answer(question, None, _EMPTY_EVIDENCE, Path("."), **kwargs)
+
+
+def test_an_unmatched_open_ended_question_falls_back_to_semantic_search():
+    calls = []
+
+    def search(repo_path, query, k=5, allow_hosted=False):
+        calls.append((query, k, allow_hosted))
+        return [_hit(), _hit("pkg/other.py", "helper", 3, 9)]
+
+    result = _answer(_CONCEPT_QUESTION, semantic=True, allow_hosted=True, search=search)
+    assert result["routed_to"] == "aletheore_search_codebase"
+    assert result["confidence"] == "medium"
+    first = result["answer"][0]
+    assert (first["path"], first["symbol"], first["lines"]) == ("pkg/core.py", "auto_open", "10-20")
+    assert len(first["code"]) <= tr.SEMANTIC_SNIPPET_CHARS
+    assert calls == [(_CONCEPT_QUESTION, tr.SEMANTIC_RESULTS, True)]
+
+
+def test_a_no_match_open_ended_question_also_falls_back_to_semantic_search():
+    from pathlib import Path
+
+    assert tr.route(_NONE_QUESTION, None, []).confidence == "none"
+    result = _answer(_NONE_QUESTION, semantic=True, search=lambda *a, **k: [_hit()])
+    assert result["routed_to"] == "aletheore_search_codebase"
+
+
+def test_a_short_question_that_needs_a_file_stays_low_instead_of_searching():
+    def search(*args, **kwargs):
+        raise AssertionError("must not search")
+
+    result = _answer("is it safe to rename this", semantic=True, search=search)
+    assert result["confidence"] == "low" and "file path" in result["next"]
+
+
+def test_semantic_fallback_is_off_by_default():
+    def search(*args, **kwargs):
+        raise AssertionError("must not search")
+
+    result = _answer(_NONE_QUESTION, search=search)
+    assert result["confidence"] == "none" and result["answer"] == "No clear match for this question."
+
+
+def test_requests_to_act_and_short_questions_never_go_semantic():
+    def search(*args, **kwargs):
+        raise AssertionError("must not search")
+
+    assert _answer("tell me a joke", semantic=True, search=search)["confidence"] == "none"
+    assert _answer("hello there friend", semantic=True, search=search)["confidence"] == "none"
+
+
+def test_a_matched_intent_is_never_replaced_by_semantic_search():
+    def search(*args, **kwargs):
+        raise AssertionError("must not search")
+
+    result = _answer("what is this repo", semantic=True, search=search)
+    assert result["routed_to"] != "aletheore_search_codebase"
+
+
+def test_semantic_fallback_degrades_to_no_match_when_search_is_unavailable():
+    from aletheore.search_index import EmbeddingProviderUnavailableError, IndexNotFoundError
+
+    for error in (IndexNotFoundError("no index"), EmbeddingProviderUnavailableError("down")):
+        def search(*args, _error=error, **kwargs):
+            raise _error
+
+        result = _answer(_NONE_QUESTION, semantic=True, search=search)
+        assert result["confidence"] == "none" and result["next"]
+
+
+def test_semantic_fallback_with_no_hits_is_still_a_no_match():
+    result = _answer(_NONE_QUESTION, semantic=True, search=lambda *a, **k: [])
+    assert result["confidence"] == "none"
+
+
+def test_an_unexpected_search_error_degrades_to_no_match():
+    def search(*args, **kwargs):
+        raise TimeoutError("embedder timed out")
+
+    result = _answer(_NONE_QUESTION, semantic=True, search=search)
+    assert result["confidence"] == "none" and "failed" in result["next"]
+
+
+def test_an_unavailable_index_hint_survives_the_low_confidence_branch():
+    from aletheore.search_index import IndexNotFoundError
+
+    def search(*args, **kwargs):
+        raise IndexNotFoundError("no index")
+
+    long_question = "what are the tests that cover the thing we do with this when it is configured in a different way than usual"
+    result = _answer(long_question, semantic=True, search=search)
+    assert result["confidence"] == "low" and "index" in result["next"]
+
+
+def test_the_router_search_cannot_write_to_stdout_or_read_stdin(capsys):
+    def search(*args, **kwargs):
+        print("Ollama isn't installed.")
+        input("Install Ollama now? [y/N]: ")
+
+    result = _answer(_NONE_QUESTION, semantic=True, search=search)
+    captured = capsys.readouterr()
+    assert captured.out == "" and result["confidence"] == "none"
+
+
+def test_an_off_topic_question_with_a_distant_top_hit_is_no_match():
+    result = _answer(_NONE_QUESTION, semantic=True, search=lambda *a, **k: [dict(_hit(), score=0.95)])
+    assert result["confidence"] == "none"
+
+
+def test_keyword_only_hits_are_labelled_and_low_confidence():
+    result = _answer(_NONE_QUESTION, semantic=True, search=lambda *a, **k: [dict(_hit(), keyword_only=True)])
+    assert result["confidence"] == "low" and "keyword" in result["note"]
+    assert "keyword_only" not in result["answer"][0]
+
+
+def test_an_unresolved_explicit_target_does_not_become_a_repo_wide_search():
+    from pathlib import Path
+
+    def search(*args, **kwargs):
+        raise AssertionError("must not search")
+
+    question = "what are the tests that cover the thing we do with this when it is configured in a different way than usual"
+    result = tr.answer(question, "src/new_file.py", _EMPTY_EVIDENCE, Path("."), semantic=True, search=search)
+    assert result["confidence"] == "low"

@@ -7,7 +7,14 @@ from unittest.mock import patch
 
 import pytest
 
-from aletheore.git_intel.analyzer import GitAnalysisError, analyze_git, compute_hotspots, compute_recently_updated
+from aletheore.git_intel.analyzer import (
+    GitAnalysisError,
+    analyze_git,
+    compute_high_risk_files,
+    compute_hotspots,
+    compute_recently_updated,
+    file_risk_scores,
+)
 from aletheore.git_intel.incremental import GitLogStreamError
 
 
@@ -658,6 +665,7 @@ def test_compute_hotspots_normalizes_paths_when_scan_root_is_subdirectory(tmp_pa
         {
             "path": "a.py",
             "churn_count": 1,
+            "risk_score": 1.0,
             "co_change_partners": [],
             "dependents_count": 0,
         }
@@ -938,3 +946,71 @@ def test_ahead_behind_recomputes_from_malformed_cached_counts(tmp_path, monkeypa
     meta["ahead_behind"]["counts"] = {"main": ["x"]}
     meta_path.write_text(json.dumps(meta))
     assert history_meta.cached_ahead_behind(repo, "main", lambda: {"main": (3, 4)}) == {"main": (3, 4)}
+
+
+def test_file_risk_scores_rank_the_larger_file_higher_when_churn_ties():
+    scores = file_risk_scores({"small.py": 5, "big.py": 5}, {"small.py": 10, "big.py": 5000})
+    assert scores["big.py"] > scores["small.py"]
+
+
+def test_file_risk_scores_rank_more_churn_higher_when_size_ties():
+    scores = file_risk_scores({"cold.py": 1, "hot.py": 9}, {"cold.py": 100, "hot.py": 100})
+    assert scores["hot.py"] > scores["cold.py"]
+
+
+def test_file_risk_scores_cover_every_file_not_a_capped_top_n():
+    churn = {f"f{i}.py": i for i in range(100)}
+    scores = file_risk_scores(churn, {path: 10 for path in churn})
+    assert set(scores) == set(churn)
+    assert all(0 < value <= 1 for value in scores.values())
+
+
+def test_file_risk_scores_fall_back_to_churn_without_sizes():
+    scores = file_risk_scores({"a.py": 1, "b.py": 7}, {})
+    assert scores["b.py"] > scores["a.py"]
+    assert file_risk_scores({}, {}) == {}
+
+
+def test_compute_hotspots_reports_a_risk_score_but_keeps_ordering_by_churn(tmp_path):
+    repo = _init_repo_with_hotspot_commits(tmp_path)
+    (repo / "b.py").write_text("x" * 5000)
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "grow b")
+    hotspots = compute_hotspots(repo, [])
+    assert all(0 < hotspot["risk_score"] <= 1 for hotspot in hotspots)
+    churns = [hotspot["churn_count"] for hotspot in hotspots]
+    assert churns == sorted(churns, reverse=True)
+
+
+def test_compute_high_risk_files_lists_only_files_at_or_above_the_threshold(tmp_path):
+    repo = tmp_path / "risk_repo"
+    repo.mkdir()
+    run(repo, "init", "-q")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "A")
+    for index in range(10):
+        (repo / f"f{index}.py").write_text("x")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "initial")
+    for round_number in range(4):
+        (repo / "f0.py").write_text("y" * (round_number + 2) * 500)
+        run(repo, "add", "-A")
+        run(repo, "commit", "-q", "-m", f"edit {round_number}")
+    flagged = compute_high_risk_files(repo)
+    assert [entry["path"] for entry in flagged][:1] == ["f0.py"]
+    assert all(entry["risk_score"] >= 0.8 for entry in flagged)
+    assert set(flagged[0]) == {"path", "risk_score", "churn_count"}
+    assert len(flagged) < 10
+
+
+
+def test_a_tiny_repository_has_no_high_risk_files(tmp_path):
+    repo = tmp_path / "tiny"
+    repo.mkdir()
+    run(repo, "init", "-q")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "A")
+    (repo / "only.py").write_text("x")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "initial")
+    assert compute_high_risk_files(repo) == []

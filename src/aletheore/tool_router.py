@@ -16,10 +16,13 @@ The router is deterministic, built the way `find_skill` was: keyword rules with 
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import logging
 import math
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Callable
@@ -603,20 +606,125 @@ def _menu() -> list[str]:
 ANSWER_MAX_CHARS = 6000
 
 
-def answer(question: str, target: str | None, evidence: dict, repo_path: Path) -> dict:
-    """Route `question` and run the chosen query. Returns a dict describing what happened."""
+# An open-ended question no keyword rule matched ("how does X relate to Y") is what semantic search is for. Anything
+# shorter is a fragment, not a question worth an embedding call.
+SEMANTIC_MIN_WORDS = 6
+# A question that mentions a keyword ("tests", "imports") but names no file is usually still open-ended when it is
+# this long; a short one ("is it safe to rename this") really does need a file.
+SEMANTIC_MIN_WORDS_WHEN_FILE_MISSING = 12
+SEMANTIC_RESULTS = 5
+SEMANTIC_SNIPPET_CHARS = 500
+_NO_INTENT_REASON = "no intent matched"
+
+
+@contextlib.contextmanager
+def _quiet_io():
+    """The MCP server speaks JSON-RPC over stdout and reads requests from stdin. The embedding code can print a progress or
+    install message and even ask a y/N question, so during a router search stdout goes to stderr and stdin is empty (input()
+    then raises EOFError, which the caller treats as 'search unavailable')."""
+    with contextlib.redirect_stdout(sys.stderr):
+        saved_stdin, sys.stdin = sys.stdin, io.StringIO("")
+        try:
+            yield
+        finally:
+            sys.stdin = saved_stdin
+
+
+def _semantic_answer(question: str, repo_path: Path, search, allow_hosted: bool) -> tuple[list[dict] | None, str | None]:
+    """Top semantic hits for an open-ended question, or (None, why) when the index or embedder is unavailable."""
+    from aletheore.answer import DEFAULT_CONFIDENCE_THRESHOLD
+    from aletheore.search_index import (
+        EmbeddingProviderUnavailableError,
+        HostedEmbeddingUnavailableError,
+        IndexDimensionMismatchError,
+        IndexNotFoundError,
+        search_index,
+    )
+
+    try:
+        with _quiet_io():
+            hits = (search or search_index)(repo_path, question, k=SEMANTIC_RESULTS, allow_hosted=allow_hosted)
+    except IndexNotFoundError:
+        return None, "no semantic index yet: run `aletheore index` to enable open-ended questions"
+    except (IndexDimensionMismatchError, EmbeddingProviderUnavailableError, HostedEmbeddingUnavailableError) as exc:
+        return None, f"semantic search unavailable: {exc}"
+    except Exception as exc:  # noqa: BLE001 - a timeout, HTTP error or corrupt index must degrade to "no clear match", never fail the call
+        return None, f"semantic search failed: {type(exc).__name__}"
+    # Same gate as aletheore_answer: the nearest chunks of an off-topic question are still "nearest", not relevant. A hit with no
+    # score came from keyword search alone, which is real text evidence, so only a numeric score above the threshold rejects.
+    top_score = hits[0].get("score") if hits else None
+    if top_score is not None and top_score > DEFAULT_CONFIDENCE_THRESHOLD:
+        return None, None
+    return [
+        {
+            "path": hit.get("module_path"),
+            "symbol": hit.get("symbol_name"),
+            "lines": f"{hit.get('start_line')}-{hit.get('end_line')}",
+            "code": str(hit.get("text") or "")[:SEMANTIC_SNIPPET_CHARS],
+            "keyword_only": bool(hit.get("keyword_only")),
+        }
+        for hit in hits
+    ], None
+
+
+def answer(
+    question: str,
+    target: str | None,
+    evidence: dict,
+    repo_path: Path,
+    *,
+    semantic: bool = False,
+    allow_hosted: bool = False,
+    search=None,
+) -> dict:
+    """Route `question` and run the chosen query. Returns a dict describing what happened.
+
+    semantic: let an open-ended question that matched no rule fall back to semantic search over the index instead
+    of "no clear match". Off by default so callers that cannot embed a query behave as before."""
     from aletheore import query as q
 
     paths = [m["path"] for m in evidence["repository"]["modules"] if m.get("path")]
     decision = route(question, target, paths)
     result: dict = {"routed_to": decision.tool, "confidence": decision.confidence}
+    words = len(question.split())
+    open_ended = (
+        decision.confidence == "none" and decision.reason == _NO_INTENT_REASON and words >= SEMANTIC_MIN_WORDS
+    ) or (
+        decision.confidence == "low"
+        and decision.target is None
+        and not decision.candidates
+        and decision.reason == "needs a file path"
+        and words >= SEMANTIC_MIN_WORDS_WHEN_FILE_MISSING
+    )
+    # An explicit target that did not resolve must not quietly turn into a repo-wide search: the low-confidence reply below tells
+    # the caller its file was not recognised.
+    target_dropped = bool(target) and decision.target is None
+    if semantic and open_ended and not target_dropped:
+        hits, unavailable = _semantic_answer(question, repo_path, search, allow_hosted)
+        if hits:
+            keyword_only = any(hit.get("keyword_only") for hit in hits)
+            for hit in hits:
+                hit.pop("keyword_only", None)
+            return {
+                "routed_to": "aletheore_search_codebase",
+                "confidence": "low" if keyword_only else "medium",
+                "answer": hits,
+                "note": (
+                    "keyword matches only: the semantic index is incomplete or unreadable, so these are not ranked by meaning; "
+                    "run `aletheore index` and read the cited code before relying on it"
+                    if keyword_only
+                    else "ranked by meaning, not proven; read the cited code before relying on it"
+                ),
+            }
+        if unavailable:
+            result["next"] = unavailable
     if decision.confidence == "none":
         result["answer"] = "No clear match for this question."
         result["try"] = decision.candidates
         return result
     if decision.confidence == "low":
         result["why"] = decision.reason
-        if decision.target is None and decision.tool:
+        if decision.target is None and decision.tool and "next" not in result:
             result["next"] = f"call {decision.tool} with a file path, or ask again naming the file"
         if decision.candidates:
             result["candidates"] = decision.candidates

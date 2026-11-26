@@ -1,3 +1,4 @@
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,13 @@ from aletheore.git_intel.incremental import (
 from aletheore.git_intel.sqlite_store import SQLiteRepoGraphStore, default_graph_db_path
 
 HOTSPOT_LIMIT = 30
+# A file is "high risk" at or above this score; the list is capped so a huge repository's
+# evidence stays small.
+HIGH_RISK_THRESHOLD = 0.8
+HIGH_RISK_LIMIT = 500
+# Scores are percentiles within the repository, so in a tiny one nearly every file lands above the threshold; below this
+# many files there is no meaningful "high risk" subset.
+HIGH_RISK_MIN_FILES = 10
 RECENTLY_UPDATED_LIMIT = 10
 CADENCE_WEEKS_RETURNED = 52
 
@@ -336,14 +344,110 @@ def _last_commit_at(churn: FileChurnTotal) -> datetime | None:
     return churn.recent_commits[0].committed_at if churn.recent_commits else None
 
 
+def _average_rank_percentiles(values: list[float]) -> list[float]:
+    """Percentile rank in (0, 1] of each value among `values`, ties sharing
+    their average rank so equal inputs never get an arbitrary ordering."""
+    order = sorted(range(len(values)), key=lambda index: values[index])
+    ranks = [0.0] * len(values)
+    start = 0
+    while start < len(order):
+        end = start
+        while end + 1 < len(order) and values[order[end + 1]] == values[order[start]]:
+            end += 1
+        for position in range(start, end + 1):
+            ranks[order[position]] = ((start + end) / 2 + 1) / len(values)
+        start = end + 1
+    return ranks
+
+
+def file_risk_scores(churn_by_path: dict[str, int], size_by_path: dict[str, int]) -> dict[str, float]:
+    """Per-file risk in (0, 1]: the mean of the file's churn percentile and
+    size percentile within this repository. Covers every file given, not a
+    capped top-N, so a PR reviewer can look up any changed file.
+
+    Churn alone ranked Repowise's published 21-repository benchmark files
+    at 0.734 mean AUC; adding size lifted it to 0.762 (chosen on a dev half of
+    the repos, 0.737 vs 0.713 on the held-out half). With no size data it falls back to churn
+    alone."""
+    paths = sorted(churn_by_path)
+    if not paths:
+        return {}
+    churn_pct = _average_rank_percentiles([churn_by_path[path] for path in paths])
+    if not size_by_path:
+        return {path: round(value, 4) for path, value in zip(paths, churn_pct)}
+    size_pct = _average_rank_percentiles([size_by_path.get(path, 0) for path in paths])
+    return {path: round((c + s) / 2, 4) for path, c, s in zip(paths, churn_pct, size_pct)}
+
+
+def _file_size(repo_path: Path, path: str) -> int:
+    try:
+        return os.path.getsize(repo_path / path)
+    except OSError:
+        return 0
+
+
+def _live_files_and_risk(
+    snapshot: GraphSnapshot, repo_path: Path | None
+) -> tuple[dict[str, FileChurnTotal], dict[str, float]]:
+    live = {
+        path: churn
+        for path, churn in snapshot.file_churn.items()
+        # deleted/renamed away: churn history for a file no longer in the tree
+        if repo_path is None or (repo_path / path).exists()
+    }
+    sizes = {path: _file_size(repo_path, path) for path in live} if repo_path is not None else {}
+    return live, file_risk_scores({path: churn.churn_count for path, churn in live.items()}, sizes)
+
+
+def _high_risk_summary(snapshot: GraphSnapshot, repo_path: Path | None, live_risk=None) -> list[dict]:
+    live, risk = live_risk or _live_files_and_risk(snapshot, repo_path)
+    if len(live) < HIGH_RISK_MIN_FILES:
+        return []
+    flagged = [
+        {"path": path, "risk_score": score, "churn_count": live[path].churn_count}
+        for path, score in risk.items()
+        if score >= HIGH_RISK_THRESHOLD
+    ]
+    flagged.sort(key=lambda item: (-item["risk_score"], -item["churn_count"], item["path"]))
+    return flagged[:HIGH_RISK_LIMIT]
+
+
+def live_risk_from_snapshot(snapshot: GraphSnapshot, repo_path: Path):
+    """The live files and their risk scores, computed once so hotspots and the high-risk list share one pass over the tree."""
+    return _live_files_and_risk(snapshot, repo_path)
+
+
+def high_risk_from_snapshot(snapshot: GraphSnapshot, repo_path: Path, live_risk=None) -> list[dict]:
+    """The files whose risk score is at or above HIGH_RISK_THRESHOLD, from a snapshot the
+    caller already synced. Unlike the capped hotspots list this is what a PR review looks
+    changed files up in."""
+    return _high_risk_summary(snapshot, repo_path, live_risk)
+
+
+def compute_high_risk_files(
+    repo_path: Path,
+    *,
+    store: RepoGraphStore | None = None,
+    depth_cap: int | None = None,
+    branch: str | None = None,
+) -> list[dict]:
+    owns_store = store is None
+    store = store or default_store(repo_path)
+    try:
+        snapshot, _reset = _sync_graph(repo_path, store, datetime.now(timezone.utc), depth_cap, branch)
+    finally:
+        if owns_store and isinstance(store, SQLiteRepoGraphStore):
+            store.close()
+    return _high_risk_summary(snapshot, repo_path)
+
+
 def _hotspots_summary(
-    snapshot: GraphSnapshot, modules: list[dict], repo_path: Path | None = None
+    snapshot: GraphSnapshot, modules: list[dict], repo_path: Path | None = None, live_risk=None
 ) -> list[dict]:
     dependents_by_path = {module["path"]: len(module.get("imported_by", [])) for module in modules}
+    live, risk = live_risk or _live_files_and_risk(snapshot, repo_path)
     hotspots = []
-    for path, churn in snapshot.file_churn.items():
-        if repo_path is not None and not (repo_path / path).exists():
-            continue  # deleted/renamed away: churn history for a file no longer in the tree
+    for path, churn in live.items():
         partners = sorted(
             churn.co_change_counts.items(), key=lambda item: (-item[1], item[0])
         )[:CO_CHANGE_PARTNERS_RETURNED]
@@ -352,6 +456,7 @@ def _hotspots_summary(
             {
                 "path": path,
                 "churn_count": churn.churn_count,
+                "risk_score": risk[path],
                 "co_change_partners": [
                     {"path": partner, "co_occurrences": count} for partner, count in partners
                 ],
@@ -359,6 +464,7 @@ def _hotspots_summary(
                 "last_commit_at": last_commit_at.isoformat() if last_commit_at else None,
             }
         )
+    # Still ordered by churn, as before: risk_score is an added field, so which files make the list does not change.
     return sorted(hotspots, key=lambda item: (-item["churn_count"], item["path"]))[:HOTSPOT_LIMIT]
 
 
@@ -410,9 +516,9 @@ def compute_hotspots(
     return _hotspots_summary(snapshot, modules, repo_path)
 
 
-def hotspots_from_snapshot(snapshot: GraphSnapshot, modules: list[dict], repo_path: Path) -> list[dict]:
+def hotspots_from_snapshot(snapshot: GraphSnapshot, modules: list[dict], repo_path: Path, live_risk=None) -> list[dict]:
     """compute_hotspots for a snapshot the caller already synced to HEAD."""
-    return _hotspots_summary(snapshot, modules, repo_path)
+    return _hotspots_summary(snapshot, modules, repo_path, live_risk)
 
 
 def recently_updated_from_snapshot(snapshot: GraphSnapshot, repo_path: Path) -> list[dict]:

@@ -155,7 +155,7 @@ LEAN_INSTRUCTIONS = (
 
 ROUTER_INSTRUCTIONS = (
     "Aletheore: aletheore_ask routes a question plus optional file/directory target for imports, tests, owners, "
-    "risks or overview. On 'no clear match', continue without retrying paraphrases. "
+    "risks, overview or open-ended 'how does X work' questions. On 'no clear match', continue without retrying paraphrases. "
     "Evidence is a scan snapshot; no auto-watch. Ask the user to refresh missing/stale scans. "
     "Counts cover scanned/resolved code, not runtime completeness; tests are candidates, not coverage. "
     "Check confidence, skipped checks and truncation; narrow incomplete queries, never invent missing items. "
@@ -1196,22 +1196,32 @@ def _skill_summary(meta: skill_hub.SkillMeta) -> dict:
     return summary
 
 
-def _register_ask_tool(mcp_instance: MCPServer, repo_path: Path, *, only_tool: bool = False) -> None:
+def _register_ask_tool(
+    mcp_instance: MCPServer, repo_path: Path, *, only_tool: bool = False, effects: frozenset[str] = frozenset()
+) -> None:
+    # Not open-world on purpose: test_effectful_tools_are_distinguishable_from_read_only_ones reserves openWorldHint=True for gated
+    # tools. The semantic fallback only runs when the network effect is allowed and says so in its reply (`note`, `next`).
     @mcp_instance.tool(name="aletheore_ask", annotations=READ_ONLY_ANNOTATIONS)
     @_guard_evidence_read_errors
     def aletheore_ask(question: str, target: str | None = None) -> str:
-        """One entry point for code evidence. Ask a plain question and it runs the right query.
+        """Ask about this codebase in plain language and get the relevant code back with file paths and line ranges.
+        Use it first for "how does X work", "where is X handled" and "how are X and Y related" questions, before
+        grepping or reading files by hand (semantic search: needs an index from `aletheore index` and network access, else it
+        says no clear match), and for structure questions:
 
-        Handles: resolved impact if a file changes, candidate tests for a file, who owns it, what changes most or
+        resolved impact if a file changes, candidate tests for a file, who owns it, what changes most or
         together, where something is defined, secrets, vulnerabilities, dead code, layer violations, endpoints,
-        environment variables, database, infrastructure, licenses, and a repo overview. Pass `target` (a file
+        environment variables, database, infrastructure, licenses and a repo overview. Pass `target` (a file
         path as it appears in the scan) when the question is about one file. The reply says which query it ran
         (routed_to) and how sure it is (confidence). If confidence is low it names what is missing instead of
         guessing; if it says 'no clear match', carry on without it and do not rephrase the same question."""
         from aletheore import tool_router
 
         evidence = read_evidence(repo_path)
-        result = tool_router.answer(question, target, evidence, repo_path)
+        result = tool_router.answer(
+            question, target, evidence, repo_path,
+            semantic=EFFECT_NETWORK in effects, allow_hosted=EFFECT_EXTERNAL in effects,
+        )
         text = _toon_result(result)
         if len(text) > tool_router.ANSWER_MAX_CHARS:
             cut = text[: tool_router.ANSWER_MAX_CHARS]
@@ -1759,8 +1769,10 @@ def _register_search_codebase_tool(
         ),
     )
     def aletheore_search_codebase(query: str, k: int = 10, language: str | None = None) -> str:
-        """Hybrid search (meaning + exact identifiers) over the repository's
-        indexed code. language: optional filter, e.g. 'python', 'typescript' -
+        """Find the code that implements a behaviour or concept from a plain-language query. Use it
+        for "how does X work" and "where is X handled" questions before grepping: it ranks code by
+        meaning and exact identifiers and returns file, symbol and line range. language: optional filter,
+        e.g. 'python', 'typescript' -
         use it on a polyglot repo when the question is about one stack, since
         an unfiltered search ranks every language's chunks against each other.
         Names must match evidence's own repository.languages values. k is
@@ -1798,7 +1810,7 @@ def _register_answer_tool(
         ),
     )
     def aletheore_answer(question: str, k: int = 5) -> str:
-        """Answer a natural-language question about this repository from the semantic index."""
+        """Answer a "how does X work" style question about this repository from the semantic index, citing the code it used."""
         try:
             return _toon_result(
                 answer_question(
@@ -2061,12 +2073,12 @@ def build_server(
     if profile == "router":
         # One tool: the point is a single definition in the agent's context. aletheore_ask routes to the same
         # queries the full profile exposes one by one.
-        _register_ask_tool(mcp_instance, repo_path, only_tool=True)
+        _register_ask_tool(mcp_instance, repo_path, only_tool=True, effects=effects)
         _compact_tool_schemas(mcp_instance)
         return mcp_instance
     if profile == "lean":
         # The router plus the direct tools agents reach for most; about a fifth of the full profile's definitions.
-        _register_ask_tool(mcp_instance, repo_path, only_tool=True)
+        _register_ask_tool(mcp_instance, repo_path, only_tool=True, effects=effects)
         _register_query_wrapper_tools(mcp_instance, repo_path, only=LEAN_TOOLS)
         _register_blast_radius_tool(mcp_instance, repo_path)
         _register_list_tool(mcp_instance, repo_path)
@@ -2083,7 +2095,7 @@ def build_server(
         _register_search_tool(mcp_instance, repo_path)
         _compact_tool_schemas(mcp_instance)
         return mcp_instance
-    _register_ask_tool(mcp_instance, repo_path)
+    _register_ask_tool(mcp_instance, repo_path, effects=effects)
     _register_locate_tool(mcp_instance, repo_path)
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
