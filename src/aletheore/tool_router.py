@@ -16,10 +16,13 @@ The router is deterministic, built the way `find_skill` was: keyword rules with 
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import logging
 import math
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Callable
@@ -614,8 +617,22 @@ SEMANTIC_SNIPPET_CHARS = 500
 _NO_INTENT_REASON = "no intent matched"
 
 
+@contextlib.contextmanager
+def _quiet_io():
+    """The MCP server speaks JSON-RPC over stdout and reads requests from stdin. The embedding code can print a progress or
+    install message and even ask a y/N question, so during a router search stdout goes to stderr and stdin is empty (input()
+    then raises EOFError, which the caller treats as 'search unavailable')."""
+    with contextlib.redirect_stdout(sys.stderr):
+        saved_stdin, sys.stdin = sys.stdin, io.StringIO("")
+        try:
+            yield
+        finally:
+            sys.stdin = saved_stdin
+
+
 def _semantic_answer(question: str, repo_path: Path, search, allow_hosted: bool) -> tuple[list[dict] | None, str | None]:
     """Top semantic hits for an open-ended question, or (None, why) when the index or embedder is unavailable."""
+    from aletheore.answer import DEFAULT_CONFIDENCE_THRESHOLD
     from aletheore.search_index import (
         EmbeddingProviderUnavailableError,
         HostedEmbeddingUnavailableError,
@@ -625,19 +642,26 @@ def _semantic_answer(question: str, repo_path: Path, search, allow_hosted: bool)
     )
 
     try:
-        hits = (search or search_index)(repo_path, question, k=SEMANTIC_RESULTS, allow_hosted=allow_hosted)
+        with _quiet_io():
+            hits = (search or search_index)(repo_path, question, k=SEMANTIC_RESULTS, allow_hosted=allow_hosted)
     except IndexNotFoundError:
         return None, "no semantic index yet: run `aletheore index` to enable open-ended questions"
     except (IndexDimensionMismatchError, EmbeddingProviderUnavailableError, HostedEmbeddingUnavailableError) as exc:
         return None, f"semantic search unavailable: {exc}"
     except Exception as exc:  # noqa: BLE001 - a timeout, HTTP error or corrupt index must degrade to "no clear match", never fail the call
         return None, f"semantic search failed: {type(exc).__name__}"
+    # Same gate as aletheore_answer: the nearest chunks of an off-topic question are still "nearest", not relevant. A hit with no
+    # score came from keyword search alone, which is real text evidence, so only a numeric score above the threshold rejects.
+    top_score = hits[0].get("score") if hits else None
+    if top_score is not None and top_score > DEFAULT_CONFIDENCE_THRESHOLD:
+        return None, None
     return [
         {
             "path": hit.get("module_path"),
             "symbol": hit.get("symbol_name"),
             "lines": f"{hit.get('start_line')}-{hit.get('end_line')}",
             "code": str(hit.get("text") or "")[:SEMANTIC_SNIPPET_CHARS],
+            "keyword_only": bool(hit.get("keyword_only")),
         }
         for hit in hits
     ], None
@@ -672,14 +696,25 @@ def answer(
         and decision.reason == "needs a file path"
         and words >= SEMANTIC_MIN_WORDS_WHEN_FILE_MISSING
     )
-    if semantic and open_ended:
+    # An explicit target that did not resolve must not quietly turn into a repo-wide search: the low-confidence reply below tells
+    # the caller its file was not recognised.
+    target_dropped = bool(target) and decision.target is None
+    if semantic and open_ended and not target_dropped:
         hits, unavailable = _semantic_answer(question, repo_path, search, allow_hosted)
         if hits:
+            keyword_only = any(hit.get("keyword_only") for hit in hits)
+            for hit in hits:
+                hit.pop("keyword_only", None)
             return {
                 "routed_to": "aletheore_search_codebase",
-                "confidence": "medium",
+                "confidence": "low" if keyword_only else "medium",
                 "answer": hits,
-                "note": "ranked by meaning, not proven; read the cited code before relying on it",
+                "note": (
+                    "keyword matches only: the semantic index is incomplete or unreadable, so these are not ranked by meaning; "
+                    "run `aletheore index` and read the cited code before relying on it"
+                    if keyword_only
+                    else "ranked by meaning, not proven; read the cited code before relying on it"
+                ),
             }
         if unavailable:
             result["next"] = unavailable

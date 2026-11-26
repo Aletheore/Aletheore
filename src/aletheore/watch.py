@@ -353,6 +353,9 @@ def _carry_forward_skipped_analysis(evidence: dict, repo_path: Path) -> None:
     previous_hotspots = previous.get("git", {}).get("hotspots")
     if previous_hotspots is not None:
         evidence.setdefault("git", {})["hotspots"] = previous_hotspots
+    previous_high_risk = previous.get("git", {}).get("high_risk_files")
+    if previous_high_risk is not None:
+        evidence.setdefault("git", {})["high_risk_files"] = previous_high_risk
 
     previous_security = previous.get("security") or {}
     previous_vulnerabilities = previous_security.get("dependency_vulnerabilities")

@@ -325,3 +325,35 @@ def test_an_unavailable_index_hint_survives_the_low_confidence_branch():
     long_question = "what are the tests that cover the thing we do with this when it is configured in a different way than usual"
     result = _answer(long_question, semantic=True, search=search)
     assert result["confidence"] == "low" and "index" in result["next"]
+
+
+def test_the_router_search_cannot_write_to_stdout_or_read_stdin(capsys):
+    def search(*args, **kwargs):
+        print("Ollama isn't installed.")
+        input("Install Ollama now? [y/N]: ")
+
+    result = _answer(_NONE_QUESTION, semantic=True, search=search)
+    captured = capsys.readouterr()
+    assert captured.out == "" and result["confidence"] == "none"
+
+
+def test_an_off_topic_question_with_a_distant_top_hit_is_no_match():
+    result = _answer(_NONE_QUESTION, semantic=True, search=lambda *a, **k: [dict(_hit(), score=0.95)])
+    assert result["confidence"] == "none"
+
+
+def test_keyword_only_hits_are_labelled_and_low_confidence():
+    result = _answer(_NONE_QUESTION, semantic=True, search=lambda *a, **k: [dict(_hit(), keyword_only=True)])
+    assert result["confidence"] == "low" and "keyword" in result["note"]
+    assert "keyword_only" not in result["answer"][0]
+
+
+def test_an_unresolved_explicit_target_does_not_become_a_repo_wide_search():
+    from pathlib import Path
+
+    def search(*args, **kwargs):
+        raise AssertionError("must not search")
+
+    question = "what are the tests that cover the thing we do with this when it is configured in a different way than usual"
+    result = tr.answer(question, "src/new_file.py", _EMPTY_EVIDENCE, Path("."), semantic=True, search=search)
+    assert result["confidence"] == "low"

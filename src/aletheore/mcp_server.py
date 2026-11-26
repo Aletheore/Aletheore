@@ -1199,7 +1199,14 @@ def _skill_summary(meta: skill_hub.SkillMeta) -> dict:
 def _register_ask_tool(
     mcp_instance: MCPServer, repo_path: Path, *, only_tool: bool = False, effects: frozenset[str] = frozenset()
 ) -> None:
-    @mcp_instance.tool(name="aletheore_ask", annotations=READ_ONLY_ANNOTATIONS)
+    # With the network effect the question can be sent to the embedding provider, so the tool is open-world, as aletheore_search_codebase is.
+    ask_annotations = (
+        ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True)
+        if EFFECT_NETWORK in effects
+        else READ_ONLY_ANNOTATIONS
+    )
+
+    @mcp_instance.tool(name="aletheore_ask", annotations=ask_annotations)
     @_guard_evidence_read_errors
     def aletheore_ask(question: str, target: str | None = None) -> str:
         """Ask about this codebase in plain language and get the relevant code back with file paths and line ranges.
