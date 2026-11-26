@@ -20,6 +20,7 @@ from aletheore.evidence_resolution import find_symbol_at_location
 from aletheore.git_intel.analyzer import (
     finish_git_analysis,
     high_risk_from_snapshot,
+    live_risk_from_snapshot,
     hotspots_from_snapshot,
     prepare_git_analysis,
     recently_updated_from_snapshot,
@@ -816,8 +817,9 @@ def scan_repository(
         report("Computing git hotspots")
         # From the snapshot prepare_git_analysis already synced to HEAD, rather
         # than syncing and loading the graph store twice more.
-        git_data["hotspots"] = hotspots_from_snapshot(git_prepared["_snapshot"], modules, repo_path)
-        git_data["high_risk_files"] = high_risk_from_snapshot(git_prepared["_snapshot"], repo_path)
+        live_risk = live_risk_from_snapshot(git_prepared["_snapshot"], repo_path)
+        git_data["hotspots"] = hotspots_from_snapshot(git_prepared["_snapshot"], modules, repo_path, live_risk)
+        git_data["high_risk_files"] = high_risk_from_snapshot(git_prepared["_snapshot"], repo_path, live_risk)
         git_data["recently_updated"] = recently_updated_from_snapshot(git_prepared["_snapshot"], repo_path)
 
     if check_vulnerabilities:

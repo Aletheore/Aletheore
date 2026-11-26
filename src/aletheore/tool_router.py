@@ -630,6 +630,8 @@ def _semantic_answer(question: str, repo_path: Path, search, allow_hosted: bool)
         return None, "no semantic index yet: run `aletheore index` to enable open-ended questions"
     except (IndexDimensionMismatchError, EmbeddingProviderUnavailableError, HostedEmbeddingUnavailableError) as exc:
         return None, f"semantic search unavailable: {exc}"
+    except Exception as exc:  # noqa: BLE001 - a timeout, HTTP error or corrupt index must degrade to "no clear match", never fail the call
+        return None, f"semantic search failed: {type(exc).__name__}"
     return [
         {
             "path": hit.get("module_path"),
@@ -687,7 +689,7 @@ def answer(
         return result
     if decision.confidence == "low":
         result["why"] = decision.reason
-        if decision.target is None and decision.tool:
+        if decision.target is None and decision.tool and "next" not in result:
             result["next"] = f"call {decision.tool} with a file path, or ask again naming the file"
         if decision.candidates:
             result["candidates"] = decision.candidates

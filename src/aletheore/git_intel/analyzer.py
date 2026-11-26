@@ -21,6 +21,9 @@ HOTSPOT_LIMIT = 30
 # evidence stays small.
 HIGH_RISK_THRESHOLD = 0.8
 HIGH_RISK_LIMIT = 500
+# Scores are percentiles within the repository, so in a tiny one nearly every file lands above the threshold; below this
+# many files there is no meaningful "high risk" subset.
+HIGH_RISK_MIN_FILES = 10
 RECENTLY_UPDATED_LIMIT = 10
 CADENCE_WEEKS_RETURNED = 52
 
@@ -396,8 +399,10 @@ def _live_files_and_risk(
     return live, file_risk_scores({path: churn.churn_count for path, churn in live.items()}, sizes)
 
 
-def _high_risk_summary(snapshot: GraphSnapshot, repo_path: Path | None) -> list[dict]:
-    live, risk = _live_files_and_risk(snapshot, repo_path)
+def _high_risk_summary(snapshot: GraphSnapshot, repo_path: Path | None, live_risk=None) -> list[dict]:
+    live, risk = live_risk or _live_files_and_risk(snapshot, repo_path)
+    if len(live) < HIGH_RISK_MIN_FILES:
+        return []
     flagged = [
         {"path": path, "risk_score": score, "churn_count": live[path].churn_count}
         for path, score in risk.items()
@@ -407,11 +412,16 @@ def _high_risk_summary(snapshot: GraphSnapshot, repo_path: Path | None) -> list[
     return flagged[:HIGH_RISK_LIMIT]
 
 
-def high_risk_from_snapshot(snapshot: GraphSnapshot, repo_path: Path) -> list[dict]:
+def live_risk_from_snapshot(snapshot: GraphSnapshot, repo_path: Path):
+    """The live files and their risk scores, computed once so hotspots and the high-risk list share one pass over the tree."""
+    return _live_files_and_risk(snapshot, repo_path)
+
+
+def high_risk_from_snapshot(snapshot: GraphSnapshot, repo_path: Path, live_risk=None) -> list[dict]:
     """The files whose risk score is at or above HIGH_RISK_THRESHOLD, from a snapshot the
     caller already synced. Unlike the capped hotspots list this is what a PR review looks
     changed files up in."""
-    return _high_risk_summary(snapshot, repo_path)
+    return _high_risk_summary(snapshot, repo_path, live_risk)
 
 
 def compute_high_risk_files(
@@ -432,10 +442,10 @@ def compute_high_risk_files(
 
 
 def _hotspots_summary(
-    snapshot: GraphSnapshot, modules: list[dict], repo_path: Path | None = None
+    snapshot: GraphSnapshot, modules: list[dict], repo_path: Path | None = None, live_risk=None
 ) -> list[dict]:
     dependents_by_path = {module["path"]: len(module.get("imported_by", [])) for module in modules}
-    live, risk = _live_files_and_risk(snapshot, repo_path)
+    live, risk = live_risk or _live_files_and_risk(snapshot, repo_path)
     hotspots = []
     for path, churn in live.items():
         partners = sorted(
@@ -454,9 +464,8 @@ def _hotspots_summary(
                 "last_commit_at": last_commit_at.isoformat() if last_commit_at else None,
             }
         )
-    return sorted(
-        hotspots, key=lambda item: (-item["risk_score"], -item["churn_count"], item["path"])
-    )[:HOTSPOT_LIMIT]
+    # Still ordered by churn, as before: risk_score is an added field, so which files make the list does not change.
+    return sorted(hotspots, key=lambda item: (-item["churn_count"], item["path"]))[:HOTSPOT_LIMIT]
 
 
 def _recently_updated_summary(snapshot: GraphSnapshot, repo_path: Path | None = None) -> list[dict]:
@@ -507,9 +516,9 @@ def compute_hotspots(
     return _hotspots_summary(snapshot, modules, repo_path)
 
 
-def hotspots_from_snapshot(snapshot: GraphSnapshot, modules: list[dict], repo_path: Path) -> list[dict]:
+def hotspots_from_snapshot(snapshot: GraphSnapshot, modules: list[dict], repo_path: Path, live_risk=None) -> list[dict]:
     """compute_hotspots for a snapshot the caller already synced to HEAD."""
-    return _hotspots_summary(snapshot, modules, repo_path)
+    return _hotspots_summary(snapshot, modules, repo_path, live_risk)
 
 
 def recently_updated_from_snapshot(snapshot: GraphSnapshot, repo_path: Path) -> list[dict]:

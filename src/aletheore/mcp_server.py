@@ -155,7 +155,7 @@ LEAN_INSTRUCTIONS = (
 
 ROUTER_INSTRUCTIONS = (
     "Aletheore: aletheore_ask routes a question plus optional file/directory target for imports, tests, owners, "
-    "risks, overview or open-ended 'how does X work' questions. On 'no clear match', continue without retrying paraphrases. "
+    "risks, overview or open-ended 'how does X work' questions (the last needs a semantic index and network access). On 'no clear match', continue without retrying paraphrases. "
     "Evidence is a scan snapshot; no auto-watch. Ask the user to refresh missing/stale scans. "
     "Counts cover scanned/resolved code, not runtime completeness; tests are candidates, not coverage. "
     "Check confidence, skipped checks and truncation; narrow incomplete queries, never invent missing items. "
@@ -1204,7 +1204,8 @@ def _register_ask_tool(
     def aletheore_ask(question: str, target: str | None = None) -> str:
         """Ask about this codebase in plain language and get the relevant code back with file paths and line ranges.
         Use it first for "how does X work", "where is X handled" and "how are X and Y related" questions, before
-        grepping or reading files by hand (semantic search, when an index exists), and for structure questions:
+        grepping or reading files by hand (semantic search: needs an index from `aletheore index` and network access, else it
+        says no clear match), and for structure questions:
 
         resolved impact if a file changes, candidate tests for a file, who owns it, what changes most or
         together, where something is defined, secrets, vulnerabilities, dead code, layer violations, endpoints,

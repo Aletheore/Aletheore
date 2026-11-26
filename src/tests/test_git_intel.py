@@ -971,16 +971,15 @@ def test_file_risk_scores_fall_back_to_churn_without_sizes():
     assert file_risk_scores({}, {}) == {}
 
 
-def test_compute_hotspots_reports_a_risk_score_and_orders_by_it(tmp_path):
+def test_compute_hotspots_reports_a_risk_score_but_keeps_ordering_by_churn(tmp_path):
     repo = _init_repo_with_hotspot_commits(tmp_path)
     (repo / "b.py").write_text("x" * 5000)
     run(repo, "add", "-A")
     run(repo, "commit", "-q", "-m", "grow b")
     hotspots = compute_hotspots(repo, [])
-    scores = [hotspot["risk_score"] for hotspot in hotspots]
-    assert scores == sorted(scores, reverse=True)
-    assert all(0 < value <= 1 for value in scores)
-    assert hotspots[0]["path"] == "b.py"
+    assert all(0 < hotspot["risk_score"] <= 1 for hotspot in hotspots)
+    churns = [hotspot["churn_count"] for hotspot in hotspots]
+    assert churns == sorted(churns, reverse=True)
 
 
 def test_compute_high_risk_files_lists_only_files_at_or_above_the_threshold(tmp_path):
@@ -1003,3 +1002,15 @@ def test_compute_high_risk_files_lists_only_files_at_or_above_the_threshold(tmp_
     assert set(flagged[0]) == {"path", "risk_score", "churn_count"}
     assert len(flagged) < 10
 
+
+
+def test_a_tiny_repository_has_no_high_risk_files(tmp_path):
+    repo = tmp_path / "tiny"
+    repo.mkdir()
+    run(repo, "init", "-q")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "A")
+    (repo / "only.py").write_text("x")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "initial")
+    assert compute_high_risk_files(repo) == []

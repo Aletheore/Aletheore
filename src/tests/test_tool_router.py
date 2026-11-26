@@ -306,3 +306,22 @@ def test_semantic_fallback_degrades_to_no_match_when_search_is_unavailable():
 def test_semantic_fallback_with_no_hits_is_still_a_no_match():
     result = _answer(_NONE_QUESTION, semantic=True, search=lambda *a, **k: [])
     assert result["confidence"] == "none"
+
+
+def test_an_unexpected_search_error_degrades_to_no_match():
+    def search(*args, **kwargs):
+        raise TimeoutError("embedder timed out")
+
+    result = _answer(_NONE_QUESTION, semantic=True, search=search)
+    assert result["confidence"] == "none" and "failed" in result["next"]
+
+
+def test_an_unavailable_index_hint_survives_the_low_confidence_branch():
+    from aletheore.search_index import IndexNotFoundError
+
+    def search(*args, **kwargs):
+        raise IndexNotFoundError("no index")
+
+    long_question = "what are the tests that cover the thing we do with this when it is configured in a different way than usual"
+    result = _answer(long_question, semantic=True, search=search)
+    assert result["confidence"] == "low" and "index" in result["next"]
