@@ -603,13 +603,84 @@ def _menu() -> list[str]:
 ANSWER_MAX_CHARS = 6000
 
 
-def answer(question: str, target: str | None, evidence: dict, repo_path: Path) -> dict:
-    """Route `question` and run the chosen query. Returns a dict describing what happened."""
+# An open-ended question no keyword rule matched ("how does X relate to Y") is what semantic search is for. Anything
+# shorter is a fragment, not a question worth an embedding call.
+SEMANTIC_MIN_WORDS = 6
+# A question that mentions a keyword ("tests", "imports") but names no file is usually still open-ended when it is
+# this long; a short one ("is it safe to rename this") really does need a file.
+SEMANTIC_MIN_WORDS_WHEN_FILE_MISSING = 12
+SEMANTIC_RESULTS = 5
+SEMANTIC_SNIPPET_CHARS = 500
+_NO_INTENT_REASON = "no intent matched"
+
+
+def _semantic_answer(question: str, repo_path: Path, search, allow_hosted: bool) -> tuple[list[dict] | None, str | None]:
+    """Top semantic hits for an open-ended question, or (None, why) when the index or embedder is unavailable."""
+    from aletheore.search_index import (
+        EmbeddingProviderUnavailableError,
+        HostedEmbeddingUnavailableError,
+        IndexDimensionMismatchError,
+        IndexNotFoundError,
+        search_index,
+    )
+
+    try:
+        hits = (search or search_index)(repo_path, question, k=SEMANTIC_RESULTS, allow_hosted=allow_hosted)
+    except IndexNotFoundError:
+        return None, "no semantic index yet: run `aletheore index` to enable open-ended questions"
+    except (IndexDimensionMismatchError, EmbeddingProviderUnavailableError, HostedEmbeddingUnavailableError) as exc:
+        return None, f"semantic search unavailable: {exc}"
+    return [
+        {
+            "path": hit.get("module_path"),
+            "symbol": hit.get("symbol_name"),
+            "lines": f"{hit.get('start_line')}-{hit.get('end_line')}",
+            "code": str(hit.get("text") or "")[:SEMANTIC_SNIPPET_CHARS],
+        }
+        for hit in hits
+    ], None
+
+
+def answer(
+    question: str,
+    target: str | None,
+    evidence: dict,
+    repo_path: Path,
+    *,
+    semantic: bool = False,
+    allow_hosted: bool = False,
+    search=None,
+) -> dict:
+    """Route `question` and run the chosen query. Returns a dict describing what happened.
+
+    semantic: let an open-ended question that matched no rule fall back to semantic search over the index instead
+    of "no clear match". Off by default so callers that cannot embed a query behave as before."""
     from aletheore import query as q
 
     paths = [m["path"] for m in evidence["repository"]["modules"] if m.get("path")]
     decision = route(question, target, paths)
     result: dict = {"routed_to": decision.tool, "confidence": decision.confidence}
+    words = len(question.split())
+    open_ended = (
+        decision.confidence == "none" and decision.reason == _NO_INTENT_REASON and words >= SEMANTIC_MIN_WORDS
+    ) or (
+        decision.confidence == "low"
+        and decision.target is None
+        and not decision.candidates
+        and decision.reason == "needs a file path"
+        and words >= SEMANTIC_MIN_WORDS_WHEN_FILE_MISSING
+    )
+    if semantic and open_ended:
+        hits, unavailable = _semantic_answer(question, repo_path, search, allow_hosted)
+        if hits:
+            return {
+                "routed_to": "aletheore_search_codebase",
+                "confidence": "medium",
+                "answer": hits,
+                "note": "ranked by meaning, not proven; read the cited code before relying on it",
+            }
+        if unavailable:
+            result["next"] = unavailable
     if decision.confidence == "none":
         result["answer"] = "No clear match for this question."
         result["try"] = decision.candidates
