@@ -1769,10 +1769,9 @@ def _register_search_codebase_tool(
         ),
     )
     def aletheore_search_codebase(query: str, k: int = 10, language: str | None = None) -> str:
-        """Find the code that implements a behaviour or concept from a plain-language query. Use this
-        first for "how does X work", "where is X handled" and "how are X and Y related" questions,
-        before grepping: it ranks code by meaning and exact identifiers and returns the file, symbol
-        and line range, which usually saves several grep and read rounds. language: optional filter,
+        """Find the code that implements a behaviour or concept from a plain-language query. Use it
+        for "how does X work" and "where is X handled" questions before grepping: it ranks code by
+        meaning and exact identifiers and returns file, symbol and line range. language: optional filter,
         e.g. 'python', 'typescript' -
         use it on a polyglot repo when the question is about one stack, since
         an unfiltered search ranks every language's chunks against each other.
@@ -1811,8 +1810,7 @@ def _register_answer_tool(
         ),
     )
     def aletheore_answer(question: str, k: int = 5) -> str:
-        """Answer a "how does X work" style question about this repository from the semantic index, citing
-        the code it used. Prefer it over reading many files by hand for questions about behaviour."""
+        """Answer a "how does X work" style question about this repository from the semantic index, citing the code it used."""
         try:
             return _toon_result(
                 answer_question(
