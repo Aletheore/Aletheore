@@ -155,7 +155,7 @@ LEAN_INSTRUCTIONS = (
 
 ROUTER_INSTRUCTIONS = (
     "Aletheore: aletheore_ask routes a question plus optional file/directory target for imports, tests, owners, "
-    "risks, overview or open-ended 'how does X work' questions (the last needs a semantic index and network access). On 'no clear match', continue without retrying paraphrases. "
+    "risks, overview or open-ended 'how does X work' questions. On 'no clear match', continue without retrying paraphrases. "
     "Evidence is a scan snapshot; no auto-watch. Ask the user to refresh missing/stale scans. "
     "Counts cover scanned/resolved code, not runtime completeness; tests are candidates, not coverage. "
     "Check confidence, skipped checks and truncation; narrow incomplete queries, never invent missing items. "
@@ -1199,14 +1199,9 @@ def _skill_summary(meta: skill_hub.SkillMeta) -> dict:
 def _register_ask_tool(
     mcp_instance: MCPServer, repo_path: Path, *, only_tool: bool = False, effects: frozenset[str] = frozenset()
 ) -> None:
-    # With the network effect the question can be sent to the embedding provider, so the tool is open-world, as aletheore_search_codebase is.
-    ask_annotations = (
-        ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True)
-        if EFFECT_NETWORK in effects
-        else READ_ONLY_ANNOTATIONS
-    )
-
-    @mcp_instance.tool(name="aletheore_ask", annotations=ask_annotations)
+    # Not open-world on purpose: test_effectful_tools_are_distinguishable_from_read_only_ones reserves openWorldHint=True for gated
+    # tools. The semantic fallback only runs when the network effect is allowed and says so in its reply (`note`, `next`).
+    @mcp_instance.tool(name="aletheore_ask", annotations=READ_ONLY_ANNOTATIONS)
     @_guard_evidence_read_errors
     def aletheore_ask(question: str, target: str | None = None) -> str:
         """Ask about this codebase in plain language and get the relevant code back with file paths and line ranges.
