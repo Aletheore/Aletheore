@@ -18,6 +18,17 @@ from aletheore.council.attachments import MAX_IMAGE_BYTES, sniff_image
 _TIMEOUT = 10
 
 
+# PowerShell ends a '...' string at any of these, not just the ASCII apostrophe (U+2018, U+2019, U+201A, U+201B).
+_PS_SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b"
+
+
+def _ps_single_quoted(text: str) -> str:
+    """`text` made safe inside a PowerShell single-quoted string: every quote-like character is doubled."""
+    for ch in _PS_SINGLE_QUOTES:
+        text = text.replace(ch, ch + ch)
+    return text
+
+
 def _try(run, argv: list[str]) -> subprocess.CompletedProcess | None:
     try:
         return run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=_TIMEOUT)
@@ -43,7 +54,7 @@ def read_clipboard_image(dest_dir: Path, run=subprocess.run, platform: str | Non
         ]
         _try(run, script)
     elif platform == "win32":
-        ps_out = str(out).replace("'", "''")  # a single quote in a profile folder name must not end the PowerShell string
+        ps_out = _ps_single_quoted(str(out))
         ps = ("Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; "
               "$i=[System.Windows.Forms.Clipboard]::GetImage(); "
               f"if($i){{$i.Save('{ps_out}',[System.Drawing.Imaging.ImageFormat]::Png)}}")

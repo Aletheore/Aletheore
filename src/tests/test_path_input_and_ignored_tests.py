@@ -265,3 +265,50 @@ def test_candidate_tests_works_without_a_repo_path_and_accepts_windows_spelling(
     assert candidate_tests(_ev(graph), "src/pkg/query.py") == (["tests/test_query.py"], [])
     assert candidate_tests(_ev(graph), "src\\pkg\\query.py") == (["tests/test_query.py"], [])
     assert candidate_tests(_ev(graph), "missing.py") == ([], [])
+
+
+# ---- review follow-ups -----------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("quote", ["'", "‘", "’", "‚", "‛"])
+def test_clipboard_powershell_path_escapes_every_quote_like_character(tmp_path: Path, quote: str):
+    from aletheore.council.clipboard import read_clipboard_image
+
+    seen: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        seen.append(argv)
+        raise OSError("no powershell here")
+
+    read_clipboard_image(tmp_path / f"O{quote}Brien", run=fake_run, platform="win32")
+    script = seen[0][-1]
+    assert f"O{quote}{quote}Brien" in script and f"O{quote}Brien" not in script.replace(f"O{quote}{quote}Brien", "")
+
+
+def test_no_f_string_reuses_its_own_quote_inside_a_replacement_field():
+    """Before Python 3.12 `f"{x.read_text(encoding="utf-8")}"` is a SyntaxError, and the package still supports 3.11."""
+    import io
+    import sys
+    import tokenize
+
+    if sys.version_info < (3, 12):
+        pytest.skip("older parsers already reject it at import time")
+    package = Path(__file__).resolve().parent.parent / "aletheore"
+    offenders = []
+    for source in sorted(package.rglob("*.py")):
+        if {"skills", "static", "__pycache__"} & set(source.relative_to(package).parts):
+            continue
+        quotes: list[str] = []  # quote character of each f-string we are currently inside
+        for tok in tokenize.generate_tokens(io.StringIO(source.read_text(encoding="utf-8")).readline):
+            if tok.type == tokenize.FSTRING_START:
+                body = tok.string.lstrip("rRbBfF")
+                if quotes and body[:1] in quotes and body[:3] not in ('"""', "'''"):
+                    offenders.append(f"{source.relative_to(package)}:{tok.start[0]}")
+                quotes.append(body[:3] if body[:3] in ('"""', "'''") else body[:1])
+            elif tok.type == tokenize.FSTRING_END:
+                quotes.pop()
+            elif tok.type == tokenize.STRING and quotes:
+                body = tok.string.lstrip("rRbBuU")
+                if body[:1] in quotes and quotes[-1] not in ('"""', "'''"):
+                    offenders.append(f"{source.relative_to(package)}:{tok.start[0]}")
+    assert offenders == []

@@ -118,20 +118,17 @@ def dependents_report(
         )
         body = shown
     what = "this file" if unit == "file" else f"this package ({len(seeds)} files)"
-    lines = [
-        head,
-        *body,
-        "",
+    footer = (
         f"Repo-wide {what} has {plural(len(direct), 'direct importer')} plus {len(allp) - len(direct)} that reach it through "
         f"other files (before --under/--exclude), deduplicated. Coverage: static {language} imports only, "
         f"{len(modules)} modules indexed, {unparseable} unparseable; {fresh}. Not tracked: imports built at run time "
         f"({runtime_import_examples({language})}). For static imports this list does not need to be "
-        "re-derived with grep.",
-    ]
+        "re-derived with grep."
+    )
     blind = [] if no_tests else ignored_test_patterns(repo_path)
     if blind:
-        lines[-1] += (
+        footer += (
             f" Not covered: tests under {', '.join(blind)} are excluded by ignored_paths in .aletheore.json, so "
             "any test files that import this are missing from the list."
         )
-    return "\n".join(lines)
+    return "\n".join([head, *body, "", footer])

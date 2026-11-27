@@ -489,7 +489,7 @@ def _affected_finding(repo: Path, head: dict, targets: list[str]) -> Finding | N
     high: set[str] = set()
     low: set[str] = set()
     for target in targets:
-        h, lo = candidate_tests(head, target)
+        h, lo = candidate_tests(head, target, repo)
         high.update(h)
         low.update(lo)
     high_list = sorted(high)
