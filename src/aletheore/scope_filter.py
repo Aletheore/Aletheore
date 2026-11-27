@@ -8,6 +8,7 @@ out, so nothing disappears silently.
 from __future__ import annotations
 
 import re
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 _TEST_DIRS = {"test", "tests", "__tests__", "testdata", "spec", "specs", "e2e", "fixtures", "__mocks__"}
 _TEST_NAME = re.compile(
@@ -53,9 +54,65 @@ def matches(path: str, pattern: str) -> bool:
     return pattern in path.split("/")
 
 
+def posix_rel(path: str) -> str:
+    """A user-typed repo-relative path as the forward-slash form the evidence uses: backslashes become '/' (a Windows
+    shell hands over `src\\app\\x.py`), repeated leading './' go, and '//' collapses."""
+    text = path.strip().replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    return re.sub(r"/{2,}", "/", text)
+
+
+def resolve_target(target: str, known: set[str] | dict, repo_path: Path | None = None) -> str:
+    """The entry of `known` (repo-relative, forward-slash paths) that a user-typed `target` means, or the normalized
+    spelling when none matches, so the caller's own 'not found' message still has something sensible to show.
+
+    Tried in order: the text as typed, its forward-slash form (Windows backslashes, './'), an absolute path inside
+    `repo_path`, then a unique case-insensitive match (Windows and default macOS file systems ignore case, so
+    `SRC\\Query.py` means `src/query.py` there). A case-insensitive match is used only when exactly one entry matches,
+    never to guess between two files that differ only by case."""
+    raw = target.strip()
+    candidates = [raw.removeprefix("./")]
+    normalized = posix_rel(raw)
+    if repo_path is not None and (PureWindowsPath(raw).is_absolute() or PurePosixPath(normalized).is_absolute()):
+        try:
+            rel = Path(raw).resolve().relative_to(Path(repo_path).resolve())
+        except (OSError, ValueError):
+            pass
+        else:
+            candidates.append(rel.as_posix())
+    candidates.append(normalized)
+    trimmed = [c.rstrip("/") or "." for c in candidates]
+    for candidate in [*candidates, *trimmed]:
+        if candidate in known:
+            return candidate
+    folded = {c.casefold() for c in trimmed}
+    hits = [k for k in known if k.casefold() in folded]
+    if len(hits) == 1:
+        return hits[0]
+    return trimmed[-1]
+
+
+def ignored_test_patterns(repo_path: Path) -> list[str]:
+    """The repo's own `ignored_paths` entries (from .aletheore.json) that point at test code. Those files are never
+    scanned, so an answer about tests is blind to them and must say so rather than report "no tests"."""
+    from aletheore.repo_config import load_repo_config
+
+    try:
+        patterns = load_repo_config(Path(repo_path))["ignored_paths"]
+    except (OSError, KeyError, TypeError):
+        return []
+    found = []
+    for pattern in patterns:
+        body = pattern.rstrip("/")
+        if body and (is_test_path(f"{body}/x") or is_test_path(body)):
+            found.append(pattern)
+    return found
+
+
 def normalize_under(under: list[str] | None) -> list[str]:
     """Directory prefixes ending in '/', with './' and trailing '/' removed; '' and '.' mean the whole repo."""
-    cleaned = [u.removeprefix("./").strip("/") for u in (under or [])]
+    cleaned = [posix_rel(u).strip("/") for u in (under or [])]
     return [u + "/" for u in cleaned if u not in ("", ".")]
 
 

@@ -2216,7 +2216,7 @@ def _kotlin_class_file(root: Path, segments: list[str]) -> Path | None:
     )
     for candidate in sorted(directory.glob("*.kt")) + sorted(directory.glob("*.kts")):
         try:
-            if needle.search(candidate.read_text(errors="ignore")):
+            if needle.search(candidate.read_text(errors="ignore", encoding="utf-8")):
                 return candidate
         except OSError:
             continue
@@ -5897,7 +5897,7 @@ def _cgroup_v2_cpu_quota(path: Path = _CGROUP_V2_CPU_MAX_PATH) -> int | None:
     unrestricted.
     """
     try:
-        raw = path.read_text().split()
+        raw = path.read_text(encoding="utf-8").split()
     except OSError:
         return None
     if len(raw) != 2 or raw[0] == "max":
@@ -5917,8 +5917,8 @@ def _cgroup_v1_cpu_quota(
     """cgroup v1 fallback (cpu.max is v2-only) - same quota/period shape,
     split across two files instead of one, quota=-1 meaning unrestricted."""
     try:
-        quota = int(quota_path.read_text().strip())
-        period = int(period_path.read_text().strip())
+        quota = int(quota_path.read_text(encoding="utf-8").strip())
+        period = int(period_path.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
     if quota <= 0 or period <= 0:

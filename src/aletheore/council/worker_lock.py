@@ -71,7 +71,7 @@ class WorkerLock:
         except OSError:
             holder = ""
             try:
-                holder = self.path.read_text().strip()
+                holder = self.path.read_text(encoding="utf-8").strip()
             except OSError:
                 pass
             fh.close()

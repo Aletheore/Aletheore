@@ -14,7 +14,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-from aletheore.scope_filter import runtime_import_examples
+from aletheore.scope_filter import normalize_under, runtime_import_examples
 
 CYCLES_MAX_GROUPS = 50
 CYCLE_MAX_CHAIN_LEN = 15
@@ -142,7 +142,7 @@ def cycles_report(
     evidence: dict, repo_path: Path, exclude: list[str] | None = None, under: list[str] | None = None
 ) -> str:
     exclude = exclude or []
-    under = [u + "/" for u in (u.removeprefix("./").strip("/") for u in (under or [])) if u not in ("", ".")]
+    under = normalize_under(under)
     adj = _build_adjacency(evidence)
     groups = sorted(
         (sorted(comp) for comp in _tarjan_sccs(adj) if len(comp) > 1),

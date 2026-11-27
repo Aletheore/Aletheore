@@ -355,7 +355,7 @@ def _load_bank() -> dict:
         return _bank
     docs: dict[str, dict[str, int]] = {}
     try:
-        raw = json.loads(_PHRASINGS_PATH.read_text())
+        raw = json.loads(_PHRASINGS_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         # Without the bank the fallback ranking never fires and the router is keyword-only for the life of the
         # process, so say so once instead of degrading silently.

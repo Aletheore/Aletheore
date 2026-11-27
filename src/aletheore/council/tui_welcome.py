@@ -78,7 +78,7 @@ class WelcomeApp(App):
             self.query_one("#sponsor", Static).update(Text(SPONSOR, style=_c("faint")))
             try:
                 self.marker.parent.mkdir(parents=True, exist_ok=True)
-                self.marker.write_text("shown")
+                self.marker.write_text("shown", encoding="utf-8")
             except OSError:
                 pass
         self.query_one("#server", Input).focus()

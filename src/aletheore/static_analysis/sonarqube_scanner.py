@@ -59,7 +59,7 @@ def _report_task_info(repo_path: Path) -> dict | None:
     if not report_path.exists():
         return None
     info = {}
-    for line in report_path.read_text().splitlines():
+    for line in report_path.read_text(encoding="utf-8").splitlines():
         if "=" in line:
             key, _, value = line.partition("=")
             info[key.strip()] = value.strip()

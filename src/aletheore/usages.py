@@ -17,6 +17,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from aletheore.scope_filter import normalize_under
+
 USAGES_MAX_HITS = 200
 _GIT_GREP_TIMEOUT_S = 15.0
 _MAX_FILE_BYTES = 1_000_000
@@ -174,8 +176,7 @@ def usages_report(
     non_def_hits = [h for h in hits if not _inside_own_definition(h[0], h[1])]
 
     exclude = exclude or []
-    under = [u.removeprefix("./").strip("/") for u in (under or [])]
-    under = [u + "/" for u in under if u not in ("", ".")]
+    under = normalize_under(under)
 
     filtered = [
         h for h in non_def_hits if not any(_matches(h[0], e) for e in exclude) and (not under or h[0].startswith(tuple(under)))

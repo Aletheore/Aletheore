@@ -90,7 +90,7 @@ def _custom_rule_ids() -> set[str]:
     ids: set[str] = set()
     for yaml_file in _CUSTOM_RULES_DIR.glob("*.yaml"):
         try:
-            data = yaml.safe_load(yaml_file.read_text())
+            data = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
         except (yaml.YAMLError, OSError):
             continue
         for rule in (data or {}).get("rules", []):

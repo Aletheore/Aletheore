@@ -48,7 +48,7 @@ def _state_path(repo_path: Path, session_id: str) -> Path | None:
 
 def _load_state(path: Path) -> dict[str, Any]:
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -57,7 +57,7 @@ def _load_state(path: Path) -> dict[str, Any]:
 def _save_state(path: Path, state: dict[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state))
+        path.write_text(json.dumps(state), encoding="utf-8")
     except OSError:
         pass
 

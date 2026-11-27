@@ -20,7 +20,7 @@ _TIMEOUT = 10
 
 def _try(run, argv: list[str]) -> subprocess.CompletedProcess | None:
     try:
-        return run(argv, capture_output=True, text=True, timeout=_TIMEOUT)
+        return run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=_TIMEOUT)
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -43,9 +43,10 @@ def read_clipboard_image(dest_dir: Path, run=subprocess.run, platform: str | Non
         ]
         _try(run, script)
     elif platform == "win32":
+        ps_out = str(out).replace("'", "''")  # a single quote in a profile folder name must not end the PowerShell string
         ps = ("Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; "
               "$i=[System.Windows.Forms.Clipboard]::GetImage(); "
-              f"if($i){{$i.Save('{out}',[System.Drawing.Imaging.ImageFormat]::Png)}}")
+              f"if($i){{$i.Save('{ps_out}',[System.Drawing.Imaging.ImageFormat]::Png)}}")
         _try(run, ["powershell", "-NoProfile", "-STA", "-Command", ps])
     else:
         for argv in (["wl-paste", "--type", "image/png"], ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"]):

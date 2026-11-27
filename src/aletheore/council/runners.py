@@ -282,6 +282,6 @@ class ScriptedRunner:
         for rel, content in ({} if read_only else self.writes).items():
             target = Path(worktree) / rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content)
+            target.write_text(content, encoding="utf-8")
         text = self.texts.pop(0) if self.texts else self.final_text
         return RunResult(ok=self.ok, final_text=text, exit_code=self.exit_code, raw_events=[])

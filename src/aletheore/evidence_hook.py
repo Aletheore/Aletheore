@@ -212,7 +212,7 @@ def write_index(repo_path: Path) -> dict | None:
     if stamp is None:
         return None
     try:
-        evidence = json.loads((aletheore_dir / "air.json").read_text())
+        evidence = json.loads((aletheore_dir / "air.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(evidence, dict):
@@ -223,7 +223,7 @@ def write_index(repo_path: Path) -> dict | None:
     target = aletheore_dir / INDEX_NAME
     tmp = target.with_name(INDEX_NAME + f".{os.getpid()}.tmp")
     try:
-        tmp.write_text(json.dumps(index, separators=(",", ":")))
+        tmp.write_text(json.dumps(index, separators=(",", ":")), encoding="utf-8")
         os.replace(tmp, target)
     except OSError:
         try:
@@ -240,7 +240,7 @@ def load_index(repo_path: Path) -> dict | None:
     if stamp is None:
         return None
     try:
-        index = json.loads((aletheore_dir / INDEX_NAME).read_text())
+        index = json.loads((aletheore_dir / INDEX_NAME).read_text(encoding="utf-8"))
         if (
             isinstance(index, dict)
             and index.get("version") == _INDEX_VERSION

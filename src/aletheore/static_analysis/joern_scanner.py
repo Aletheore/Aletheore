@@ -121,7 +121,7 @@ def check_joern(repo_path: Path, timeout: int = DEFAULT_JOERN_TIMEOUT_SECONDS) -
             }
 
         try:
-            findings = json.loads(output_path.read_text())
+            findings = json.loads(output_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return {"checked": False, "reason": "joern query produced unparseable output", "findings": []}
 

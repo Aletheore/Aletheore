@@ -128,7 +128,7 @@ class Room:
         servers = {"council": {
             "command": sys.executable, "args": ["-m", "aletheore.council.mcp_tools"],
             "env": self._identity(participant, agent_id)}} if self.agent_tools else {}
-        path.write_text(json.dumps({"mcpServers": servers}))
+        path.write_text(json.dumps({"mcpServers": servers}), encoding="utf-8")
         return path
 
     # -- API ---------------------------------------------------------------------
