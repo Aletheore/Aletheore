@@ -159,5 +159,8 @@ def check_server_proves_host(base_url: str, pinned_device_id: str, http=None) ->
     except (KeyError, ValueError, TypeError):
         raise ValueError("the server's proof is malformed; do not join") from None
     if public.device_id != pinned_device_id or not good:
-        raise ValueError("this server is not the host's: it could not prove it holds the host's key. Do not join.")
+        raise ValueError(
+            "this server is not the host's: it could not prove it holds the host's key. Do not join. "
+            "If you run this server yourself, start it as the host's device (same COUNCIL_HOME) and make a new link."
+        )
     return True

@@ -324,3 +324,21 @@ def test_a_database_made_before_claim_keys_is_upgraded_in_place(tmp_path):
     cols = {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(invites)")}
     assert "claim_verifier" in cols
     assert sqlite3.connect(path).execute("SELECT claim_verifier FROM invites WHERE invite_id='inv_old'").fetchone()[0] == b""  # an old invitation keeps working
+
+
+def test_the_wrong_host_refusal_names_the_common_cause_but_still_says_do_not_join(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from aletheore.council.identity import Keystore
+    from aletheore.council.invites import check_server_proves_host
+    from aletheore.council.server import create_app
+    from aletheore.council.sqlite_store import SqliteRoomStore
+
+    ks = Keystore(tmp_path / "k")
+    host, other = ks.load_or_create("host"), ks.load_or_create("other")
+    app = create_app(SqliteRoomStore(tmp_path / "s.db"), {"tok": "alice"}, tmp_path / "b", host_identity=other)
+    with pytest.raises(ValueError) as caught:
+        check_server_proves_host("http://council.test", host.device_id, http=TestClient(app, base_url="http://council.test"))
+    message = str(caught.value)
+    assert "Do not join" in message
+    assert "same COUNCIL_HOME" in message and "new link" in message

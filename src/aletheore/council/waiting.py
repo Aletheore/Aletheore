@@ -83,7 +83,9 @@ def addressed(e: Event, me: str, names: set[str], my_areas: set[str], include_al
     if include_all:
         return True
     if e.type is EventType.QUESTION and e.body.get("kind") in _CHAT and isinstance(e.body.get("text"), str):
-        return bool(mentions(e.body["text"], names))
+        # The host also hears plain chat from others: a reply that forgot to @mention it must not sit unseen. Only the host, so that two
+        # agents who answer each other without a mention cannot wake each other forever.
+        return me == host or bool(mentions(e.body["text"], names))
     if e.type is EventType.DECISION:
         return True
     if e.type is EventType.SYSTEM and e.body.get("subtype") in ("wake_skipped", "wake_failed"):
