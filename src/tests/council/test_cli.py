@@ -310,3 +310,36 @@ def test_cli_discuss_and_task_post_their_requests(env):
            if e.type.value == "question" and e.body.get("kind") in ("ask", "task")]
     assert got == [("ask", "all"), ("ask", "alice-codex"), ("task", "redis")]
     assert runner.invoke(cli.app, ["discuss", "   ", "--room", room, "--me", "alice"]).exit_code != 0
+
+
+def test_cli_serve_prints_which_device_identity_it_runs_as(tmp_path, monkeypatch):
+    """Invitation links only work when the server runs as the host's own device, so the start-up says which device that is."""
+    from aletheore.council.identity import safety_words
+
+    monkeypatch.setattr(cli, "run_server", lambda *a, **k: None)
+    monkeypatch.setenv("COUNCIL_HOME", str(tmp_path))
+    res = runner.invoke(cli.app, ["serve", "--no-wake-lock", "--db", str(tmp_path / "s.db"), "--bundle-dir", str(tmp_path / "b")])
+    assert res.exit_code == 0, res.output
+    me = cli.device_identity()
+    assert me.device_id in res.output
+    assert safety_words(me.public().fingerprint) in res.output
+    assert "COUNCIL_HOME" in res.output  # and how to change it
+
+
+def test_server_after_the_command_explains_it_is_a_global_option(tmp_path, monkeypatch):
+    monkeypatch.setenv("COUNCIL_HOME", str(tmp_path))
+    res = runner.invoke(cli.app, ["rooms", "--me", "x", "--server", "http://127.0.0.1:1"])
+    assert res.exit_code == 2
+    assert "--server" in res.output and "before the command" in res.output
+
+
+def test_message_prints_one_whole_message_that_status_would_clip(env):
+    room = start(env)
+    long_text = ("review: " + "all of this must be readable through the CLI. " * 40).strip()  # far past what status shows; say strips the ends
+    assert runner.invoke(cli.app, ["say", "--room", room, "--me", "alice", long_text]).exit_code == 0
+    seq = [e.seq for e in cli.read_all(cli.open_store(), room) if e.body.get("text") == long_text][0]
+    res = runner.invoke(cli.app, ["message", "--room", room, "--me", "alice", "--seq", str(seq)])
+    assert res.exit_code == 0, res.output
+    assert " ".join(long_text.split()) in " ".join(res.output.split())  # the whole text, only line wrapping may differ
+    missing = runner.invoke(cli.app, ["message", "--room", room, "--me", "alice", "--seq", "99999"])
+    assert missing.exit_code == 1 and "no message" in missing.output

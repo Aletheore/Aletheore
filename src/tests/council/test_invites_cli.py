@@ -88,6 +88,7 @@ def test_invite_join_approve_flow_over_the_commands(w):
     assert res.exit_code == 0, res.output
     assert secret_text(link) not in res.output and link not in res.output  # the secret part is never printed back
     assert "words" in res.output.lower() and "approved" in res.output.lower()
+    assert "waiting for the host to approve" in res.output.lower()  # said once, before the silent wait, right after the words
     assert cli.open_store().whoami() == "guesty"
     assert "guesty" in cli.open_store().room_info("r1").members
 
@@ -212,3 +213,47 @@ def test_an_invitation_from_a_registered_host_device_pins_the_hosts_device(w):
     link = next(word for word in out.split() if word.startswith("http"))
     parsed = cli.invites.parse_link(link)
     assert parsed.host_device_id == cli.device_identity().device_id
+
+
+def test_invite_link_on_a_token_mode_server_says_it_needs_accounts_not_a_bare_not_found(tmp_path, monkeypatch):
+    app = create_app(SqliteRoomStore(tmp_path / "t.db"), {"tok": "hosty"}, tmp_path / "b")  # token mode: no accounts
+    client = TestClient(app, base_url=SERVER)
+    monkeypatch.setattr(cli, "remote_store", lambda server, token: RemoteRoomStore(server, token, client=client))
+    monkeypatch.setenv("COUNCIL_SERVER", SERVER)
+    monkeypatch.setenv("COUNCIL_TOKEN", "tok")
+    monkeypatch.setenv("COUNCIL_HOME", str(tmp_path / "home-host"))
+    RemoteRoomStore(SERVER, "tok", client=client).create_room("r1", "hosty", title="Cache work")
+    result = runner.invoke(cli.app, ["invite-link", "--room", "r1", "--me", "hosty"])
+    assert result.exit_code == 1
+    assert "--accounts" in result.output
+    assert "council invite" in result.output
+    assert "not found: Not Found" not in result.output
+
+
+def test_invite_link_warns_when_the_server_runs_as_a_different_device_than_the_host(w, tmp_path):
+    from aletheore.council.identity import Keystore
+
+    w.make_host()
+    other = Keystore(tmp_path / "other-keys").load_or_create("other")
+    app = create_app(SqliteRoomStore(tmp_path / "s.db"), {}, tmp_path / "b2", accounts=w.service, host_identity=other)
+    w.client = TestClient(app, base_url=SERVER)  # same rooms and accounts, but the server signs as someone else
+    res = w.run("invite-link", "--room", "r1", "--me", "hosty")
+    assert res.exit_code == 0, res.output
+    assert "different device" in res.output and "COUNCIL_HOME" in res.output
+    assert "Invitation link for room r1" in res.output  # still made: the warning does not block the host
+
+
+def test_invite_link_is_quiet_when_the_server_runs_as_the_host(w, tmp_path):
+    w.make_host()
+    app = create_app(SqliteRoomStore(tmp_path / "s.db"), {}, tmp_path / "b2", accounts=w.service, host_identity=cli.device_identity())
+    w.client = TestClient(app, base_url=SERVER)
+    res = w.run("invite-link", "--room", "r1", "--me", "hosty")
+    assert res.exit_code == 0, res.output
+    assert "different device" not in res.output
+
+
+def test_rooms_works_without_me_when_this_device_already_knows_who_you_are(w):
+    w.make_host()
+    res = w.run("rooms")
+    assert res.exit_code == 0, res.output
+    assert "r1" in res.output and "hosty" in res.output

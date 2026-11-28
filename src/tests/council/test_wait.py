@@ -117,3 +117,12 @@ def test_a_message_between_two_waits_is_not_lost(world, tmp_path):
     assert wait(world, "bob", cursor=Cursor(c)) == []                       # first wait: marks the end of the log, times out
     post(world, "alice", "@claude sent between the waits")
     assert [e.body["text"] for e in wait(world, "bob", cursor=Cursor(c))] == ["@claude sent between the waits"]
+
+
+def test_the_host_is_woken_by_a_plain_reply_from_someone_else_without_an_at_mention(world):
+    """Found while running a real room: a reply to the host that did not @mention it sat unseen, because an agent session can only react
+    to what it is waiting on. Only the host gets this; everyone else still needs a mention, so agents cannot wake each other in a loop."""
+    post(world, "bob", "here is my answer, no mention")
+    assert [e.body["text"] for e in wait(world, "alice", since=0)] == ["here is my answer, no mention"]
+    post(world, "alice", "my own chat never wakes me")
+    assert [e.body["text"] for e in wait(world, "alice", since=0)] == ["here is my answer, no mention"]

@@ -17,6 +17,7 @@ from pathlib import Path
 
 import typer
 from platformdirs import user_data_dir
+from typer.core import TyperGroup
 from rich.console import Console
 from rich.table import Table
 
@@ -58,7 +59,20 @@ def inspect_agents():
     return _inspect_builtin() + inspect_user_agents()
 
 
-app = typer.Typer(help="Aletheore Council: a shared room for coding agents")
+class _CouncilGroup(TyperGroup):
+    """`--server` belongs to the group, not to each command; say so instead of a bare "No such option"."""
+
+    def invoke(self, ctx):
+        try:
+            return super().invoke(ctx)
+        except Exception as exc:
+            # Newer Typer ships its own copy of click, so its NoSuchOption is not click.NoSuchOption; match by name.
+            if type(exc).__name__ == "NoSuchOption" and getattr(exc, "option_name", None) == "--server":
+                exc.message = "--server is a global option: put it before the command, e.g. council --server URL rooms"
+            raise
+
+
+app = typer.Typer(help="Aletheore Council: a shared room for coding agents", cls=_CouncilGroup)
 console = Console()
 
 
@@ -259,6 +273,10 @@ def serve(
         raise typer.Exit(2)
     mode = "accounts" if settings.accounts else f"{len(tokens)} participant(s)"
     console.print(f"Council room server on {host}:{port} for {mode}", markup=False, highlight=False)
+    server_identity = device_identity()
+    console.print(f"Server device: {server_identity.device_id}, safety words {safety_words(server_identity.public().fingerprint)}. "
+                  "Invitation links only work when this is the room host's own device "
+                  "(start the server with the host's COUNCIL_HOME).", markup=False, highlight=False)
     db_path = db or (Path(settings.db) if settings.db else home() / "server.db")
     try:
         from aletheore.council.host_runtime import announce_returned
@@ -274,7 +292,7 @@ def serve(
                       "Messages are not. Change it with COUNCIL_FILE_CAP_MB_PER_DAY.", markup=False, highlight=False)
     try:
         run_server(db_path, bundle_dir or (Path(settings.bundle_dir) if settings.bundle_dir else home() / "server-bundles"),
-                   tokens, retention, host, port, settings=settings, host_identity=device_identity())
+                   tokens, retention, host, port, settings=settings, host_identity=server_identity)
     finally:
         cleanup(db_path, note)
 
@@ -623,9 +641,15 @@ def mcp_control(me: str = typer.Option(..., "--me", help="your name in the rooms
 
 @app.command(help="list the rooms you are in")
 @guarded
-def rooms(me: str = typer.Option(..., "--me")) -> None:
+def rooms(me: str = typer.Option(None, "--me", help="your name; defaults to the name this device or token is signed in as")) -> None:
     store = open_store()
-    verify_me(store, me)
+    if me is None:
+        whoami = getattr(store, "whoami", None)  # only a signed-in remote store can say who you are
+        me = whoami() if whoami is not None else None
+        if not me:
+            raise ValueError("this device is not signed in as anyone yet: pass --me NAME")
+    else:
+        verify_me(store, me)
     found = store.list_rooms(me)
     if not found:
         console.print("no rooms yet", highlight=False, markup=False)
@@ -670,6 +694,14 @@ def invite_link(
     # A device-registered host (its store is the router, or a signed-in remote store) pins its device in the link; a token host has none.
     ident = device_identity() if isinstance(store, RoomRouter) or getattr(store, "_identity", None) is not None else None
     link = invites.make_invite(store, server, ident, room, ttl=ttl_hours * 3600)
+    if ident is not None:
+        try:
+            invites.check_server_proves_host(server, ident.device_id)
+        except invites.HostMismatch:  # unreachable or malformed answers are not this warning's business
+            console.print("Warning: this server runs as a different device than yours, so joiners will refuse this link. "
+                          "Start the server with your COUNCIL_HOME and make a new link.", markup=False, highlight=False)
+        except ValueError:
+            pass
     console.print(f"Invitation link for room {room}:", markup=False, highlight=False)
     console.print(link.url, markup=False, highlight=False, soft_wrap=True)  # one unbroken line, so it can be copied
     console.print(f"Share it with one person. It works once and expires in {ttl_hours} hours. "
@@ -746,6 +778,8 @@ def join_link(
         console.print("Your request is waiting for the host. Run this command without --no-wait to wait for the answer here.",
                       markup=False, highlight=False)
         return
+    console.print(f"Waiting for the host to approve you (up to {timeout_minutes} minutes). Read the safety words above to them now.",
+                  markup=False, highlight=False)
     deadline = time.monotonic() + timeout_minutes * 60
     while True:
         status = store.join_status(req["request_id"])
@@ -1249,6 +1283,20 @@ def status(room: str = typer.Option(..., "--room")) -> None:
     store = open_store()
     console.print(render_room(load_state(store, room), read_all(store, room), inspect_agents()))
     console.print(f"last_seq: {store.last_seq(room)}", highlight=False, markup=False)
+
+
+@app.command(help="print one whole message from a room (status shortens long ones); find the number with council status")
+@guarded
+def message(room: str = typer.Option(..., "--room"), me: str = typer.Option(..., "--me"), seq: int = typer.Option(..., "--seq", min=1)) -> None:
+    store = open_store()
+    verify_me(store, me)
+    found = [e for e in store.read_after(room, seq - 1, limit=1) if e.seq == seq]
+    if not found:
+        raise ValueError(f"no message number {seq} in room {room}")
+    body = found[0].body
+    text = body.get("text") if isinstance(body.get("text"), str) else json.dumps(body, indent=2, sort_keys=True)
+    console.print(f"#{seq} from {found[0].sender_participant}:", highlight=False, markup=False)
+    console.print(text, highlight=False, markup=False, soft_wrap=True)
 
 
 if __name__ == "__main__":
