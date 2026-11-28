@@ -5,7 +5,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- **Dropped the separate commercial license.** Aletheore's CLI source is available under AGPL-3.0 only. `COMMERCIAL-LICENSE.md` is removed. Copies already obtained under a commercial license keep those terms. Contributions now use a DCO sign-off, and pull requests are welcome without an issue first.
+- **Dropped the separate commercial license.** Aletheore's CLI source is available under AGPL-3.0 only. `COMMERCIAL-LICENSE.md` is removed. Contributions now use a DCO sign-off, and pull requests are welcome without an issue first.
 
 ## 0.14.1 - 2026-11-22
 
