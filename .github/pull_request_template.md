@@ -11,3 +11,4 @@
 - [ ] Tests pass locally (`cd src && pytest` and/or the relevant website checks).
 - [ ] New behavior has test coverage.
 - [ ] Docs updated if user-facing behavior changed.
+- [ ] Every commit is signed off (`git commit -s`), certifying the [DCO](https://developercertificate.org/).
