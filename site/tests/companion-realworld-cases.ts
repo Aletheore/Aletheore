@@ -44,7 +44,7 @@ export const REALWORLD_CASES: readonly EvalCase[] = [
   { id: "rw-open-source", question: "is aletheore open source?", status: "answer", contains: "GNU Affero" },
   { id: "rw-starter-open-source", question: "Is it open source?", status: "answer", contains: "GNU Affero" },
   { id: "rw-license-name", question: "what license is aletheore under?", status: "answer", contains: "GNU Affero" },
-  { id: "rw-commercial", question: "can I embed it in a closed-source product?", status: "answer", contains: "commercial license" },
+  { id: "rw-commercial", question: "can I embed it in a closed-source product?", status: "answer", contains: "GNU Affero" },
   { id: "rw-languages", question: "which programming languages does it support?", status: "answer", contains: "Kotlin" },
   { id: "rw-rust", question: "does it work on a rust codebase?", status: "answer", contains: "Rust" },
   // Not a listed language: Theo shows the real list and never claims support, rather than saying yes.

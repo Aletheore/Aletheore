@@ -422,11 +422,9 @@ for internal tooling, as long as you follow the AGPL. The part that matters most
   combination is a covered work depends on the AGPL and the facts of the distribution.
 - Running the unmodified CLI or Action on your own code does not put your code under the AGPL.
 
-If those terms don't fit, for example you want to embed Aletheore in a closed-source product
-or run a modified version as a service without publishing it, a commercial license is
-available. See [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md), or email
-[arihantkaul@outlook.com](mailto:arihantkaul@outlook.com). The hosted, paid tier is
-[Aletheore AIR](https://aletheore.com).
+Aletheore is available under the AGPL only. If you want to embed it in a closed-source
+product or run a modified version as a service without publishing it, those uses are not
+permitted under these terms. The hosted, paid tier is [Aletheore AIR](https://aletheore.com).
 
 Copyright (C) 2026 Arihant Kaul. See [NOTICE](NOTICE).
 
