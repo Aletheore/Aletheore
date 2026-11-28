@@ -15,7 +15,6 @@ import time
 import uuid
 from pathlib import Path
 
-import click
 import typer
 from platformdirs import user_data_dir
 from typer.core import TyperGroup
@@ -66,9 +65,10 @@ class _CouncilGroup(TyperGroup):
     def invoke(self, ctx):
         try:
             return super().invoke(ctx)
-        except click.NoSuchOption as exc:
-            if exc.option_name == "--server":
-                raise click.UsageError("--server is a global option: put it before the command, e.g. council --server URL rooms") from None
+        except Exception as exc:
+            # Newer Typer ships its own copy of click, so its NoSuchOption is not click.NoSuchOption; match by name.
+            if type(exc).__name__ == "NoSuchOption" and getattr(exc, "option_name", None) == "--server":
+                exc.message = "--server is a global option: put it before the command, e.g. council --server URL rooms"
             raise
 
 
@@ -644,7 +644,10 @@ def mcp_control(me: str = typer.Option(..., "--me", help="your name in the rooms
 def rooms(me: str = typer.Option(None, "--me", help="your name; defaults to the name this device or token is signed in as")) -> None:
     store = open_store()
     if me is None:
-        me = store.whoami()  # a signed-in device or a token already says who you are
+        whoami = getattr(store, "whoami", None)  # only a signed-in remote store can say who you are
+        me = whoami() if whoami is not None else None
+        if not me:
+            raise ValueError("this device is not signed in as anyone yet: pass --me NAME")
     else:
         verify_me(store, me)
     found = store.list_rooms(me)
@@ -690,17 +693,15 @@ def invite_link(
         raise ValueError("invitation links need a room server: set COUNCIL_SERVER")
     # A device-registered host (its store is the router, or a signed-in remote store) pins its device in the link; a token host has none.
     ident = device_identity() if isinstance(store, RoomRouter) or getattr(store, "_identity", None) is not None else None
-    try:
-        link = invites.make_invite(store, server, ident, room, ttl=ttl_hours * 3600)
-    except KeyError:  # the room exists (the host check above passed), so the server has no invitation route: it runs in token mode
-        raise ValueError("Invitation links need a server run with --accounts. Use `council invite <name>` in token mode.") from None
+    link = invites.make_invite(store, server, ident, room, ttl=ttl_hours * 3600)
     if ident is not None:
         try:
             invites.check_server_proves_host(server, ident.device_id)
-        except ValueError as exc:
-            if "not the host's" in str(exc):  # unreachable or malformed answers are not this warning's business
-                console.print("Warning: this server runs as a different device than yours, so joiners will refuse this link. "
-                              "Start the server with your COUNCIL_HOME and make a new link.", markup=False, highlight=False)
+        except invites.HostMismatch:  # unreachable or malformed answers are not this warning's business
+            console.print("Warning: this server runs as a different device than yours, so joiners will refuse this link. "
+                          "Start the server with your COUNCIL_HOME and make a new link.", markup=False, highlight=False)
+        except ValueError:
+            pass
     console.print(f"Invitation link for room {room}:", markup=False, highlight=False)
     console.print(link.url, markup=False, highlight=False, soft_wrap=True)  # one unbroken line, so it can be copied
     console.print(f"Share it with one person. It works once and expires in {ttl_hours} hours. "
@@ -1289,7 +1290,7 @@ def status(room: str = typer.Option(..., "--room")) -> None:
 def message(room: str = typer.Option(..., "--room"), me: str = typer.Option(..., "--me"), seq: int = typer.Option(..., "--seq", min=1)) -> None:
     store = open_store()
     verify_me(store, me)
-    found = [e for e in read_all(store, room, seq - 1) if e.seq == seq]
+    found = [e for e in store.read_after(room, seq - 1, limit=1) if e.seq == seq]
     if not found:
         raise ValueError(f"no message number {seq} in room {room}")
     body = found[0].body

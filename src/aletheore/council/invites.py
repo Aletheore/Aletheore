@@ -97,6 +97,10 @@ def unwrap_room_key(secret: bytes, blob: bytes) -> bytes:
 _CLAIM_CONTEXT = "council/invite-claim/v1"
 
 
+class HostMismatch(ValueError):
+    """The server answered, and it is not the device the link pins as the host."""
+
+
 def claim_key(secret: bytes) -> bytes:
     """What a guest shows to claim an invitation: derived from the link's secret, so the invitation's id alone (which travels in the visible
     part of the link and can leak through previews and logs) is not enough. The server keeps only its hash."""
@@ -113,7 +117,10 @@ def make_invite(store, server: str, identity, room_id: str, key_provider: Callab
     `key_provider` returns the room key to hand to the guest; None until a room is end-to-end encrypted (Task 9)."""
     secret = crypto.random_bytes(32)
     wrapped = wrap_room_key(secret, key_provider() if key_provider else b"")
-    made = store.create_invite(room_id, wrapped, ttl, claim_verifier(secret))
+    try:
+        made = store.create_invite(room_id, wrapped, ttl, claim_verifier(secret))
+    except KeyError:  # the server has no invitation route for this room: it runs in token mode
+        raise ValueError("Invitation links need a server run with --accounts. Use `council invite <name>` in token mode.") from None
     return InviteLink(build_link(server, made["invite_id"], secret, identity.device_id if identity is not None else ""), made["invite_id"])
 
 
@@ -159,7 +166,7 @@ def check_server_proves_host(base_url: str, pinned_device_id: str, http=None) ->
     except (KeyError, ValueError, TypeError):
         raise ValueError("the server's proof is malformed; do not join") from None
     if public.device_id != pinned_device_id or not good:
-        raise ValueError(
+        raise HostMismatch(
             "this server is not the host's: it could not prove it holds the host's key. Do not join. "
             "If you run this server yourself, start it as the host's device (same COUNCIL_HOME) and make a new link."
         )
