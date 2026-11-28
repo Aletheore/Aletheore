@@ -14,8 +14,10 @@ from pathlib import Path
 from aletheore.scope_filter import (  # noqa: F401  (is_test_path re-exported)
     in_scope,
     is_test_path,
+    ignored_test_patterns,
     normalize_under,
     plural,
+    resolve_target,
     runtime_import_examples,
 )
 
@@ -67,7 +69,8 @@ def dependents_report(
 ) -> str:
     modules = evidence["repository"]["modules"]
     by_path = {m["path"]: m for m in modules if m.get("path")}
-    target = target.removeprefix("./").rstrip("/") or "."
+    known = set(by_path) | {_dir_of(p) for p in by_path}
+    target = resolve_target(target, known, repo_path)
     if target in by_path:
         seeds = {target}
         unit = "file"
@@ -115,14 +118,17 @@ def dependents_report(
         )
         body = shown
     what = "this file" if unit == "file" else f"this package ({len(seeds)} files)"
-    lines = [
-        head,
-        *body,
-        "",
+    footer = (
         f"Repo-wide {what} has {plural(len(direct), 'direct importer')} plus {len(allp) - len(direct)} that reach it through "
         f"other files (before --under/--exclude), deduplicated. Coverage: static {language} imports only, "
         f"{len(modules)} modules indexed, {unparseable} unparseable; {fresh}. Not tracked: imports built at run time "
         f"({runtime_import_examples({language})}). For static imports this list does not need to be "
-        "re-derived with grep.",
-    ]
-    return "\n".join(lines)
+        "re-derived with grep."
+    )
+    blind = [] if no_tests else ignored_test_patterns(repo_path)
+    if blind:
+        footer += (
+            f" Not covered: tests under {', '.join(blind)} are excluded by ignored_paths in .aletheore.json, so "
+            "any test files that import this are missing from the list."
+        )
+    return "\n".join([head, *body, "", footer])

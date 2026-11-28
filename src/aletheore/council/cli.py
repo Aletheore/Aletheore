@@ -520,7 +520,7 @@ def _admin_tool(db: Path | None) -> "AdminTool":
     store = build_store(settings, path)
     accounts = build_accounts(settings, store, path, {})
     hash_file = home() / "admin-token.hash"
-    admin_hash = settings.admin_token_hash or (hash_file.read_text().strip() if hash_file.exists() else "")
+    admin_hash = settings.admin_token_hash or (hash_file.read_text(encoding="utf-8").strip() if hash_file.exists() else "")
     bundle_dir = Path(settings.bundle_dir) if settings.bundle_dir else home() / "server-bundles"
     tool = AdminTool(store, accounts, bundle_dir, home() / "admin-audit.log", admin_hash)
     tool.authorize(os.environ.get("COUNCIL_ADMIN_TOKEN", ""))
@@ -856,7 +856,7 @@ def join(
     Room.open_remote(store, room, repo, home())  # refuses, creating nothing, if this clone lacks the starting commit
     cfg = home() / "rooms" / f"{room}.json"
     cfg.parent.mkdir(parents=True, exist_ok=True)
-    cfg.write_text(json.dumps({"repo": str(Path(repo).resolve()), "me": me}))
+    cfg.write_text(json.dumps({"repo": str(Path(repo).resolve()), "me": me}), encoding="utf-8")
     console.print(f"Joined room {room} as {me} (host: {host})", highlight=False, markup=False)
 
 

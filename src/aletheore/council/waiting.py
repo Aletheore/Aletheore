@@ -33,7 +33,7 @@ class Cursor:
 
     def get(self) -> int | None:
         try:
-            seq = json.loads(self.path.read_text()).get("seq")
+            seq = json.loads(self.path.read_text(encoding="utf-8")).get("seq")
         except (OSError, ValueError, AttributeError):
             return None
         return seq if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0 else None
@@ -41,7 +41,7 @@ class Cursor:
     def joins(self) -> set[str]:
         """Join requests already reported to this reader."""
         try:
-            ids = json.loads(self.path.read_text()).get("joins", [])
+            ids = json.loads(self.path.read_text(encoding="utf-8")).get("joins", [])
         except (OSError, ValueError, AttributeError):
             return set()
         return {i for i in ids if isinstance(i, str)} if isinstance(ids, list) else set()
@@ -52,7 +52,7 @@ class Cursor:
         keep = self.joins() if joins is None else joins
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps({"seq": seq, "joins": sorted(keep)[-200:]}))   # no known position stays null: 0 would mean "replay the room"
+        tmp.write_text(json.dumps({"seq": seq, "joins": sorted(keep)[-200:]}), encoding="utf-8")   # no known position stays null: 0 would mean "replay the room"
         os.replace(tmp, self.path)
 
 

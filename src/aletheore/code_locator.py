@@ -147,7 +147,7 @@ def locate(
             try:
                 p = repo / rel
                 if p.stat().st_size <= MAX_FILE_BYTES:
-                    texts[rel] = p.read_text(errors="replace")
+                    texts[rel] = p.read_text(errors="replace", encoding="utf-8")
             except OSError:
                 continue
 
@@ -237,7 +237,7 @@ def render_locate(
             p = Path(repo_path) / c.path
             if p.stat().st_size > MAX_FILE_BYTES:
                 continue
-            text_lines = p.read_text(errors="replace").split("\n")
+            text_lines = p.read_text(errors="replace", encoding="utf-8").split("\n")
         except OSError:
             continue
         pats = {m: re.compile(rf"\b{re.escape(m)}\b") for m in c.matched}

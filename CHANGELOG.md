@@ -6,6 +6,10 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 ## Unreleased
 
 - **Dropped the separate commercial license.** Aletheore's CLI source is available under AGPL-3.0 only. `COMMERCIAL-LICENSE.md` is removed. Contributions now use a DCO sign-off, and pull requests are welcome without an issue first.
+- Fixed: `aletheore tests-for` (and `dependents`) said "No test file imports ..." when the repo's own `.aletheore.json` listed its test folders under `ignored_paths`, so those tests were never scanned. They now say which ignored paths hide tests and that the answer cannot see them.
+- Fixed: on Windows, `tests-for`, `dependents`, `usages`, `cycles` and every `--under` option now accept backslash paths (`src\app\x.py`), a leading `.\`, an absolute path inside the repo, and a different letter case, as the other commands already did.
+- Fixed: 28 more text-file reads and writes now name UTF-8 instead of using the Windows code page, which could garble or fail on non-ASCII content. A test now fails if a new bare `read_text()` or `write_text()` is added.
+- Fixed: Council's clipboard-image helper on Windows broke when the user's profile folder name contained a single quote.
 
 ## 0.14.1 - 2026-11-22
 

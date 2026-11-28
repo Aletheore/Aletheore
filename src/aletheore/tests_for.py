@@ -15,6 +15,8 @@ import re
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
+from aletheore.scope_filter import ignored_test_patterns, resolve_target
+
 _TEST_PATH = re.compile(
     r"(^|/)(tests?|testing|__tests__|spec)/|_test\.|\.test\.|\.spec\.|(^|/)test_[^/]*$|/testdata/|conftest"
     # PascalCase test files and test projects: FooTests.cs, FooTest.java, UnitTests/, Foo.Tests/
@@ -110,11 +112,11 @@ def _split_confidence(direct: set[str], transitive: set[str], naming: set[str]) 
     return high_confidence, lower_confidence
 
 
-def candidate_tests(evidence: dict, target: str) -> tuple[list[str], list[str]]:
+def candidate_tests(evidence: dict, target: str, repo_path: Path | None = None) -> tuple[list[str], list[str]]:
     """(high_confidence, lower_confidence) test files for `target`; both empty when the scan does not know it."""
     modules = evidence["repository"]["modules"]
     by_path = {m["path"]: m for m in modules if m.get("path")}
-    target = target.removeprefix("./")
+    target = resolve_target(target, by_path, repo_path)
     if target not in by_path:
         return [], []
     return _split_confidence(*_test_signals(modules, by_path, target))
@@ -124,7 +126,7 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str, *, summary_on
     """Report candidate tests; summary_only omits the detailed coverage appendix."""
     modules = evidence["repository"]["modules"]
     by_path = {m["path"]: m for m in modules if m.get("path")}
-    target = target.removeprefix("./")
+    target = resolve_target(target, by_path, repo_path)
     if target not in by_path:
         close = difflib.get_close_matches(target, list(by_path), n=3)
         hint = f"; closest: {', '.join(close)}" if close else ""
@@ -146,11 +148,22 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str, *, summary_on
         who = "the file asked about and " if target in changed else ""
         fresh = f"STALE: {who}{len(changed)} file(s) changed after the scan{extra}; re-scan before relying on this"
 
+    blind = ignored_test_patterns(repo_path)
+    blind_note = (
+        f"Tests under {', '.join(blind)} are excluded by ignored_paths in .aletheore.json, so they were never scanned "
+        "and this answer cannot see them; remove those entries and re-scan to include them."
+        if blind
+        else ""
+    )
+
     if not both:
+        none_found = f"No test file imports {target} (directly or transitively) or matches its naming convention."
+        if blind:
+            none_found += " That does not mean it is untested: " + blind_note
         if summary_only:
-            return f"No test file imports {target} (directly or transitively) or matches its naming convention."
+            return none_found
         return (
-            f"No test file imports {target} (directly or transitively) or matches its naming convention.\n\n"
+            f"{none_found}\n\n"
             f"Coverage: {fresh}. A test may still exercise this file through a fixture or integration path this "
             "cannot see; this says only that the two signals it checks found nothing, not that the file is untested."
         )
@@ -170,6 +183,8 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str, *, summary_on
         )
         lines.extend(lower_confidence)
     if summary_only:
+        if blind_note:
+            lines.append(blind_note)
         return "\n".join(lines)
     lines.append("")
     lines.append(
@@ -178,5 +193,6 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str, *, summary_on
         "transitively (shown separately above - a transitive import, often through a package's own __init__.py, "
         "does not prove the file's code actually runs). Not tracked: tests that reach this file only through a "
         f"fixture, a dynamic import, or a parametrize id that never names it or matches its filename. {fresh}."
+        + (f" {blind_note}" if blind_note else "")
     )
     return "\n".join(lines)

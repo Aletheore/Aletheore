@@ -13,7 +13,7 @@ class VerifiedMarks:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         try:
-            self._data: dict[str, list[str]] = json.loads(self.path.read_text())
+            self._data: dict[str, list[str]] = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             self._data = {}
 
@@ -22,7 +22,7 @@ class VerifiedMarks:
         ids.add(device_id)
         self._data[handle] = sorted(ids)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self._data))
+        self.path.write_text(json.dumps(self._data), encoding="utf-8")
 
     def status(self, handle: str, device_ids: list[str]) -> str:
         """compared: every device compared; partly: some; none: no mark yet; changed: a mark exists but a device has an id never compared."""

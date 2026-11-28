@@ -293,7 +293,8 @@ def _get_by_dot_path(data, path: str):
 def _read_manual_text(manual_dir: Path) -> str:
     parts = []
     for path in sorted(manual_dir.glob("*.md")):
-        parts.append(f"# {path.name}\n\n{path.read_text()}")
+        body = path.read_text(encoding="utf-8")
+        parts.append(f"# {path.name}\n\n{body}")
     return "\n\n".join(parts)
 
 

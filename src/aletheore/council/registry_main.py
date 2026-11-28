@@ -34,7 +34,7 @@ def load_signing_key(data: Path) -> tuple[bytes, bytes]:
     """The registry's signing key pair, created once. The file is readable only by its owner."""
     path = data / "registry-signing.key"
     if path.exists():
-        raw = bytes.fromhex(path.read_text().strip())
+        raw = bytes.fromhex(path.read_text(encoding="utf-8").strip())
         if len(raw) != 64:
             raise ValueError("the registry signing key file is damaged; restore it from the backup, do not make a new one")
         return raw[:32], raw[32:]
