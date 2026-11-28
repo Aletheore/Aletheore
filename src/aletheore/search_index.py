@@ -451,11 +451,16 @@ _TS_ASSIGNED_FUNCTION = re.compile(
 )
 
 _JAVA_CSHARP_CONCRETE_TYPE_DECL = re.compile(
-    r"^\s*(?:(?:public|private|protected|internal|abstract|sealed|static|final|partial|nested)\s+)*"
+    r"^\s*(?:(?:public|private|protected|internal|sealed|static|final|partial|nested)\s+)*"
     r"(?:class|struct|record|enum)\s+\w",
     re.MULTILINE,
 )
 _JAVA_CSHARP_METHOD_BODY = re.compile(r"\)\s*(?:throws\s+[^\{]+)?\{")
+_JAVA_CSHARP_ABSTRACT_CLASS_DECL = re.compile(
+    r"^\s*(?:(?:public|private|protected|internal|sealed|static|final|partial)\s+)*abstract\s+"
+    r"(?:(?:public|private|protected|internal|sealed|static|final|partial)\s+)*class\s+\w",
+    re.MULTILINE,
+)
 _JAVA_CSHARP_COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
 
 
@@ -469,9 +474,15 @@ def _has_concrete_implementation(language: str, source: str) -> bool:
     """
     if language in ("java", "csharp"):
         source = _JAVA_CSHARP_COMMENTS.sub("\n", source)
+        # An interface paired only with an abstract class is still a contract,
+        # even though the abstract class may hold a method body. A method body
+        # counts as implementation otherwise (an interface default method).
         return bool(
             _JAVA_CSHARP_CONCRETE_TYPE_DECL.search(source)
-            or _JAVA_CSHARP_METHOD_BODY.search(source)
+            or (
+                _JAVA_CSHARP_METHOD_BODY.search(source)
+                and not _JAVA_CSHARP_ABSTRACT_CLASS_DECL.search(source)
+            )
         )
     return False
 
