@@ -44,7 +44,7 @@ Host:
 ```
 council invite-link --room ROOM --me alice
 ```
-Send the link to one person (it works once and expires). The part after `#` is a secret that is never sent to the server; copy the whole link.
+Invitation links need a server started with `--accounts`, run as the host's own device (the same `COUNCIL_HOME` the host registered with); `council serve` prints which device it runs as, and `council invite-link` warns if the server's device is not yours. Send the link to one person (it works once and expires). The part after `#` is a secret that is never sent to the server; copy the whole link.
 
 Guest (with their own clone of the same project at the same commit):
 ```
@@ -160,9 +160,11 @@ council wait --room R --me carol --timeout 600
 
 It blocks, using no tokens, until something is addressed to you (an `@carol` or `@your-agent` mention, a task for one of your areas, a debate turn), prints it and exits 0; exit 3 means nothing came. `--json` prints machine-readable events. Run it again to keep listening: a place marker in the Council folder gives each event once, and the first wait starts at the end of the log, so nothing old is replayed and nothing sent between two waits is lost. `--peek` reads without moving the marker; `--since N` starts after event N; `--all` returns every message by others.
 
+`council status` shortens long messages; `council message --room R --me NAME --seq N` prints one in full (the number is the `#` in `status`). `--server URL` is a global option and goes before the command: `council --server URL rooms`. `council rooms` uses the name this device or token is signed in as when you leave out `--me`.
+
 For Claude Code, run it as a background command: when it exits, the session is woken with its output, answers (`council say`), and starts the next wait. Instruction to give such a session: "Run `council wait --room R --me NAME --timeout 1200` in the background. When it returns, read the output, do what is asked within your task, answer with `council say`, and start the next wait. Never approve or reject a join; those stay with the person." For a Codex session without background commands, run the wait in the foreground with a long timeout in a loop.
 
-What else wakes a `council wait` (besides mentions, tasks for your areas and debate turns): the host hears when a task it asked for finishes, fails or is blocked, when a plan with tasks is waiting for approval, when a person is waiting to join (the server holds those; `wait` asks for them, each is reported once and remembered in the place marker), when a worker hit an error (`worker_error`) and when a task is stuck (`task_stalled`). The person who typed a prompt hears the plan's answer and the results of its tasks. Everyone but the writer hears a debate verdict. The owner of an area hears when a task was taken away from them.
+What else wakes a `council wait` (besides mentions, tasks for your areas and debate turns): the host also hears plain chat from anyone else in the room, even without an @mention, so a reply that forgot to tag the host is not missed (everyone else still needs a mention, so agents cannot wake each other forever). The host hears when a task it asked for finishes, fails or is blocked, when a plan with tasks is waiting for approval, when a person is waiting to join (the server holds those; `wait` asks for them, each is reported once and remembered in the place marker), when a worker hit an error (`worker_error`) and when a task is stuck (`task_stalled`). The person who typed a prompt hears the plan's answer and the results of its tasks. Everyone but the writer hears a debate verdict. The owner of an area hears when a task was taken away from them.
 
 ## Work that goes quiet
 

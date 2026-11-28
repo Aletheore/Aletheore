@@ -69,17 +69,17 @@ def test_start_a_room_asks_for_what_it_needs_and_runs_it(monkeypatch, recorded):
 
 def test_who_you_are_and_the_room_are_remembered_between_steps(monkeypatch, recorded):
     prompts = []
-    answers = iter(["alice", "room-1", "", ""])  # rooms asks for --me; invite-link then asks only what it has not heard
+    answers = iter(["room-1", "alice", "", ""])  # invite-link asks for both; requests then asks only to confirm what it has heard
 
     def ask(question):
         prompts.append(question)
         return next(answers, "")
 
     monkeypatch.setattr(cli, "_ask", ask)
-    keys = (*_open_council_menu(), *((DOWN,) * _row("rooms")), ENTER,
-            *((DOWN,) * (_row("invite-link") - _row("rooms"))), ENTER, "q", "q")
+    keys = (*_open_council_menu(), *((DOWN,) * _row("invite-link")), ENTER,
+            *((DOWN,) * (_row("requests") - _row("invite-link"))), ENTER, "q", "q")
     cli._run_menu(read_key=_keys(*keys), pause=lambda: None)
-    assert recorded == [["council", "rooms", "--me=alice"], ["council", "invite-link", "--room=room-1", "--me=alice"]]
+    assert recorded == [["council", "invite-link", "--room=room-1", "--me=alice"], ["council", "requests", "--room=room-1", "--me=alice"]]
     assert "(enter for alice)" in prompts[-1]
 
 
